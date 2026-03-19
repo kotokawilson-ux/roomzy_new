@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "739620214432",
+    "firebase_url": "https://roomzyfind-5a8af-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "roomzyfind-5a8af",
+    "storage_bucket": "roomzyfind-5a8af.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:739620214432:android:74ff7b43c297dd94405bc5",
+        "android_client_info": {
+          "package_name": "com.example.roomzy_new"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB3JpD67T2rD9QhVaDHTbFuXP1lmZ4Ab94"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
