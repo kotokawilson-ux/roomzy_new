@@ -1,5 +1,6 @@
 // lib/widgets/popular_properties.dart
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:carousel_slider/carousel_slider.dart';
@@ -9,13 +10,25 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 
-/// Returns the image URL stored in Firestore (full Cloudinary URL).
-/// Falls back to a placeholder if the field is null/empty.
-String buildImageUrl(String? imageUrl, {String seed = 'hostel'}) {
+/// Builds an optimized Cloudinary URL for fast loading.
+/// - f_auto      → serves WebP/AVIF automatically (smaller file)
+/// - q_auto:good → best quality/size balance
+/// - w_800       → caps width at 800px (enough for cards)
+/// - c_fill      → crops smartly to fill the frame
+String buildImageUrl(String? imageUrl,
+    {String seed = 'hostel', int width = 800}) {
   if (imageUrl == null || imageUrl.trim().isEmpty) {
     return 'https://placehold.co/600x400?text=No+Image';
   }
-  return imageUrl.trim();
+  final url = imageUrl.trim();
+
+  if (url.contains('cloudinary.com') && url.contains('/upload/')) {
+    return url.replaceFirst(
+      '/upload/',
+      '/upload/f_auto,q_auto:good,w_$width,c_fill/',
+    );
+  }
+  return url;
 }
 
 enum _LoadState { loading, success, empty, error }
@@ -49,8 +62,6 @@ class _PopularPropertiesState extends State<PopularProperties> {
           .limit(10)
           .get();
 
-      print('📦 Firestore docs found: ${snapshot.docs.length}');
-
       if (!mounted) return;
 
       if (snapshot.docs.isEmpty) {
@@ -62,9 +73,8 @@ class _PopularPropertiesState extends State<PopularProperties> {
       for (final doc in snapshot.docs) {
         try {
           hostels.add(Hostel.fromJson(doc.id, doc.data()));
-          print('  ✅ ${doc.id} - ${doc.data()['hostel_name']}');
         } catch (e) {
-          print('  ❌ Failed to parse ${doc.id}: $e');
+          debugPrint('❌ Failed to parse ${doc.id}: $e');
         }
       }
 
@@ -72,10 +82,23 @@ class _PopularPropertiesState extends State<PopularProperties> {
         _hostels = hostels;
         _state = hostels.isEmpty ? _LoadState.empty : _LoadState.success;
       });
+
+      // Warm image cache immediately after data loads
+      if (mounted) _precacheImages();
     } catch (e) {
-      print('❌ Firestore error: $e');
+      debugPrint('❌ Firestore error: $e');
       if (!mounted) return;
       setState(() => _state = _LoadState.error);
+    }
+  }
+
+  /// Downloads all carousel images into cache in the background.
+  /// By the time the carousel renders, images are ready — no shimmer needed.
+  void _precacheImages() {
+    for (final hostel in _hostels) {
+      final url =
+          buildImageUrl(hostel.image, seed: hostel.hostelCode, width: 800);
+      CachedNetworkImageProvider(url).resolve(const ImageConfiguration());
     }
   }
 
@@ -250,8 +273,9 @@ class _HostelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Reads full Cloudinary URL directly from Firestore
-    final imageUrl = buildImageUrl(hostel.image, seed: hostel.hostelCode);
+    // Optimized Cloudinary URL — WebP/AVIF, compressed, resized
+    final imageUrl =
+        buildImageUrl(hostel.image, seed: hostel.hostelCode, width: 800);
     final available = hostel.roomsAvailable;
 
     return GestureDetector(
@@ -277,23 +301,20 @@ class _HostelCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ── Image ──────────────────────
-                Image.network(
-                  imageUrl,
+                // ── Cached image — instant after first load ──
+                CachedNetworkImage(
+                  imageUrl: imageUrl,
                   height: 160,
                   width: double.infinity,
                   fit: BoxFit.cover,
-                  // Shimmer while image downloads
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Shimmer.fromColors(
-                      baseColor: Colors.grey[300]!,
-                      highlightColor: Colors.grey[100]!,
-                      child: Container(height: 160, color: surfaceColor),
-                    );
-                  },
-                  // Apartment icon if URL is broken / not yet set
-                  errorBuilder: (_, __, ___) => Container(
+                  fadeInDuration: const Duration(milliseconds: 200),
+                  fadeOutDuration: const Duration(milliseconds: 100),
+                  placeholder: (context, url) => Shimmer.fromColors(
+                    baseColor: Colors.grey[300]!,
+                    highlightColor: Colors.grey[100]!,
+                    child: Container(height: 160, color: surfaceColor),
+                  ),
+                  errorWidget: (context, url, error) => Container(
                     height: 160,
                     color: AppColors.primary.withOpacity(0.08),
                     child: const Center(

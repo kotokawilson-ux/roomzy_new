@@ -1,5 +1,6 @@
 // lib/widgets/hostels_list.dart
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -11,13 +12,24 @@ import '../models/models.dart';
 
 enum _LoadState { loading, success, empty, error }
 
-/// Returns the image URL stored in Firestore (full Cloudinary URL).
-/// Falls back to a placeholder if the field is null/empty.
-String buildImageUrl(String? imageUrl) {
+/// Builds an optimized Cloudinary URL for fast loading.
+/// - f_auto       → serves WebP/AVIF automatically (smaller file)
+/// - q_auto:good  → best quality/size balance
+/// - w_800        → caps width at 800px (enough for mobile cards)
+/// - c_fill       → crops smartly to fill the frame
+String buildImageUrl(String? imageUrl, {int width = 800}) {
   if (imageUrl == null || imageUrl.trim().isEmpty) {
     return 'https://placehold.co/400x300?text=No+Image';
   }
-  return imageUrl.trim();
+  final url = imageUrl.trim();
+
+  if (url.contains('cloudinary.com') && url.contains('/upload/')) {
+    return url.replaceFirst(
+      '/upload/',
+      '/upload/f_auto,q_auto:good,w_$width,c_fill/',
+    );
+  }
+  return url;
 }
 
 class HostelsList extends StatefulWidget {
@@ -66,7 +78,7 @@ class _HostelsListState extends State<HostelsList> {
         try {
           hostels.add(Hostel.fromJson(doc.id, doc.data()));
         } catch (e) {
-          print('❌ Failed to parse ${doc.id}: $e');
+          debugPrint('❌ Failed to parse ${doc.id}: $e');
         }
       }
 
@@ -76,12 +88,24 @@ class _HostelsListState extends State<HostelsList> {
         _state = _LoadState.success;
       });
 
+      // Warm the image cache right after data loads — before user even scrolls
+      if (mounted) _precacheImages();
+
       if (widget.searchQuery.isNotEmpty) {
         _applySearch(widget.searchQuery);
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _state = _LoadState.error);
+    }
+  }
+
+  /// Downloads all hostel images into cache in the background.
+  /// By the time the user scrolls, images are already cached — instant display.
+  void _precacheImages() {
+    for (final hostel in _hostels) {
+      final url = buildImageUrl(hostel.image, width: 800);
+      CachedNetworkImageProvider(url).resolve(const ImageConfiguration());
     }
   }
 
@@ -141,7 +165,18 @@ class _HostelsListState extends State<HostelsList> {
         : ResponsiveBreakpoints.of(context).largerThan(DESKTOP)
             ? 24.0
             : 20.0;
-    final childAspectRatio = !isDesktop ? 1.1 : 0.75;
+
+    // Mobile: ListView so cards size to content — no overflow
+    if (!isDesktop) {
+      return ListView.separated(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _filtered.length,
+        separatorBuilder: (_, __) => SizedBox(height: spacing),
+        itemBuilder: (_, index) =>
+            _HostelCard(hostel: _filtered[index], theme: theme),
+      );
+    }
 
     return GridView.builder(
       shrinkWrap: true,
@@ -151,7 +186,7 @@ class _HostelsListState extends State<HostelsList> {
         crossAxisCount: crossAxisCount,
         crossAxisSpacing: spacing,
         mainAxisSpacing: spacing,
-        childAspectRatio: childAspectRatio,
+        childAspectRatio: 0.75,
       ),
       itemBuilder: (_, index) =>
           _HostelCard(hostel: _filtered[index], theme: theme),
@@ -161,7 +196,6 @@ class _HostelsListState extends State<HostelsList> {
   Widget _buildShimmer(bool isDesktop) {
     final cols = isDesktop ? 3 : 1;
     final spacing = isDesktop ? 20.0 : 16.0;
-    final childAspectRatio = !isDesktop ? 1.1 : 0.75;
 
     return GridView.builder(
       shrinkWrap: true,
@@ -171,7 +205,7 @@ class _HostelsListState extends State<HostelsList> {
         crossAxisCount: cols,
         crossAxisSpacing: spacing,
         mainAxisSpacing: spacing,
-        childAspectRatio: childAspectRatio,
+        childAspectRatio: isDesktop ? 0.75 : 1.3,
       ),
       itemBuilder: (_, __) => Shimmer.fromColors(
         baseColor: Colors.grey[300]!,
@@ -179,7 +213,7 @@ class _HostelsListState extends State<HostelsList> {
         child: Container(
           decoration: BoxDecoration(
             color: Colors.grey[300],
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
           ),
         ),
       ),
@@ -216,8 +250,7 @@ class _HostelsListState extends State<HostelsList> {
       );
 }
 
-/// ─── Modern Hostel Card ───────────────────────
-
+// ─── Modern Hostel Card ───────────────────────
 class _HostelCard extends StatelessWidget {
   final Hostel hostel;
   final ThemeData theme;
@@ -234,15 +267,14 @@ class _HostelCard extends StatelessWidget {
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < 600;
 
-    final imageHeight = isMobile ? 140.0 : 200.0;
-    // ignore: unused_local_variable
-    final fontSmall = isMobile ? 10.0 : 12.0;
+    final imageHeight = isMobile ? 180.0 : 200.0;
     final fontMedium = isMobile ? 12.0 : 14.0;
     final fontLarge = isMobile ? 14.0 : 16.0;
     final iconSize = isMobile ? 14.0 : 16.0;
     final padding = isMobile ? 14.0 : 18.0;
 
-    final imageUrl = buildImageUrl(hostel.image);
+    // Optimized Cloudinary URL — WebP/AVIF, compressed, resized
+    final imageUrl = buildImageUrl(hostel.image, width: 800);
 
     return GestureDetector(
       onTap: () => context.go('/hostels/${hostel.id}'),
@@ -261,27 +293,27 @@ class _HostelCard extends StatelessWidget {
         child: ClipRRect(
           borderRadius: BorderRadius.circular(20),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // ── Hostel image from Cloudinary ──
-              Image.network(
-                imageUrl,
+              // ── Cached hostel image — loads instantly after first open ──
+              CachedNetworkImage(
+                imageUrl: imageUrl,
                 height: imageHeight,
                 width: double.infinity,
                 fit: BoxFit.cover,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return Shimmer.fromColors(
-                    baseColor: Colors.grey[300]!,
-                    highlightColor: Colors.grey[100]!,
-                    child: Container(
-                      height: imageHeight,
-                      width: double.infinity,
-                      color: Colors.grey[300],
-                    ),
-                  );
-                },
-                errorBuilder: (_, __, ___) => Container(
+                fadeInDuration: const Duration(milliseconds: 200),
+                fadeOutDuration: const Duration(milliseconds: 100),
+                placeholder: (context, url) => Shimmer.fromColors(
+                  baseColor: Colors.grey[300]!,
+                  highlightColor: Colors.grey[100]!,
+                  child: Container(
+                    height: imageHeight,
+                    width: double.infinity,
+                    color: Colors.grey[300],
+                  ),
+                ),
+                errorWidget: (context, url, error) => Container(
                   height: imageHeight,
                   color: AppColors.primary.withOpacity(0.08),
                   child: const Center(
@@ -290,92 +322,98 @@ class _HostelCard extends StatelessWidget {
                   ),
                 ),
               ),
-              // Card content
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.all(padding),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Text(
-                        hostel.hostelName,
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: fontLarge,
-                            fontWeight: FontWeight.w700,
-                            color: textPrimary),
+
+              // ── Card body ──
+              Padding(
+                padding: EdgeInsets.all(padding),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      hostel.hostelName,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: fontLarge,
+                        fontWeight: FontWeight.w700,
+                        color: textPrimary,
                       ),
-                      const SizedBox(height: 8),
-                      if (hostel.address != null && hostel.address!.isNotEmpty)
-                        _InfoRow(
-                            icon: Icons.location_on,
-                            text: hostel.address!,
-                            color: Colors.redAccent,
-                            textColor: textSecondary,
-                            iconSize: iconSize),
-                      if (hostel.town != null && hostel.town!.isNotEmpty)
-                        _InfoRow(
-                            icon: Icons.map,
-                            text: '${hostel.town}, Ghana',
-                            color: Colors.blueGrey,
-                            textColor: textSecondary,
-                            iconSize: iconSize),
-                      if (hostel.schoolName != null &&
-                          hostel.schoolName!.isNotEmpty)
-                        _InfoRow(
-                            icon: Icons.school,
-                            text: hostel.schoolShortName != null
-                                ? '${hostel.schoolName} (${hostel.schoolShortName})'
-                                : hostel.schoolName!,
-                            color: AppColors.primary,
-                            textColor: AppColors.primary,
-                            iconSize: iconSize),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        alignment: WrapAlignment.center,
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                          if (hostel.priceRange != null)
-                            _Badge(
-                                icon: Icons.monetization_on_outlined,
-                                text: hostel.priceRange!,
-                                color: Colors.green),
+                    ),
+                    const SizedBox(height: 8),
+                    if (hostel.address != null && hostel.address!.isNotEmpty)
+                      _InfoRow(
+                        icon: Icons.location_on,
+                        text: hostel.address!,
+                        color: Colors.redAccent,
+                        textColor: textSecondary,
+                        iconSize: iconSize,
+                      ),
+                    if (hostel.town != null && hostel.town!.isNotEmpty)
+                      _InfoRow(
+                        icon: Icons.map,
+                        text: '${hostel.town}, Ghana',
+                        color: Colors.blueGrey,
+                        textColor: textSecondary,
+                        iconSize: iconSize,
+                      ),
+                    if (hostel.schoolName != null &&
+                        hostel.schoolName!.isNotEmpty)
+                      _InfoRow(
+                        icon: Icons.school,
+                        text: hostel.schoolShortName != null
+                            ? '${hostel.schoolName} (${hostel.schoolShortName})'
+                            : hostel.schoolName!,
+                        color: AppColors.primary,
+                        textColor: AppColors.primary,
+                        iconSize: iconSize,
+                      ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        if (hostel.priceRange != null)
                           _Badge(
-                              icon: Icons.door_front_door_outlined,
-                              text: available > 0
-                                  ? '$available room${available > 1 ? 's' : ''}'
-                                  : 'No rooms',
-                              color: available > 0
-                                  ? Colors.blue
-                                  : Colors.redAccent),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () => context.go('/hostels/${hostel.id}'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            padding: EdgeInsets.symmetric(
-                                vertical: isMobile ? 12 : 14),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(50)),
-                            elevation: 0,
+                            icon: Icons.monetization_on_outlined,
+                            text: hostel.priceRange!,
+                            color: Colors.green,
                           ),
-                          child: Text('See Details',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: fontMedium)),
+                        _Badge(
+                          icon: Icons.door_front_door_outlined,
+                          text: available > 0
+                              ? '$available room${available > 1 ? 's' : ''}'
+                              : 'No rooms',
+                          color: available > 0 ? Colors.blue : Colors.redAccent,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => context.go('/hostels/${hostel.id}'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(50),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: Text(
+                          'See Details',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: fontMedium,
+                          ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -386,17 +424,13 @@ class _HostelCard extends StatelessWidget {
   }
 }
 
-/// ─── Badge Widget ───────────────────────────
+// ─── Badge Widget ───────────────────────────
 class _Badge extends StatelessWidget {
   final IconData icon;
   final String text;
   final Color color;
 
-  const _Badge(
-      // ignore: unused_element_parameter
-      {required this.icon,
-      required this.text,
-      required this.color});
+  const _Badge({required this.icon, required this.text, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -411,16 +445,21 @@ class _Badge extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 4),
-          Text(text,
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-/// ─── Info Row Widget ───────────────────────
+// ─── Info Row Widget ───────────────────────
 class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -428,17 +467,18 @@ class _InfoRow extends StatelessWidget {
   final Color textColor;
   final double iconSize;
 
-  const _InfoRow(
-      {required this.icon,
-      required this.text,
-      required this.color,
-      required this.textColor,
-      required this.iconSize});
+  const _InfoRow({
+    required this.icon,
+    required this.text,
+    required this.color,
+    required this.textColor,
+    required this.iconSize,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,

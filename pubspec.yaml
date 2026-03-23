@@ -33,6 +33,8 @@ dependencies:
   url_launcher: ^6.3.0
   fluttertoast: ^8.2.4
   webview_flutter: ^4.13.1
+  http: ^1.2.0
+  shared_preferences: ^2.3.2   # ← moved here (was wrongly inside fonts)
 
   # Firebase
   firebase_core: ^4.5.0

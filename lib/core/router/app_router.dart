@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../services/auth_service.dart';
 import '../../screens/splash/splash_screen.dart';
@@ -16,12 +17,13 @@ import '../../screens/landlord/landlord_dashboard_screen.dart';
 import '../../screens/admin/admin_dashboard_screen.dart';
 
 class AppRouter {
-  // authService is now optional — pass null until auth is ready
+  static final _rootNavigatorKey = GlobalKey<NavigatorState>();
+
   static GoRouter router([AuthService? authService]) {
     return GoRouter(
+      navigatorKey: _rootNavigatorKey,
       initialLocation: '/',
       redirect: (context, state) {
-        // Skip all route protection until auth is implemented
         if (authService == null) return null;
 
         final isLoggedIn = authService.isLoggedIn;
@@ -39,10 +41,15 @@ class AppRouter {
           path: '/',
           builder: (context, state) => const SplashScreen(),
         ),
+
+        // ── Home — intercepts back button to show exit dialog
         GoRoute(
           path: '/home',
-          builder: (context, state) => const HomeScreen(),
+          builder: (context, state) => const _BackHandlerWrapper(
+            child: HomeScreen(),
+          ),
         ),
+
         GoRoute(
           path: '/about',
           builder: (context, state) => const AboutScreen(),
@@ -74,13 +81,16 @@ class AppRouter {
           path: '/bookings',
           builder: (context, state) => const BookingsScreen(),
         ),
+
+        // ── Booking confirm — uses bookingId (Firestore doc ID)
         GoRoute(
-          path: '/book/:roomId',
+          path: '/book/:bookingId',
           builder: (context, state) {
-            final roomId = int.parse(state.pathParameters['roomId']!);
-            return BookingConfirmScreen(roomId: roomId);
+            final bookingId = state.pathParameters['bookingId']!;
+            return BookingConfirmScreen(bookingId: bookingId);
           },
         ),
+
         GoRoute(
           path: '/profile',
           builder: (context, state) => const ProfileScreen(),
@@ -110,6 +120,75 @@ class AppRouter {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─── Back Button Handler ──────────────────────────────────────────────────────
+
+class _BackHandlerWrapper extends StatelessWidget {
+  final Widget child;
+  const _BackHandlerWrapper({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+
+        if (context.canPop()) {
+          context.pop();
+          return;
+        }
+
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Row(
+              children: [
+                Icon(Icons.exit_to_app_rounded, color: Color(0xFF0F766E)),
+                SizedBox(width: 10),
+                Text('Exit App',
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+              ],
+            ),
+            content: const Text(
+              'Are you sure you want to exit RoomzyFind?',
+              style: TextStyle(fontSize: 14, color: Colors.black54),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Stay',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600, color: Color(0xFF0F766E))),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0F766E),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                child: const Text('Exit',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        );
+
+        if (shouldExit == true && context.mounted) {
+          SystemNavigator.pop();
+        }
+      },
+      child: child,
     );
   }
 }

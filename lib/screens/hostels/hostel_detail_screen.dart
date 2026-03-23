@@ -1,13 +1,17 @@
 // lib/screens/hostel/hostel_detail_screen.dart
 
-import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart';
+import 'dart:convert';
+import 'dart:math';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:url_launcher/url_launcher.dart';
-// ignore: avoid_web_libraries_in_flutter
+import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
+
+import '../../services/booking_storage_service.dart';
 import '../../models/models.dart';
 import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
@@ -19,13 +23,31 @@ const _kBg = Color(0xFFF0F4F8);
 const _kCard = Colors.white;
 const _kGreen = Color(0xFF16A34A);
 const _kRed = Color(0xFFDC2626);
+const _kOrange = Color(0xFFEA580C);
+
+// ── Paystack secret key ───────────────────────────────────────────────────────
+const _kPaystackSecretKey = 'sk_test_6350329ac171a2de1a9b7e6309865e837b163d12';
+const _kPaystackBaseUrl = 'https://api.paystack.co';
+
+// ─── Unique reference generator ──────────────────────────────────────────────
+String _generateReference() {
+  final timestamp = DateTime.now().millisecondsSinceEpoch;
+  final random = Random().nextInt(99999).toString().padLeft(5, '0');
+  return 'RZF-$timestamp-$random';
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-String _img(String? v) {
-  if (v == null || v.trim().isEmpty)
+String _img(String? v, {int width = 800}) {
+  if (v == null || v.trim().isEmpty) {
     return 'https://placehold.co/600x400?text=No+Image';
-  return v.trim();
+  }
+  final url = v.trim();
+  if (url.contains('cloudinary.com') && url.contains('/upload/')) {
+    return url.replaceFirst(
+        '/upload/', '/upload/f_auto,q_auto:good,w_$width,c_fill/');
+  }
+  return url;
 }
 
 List<String> _splitImages(String? raw) {
@@ -65,10 +87,6 @@ class RoomModel {
   final bool available;
   final String? image;
   final List<String> images;
-  final String? paymentBank;
-  final String? paymentMomo;
-  final String? paymentCash;
-  final String? paymentOther;
 
   int get remaining => (capacity - booked).clamp(0, capacity);
 
@@ -82,10 +100,6 @@ class RoomModel {
     required this.available,
     this.image,
     required this.images,
-    this.paymentBank,
-    this.paymentMomo,
-    this.paymentCash,
-    this.paymentOther,
   });
 
   factory RoomModel.fromFirestore(String id, Map<String, dynamic> d) =>
@@ -96,26 +110,13 @@ class RoomModel {
         capacity: _toInt(d['capacity'], 1),
         price: (d['price'] ?? 0).toDouble(),
         booked: _toInt(d['booked'], 0),
-        available: (d['available'] ?? 1) == 1,
+        available: d['available'] == true || d['available'] == 1,
         image: d['image'],
         images: _splitImages(d['images']),
-        paymentBank: d['payment_bank'],
-        paymentMomo: d['payment_momo'],
-        paymentCash: d['payment_cash'],
-        paymentOther: d['payment_other'],
       );
 
   static int _toInt(dynamic v, int fallback) =>
       v is int ? v : int.tryParse('$v') ?? fallback;
-
-  Map<String, String> get paymentOptions {
-    final m = <String, String>{};
-    if (paymentBank?.isNotEmpty == true) m['Bank'] = paymentBank!;
-    if (paymentMomo?.isNotEmpty == true) m['MoMo'] = paymentMomo!;
-    if (paymentCash?.isNotEmpty == true) m['Cash'] = paymentCash!;
-    if (paymentOther?.isNotEmpty == true) m['Other'] = paymentOther!;
-    return m;
-  }
 
   RoomModel copyWith({required int booked}) => RoomModel(
         id: id,
@@ -127,10 +128,6 @@ class RoomModel {
         available: (capacity - booked) > 0,
         image: image,
         images: images,
-        paymentBank: paymentBank,
-        paymentMomo: paymentMomo,
-        paymentCash: paymentCash,
-        paymentOther: paymentOther,
       );
 }
 
@@ -180,23 +177,47 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
           .get();
 
       if (!mounted) return;
+
+      final hostel = Hostel.fromJson(doc.id, doc.data()!);
+      final rooms = roomsSnap.docs
+          .map((d) => RoomModel.fromFirestore(d.id, d.data()))
+          .toList();
+
       setState(() {
-        _hostel = Hostel.fromJson(doc.id, doc.data()!);
-        _rooms = roomsSnap.docs
-            .map((d) => RoomModel.fromFirestore(d.id, d.data()))
-            .toList();
+        _hostel = hostel;
+        _rooms = rooms;
         _facilities = facSnap.docs
             .map((d) => (d.data()['facility_name'] ?? '') as String)
             .where((f) => f.isNotEmpty)
             .toList();
         _loading = false;
       });
+
+      if (mounted) _precacheAllImages(hostel, rooms);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  void _precacheAllImages(Hostel hostel, List<RoomModel> rooms) {
+    for (final img in [
+      if (hostel.image?.isNotEmpty == true) hostel.image!,
+      ..._splitImages(hostel.images),
+    ]) {
+      CachedNetworkImageProvider(_img(img, width: 1200))
+          .resolve(const ImageConfiguration());
+    }
+    for (final room in rooms) {
+      for (final img in room.images.isNotEmpty
+          ? room.images
+          : (room.image != null ? [room.image!] : <String>[])) {
+        CachedNetworkImageProvider(_img(img, width: 800))
+            .resolve(const ImageConfiguration());
+      }
     }
   }
 
@@ -234,30 +255,18 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── 1. HERO ────────────────────────────────────────────────
             _HeroSection(hostelName: hostel.hostelName, images: heroImages),
-
-            // ── 2. INFO ────────────────────────────────────────────────
             _InfoSection(
                 hostel: hostel, isWide: isWide, heroImages: heroImages),
-
-            // ── 3. ROOMS ───────────────────────────────────────────────
             _RoomsSection(
                 rooms: _rooms,
                 hostel: hostel,
                 isWide: isWide,
                 onBooked: _onBooked),
-
-            // ── 4. FACILITIES ──────────────────────────────────────────
             if (_facilities.isNotEmpty)
               _FacilitiesSection(facilities: _facilities, isWide: isWide),
-
-            // ── 5. LOCATION / MAP ──────────────────────────────────────
             if (mapSrc.isNotEmpty)
               _LocationSection(mapSrc: mapSrc, isWide: isWide),
-
-            // ── 6. FOOTER ──────────────────────────────────────────────
-            // ── 6. FOOTER ──────────────────────────────────────────────
             const Footer(),
           ],
         ),
@@ -284,57 +293,45 @@ class _HeroSectionState extends State<_HeroSection> {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 360,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Background
-          widget.images.isNotEmpty
-              ? CarouselSlider(
-                  options: CarouselOptions(
-                    height: 360,
-                    viewportFraction: 1.0,
-                    autoPlay: widget.images.length > 1,
-                    autoPlayInterval: const Duration(seconds: 5),
-                    onPageChanged: (i, _) => setState(() => _current = i),
-                  ),
-                  items: widget.images
-                      .map((img) => Image.network(
-                            _img(img),
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            errorBuilder: (_, __, ___) =>
-                                Container(color: _kDark),
-                          ))
-                      .toList(),
-                )
-              : Container(color: _kDark),
-
-          // Gradient overlay — stronger at bottom for text legibility
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0x55000000),
-                  Color(0xCC000000),
-                ],
-              ),
+      child: Stack(fit: StackFit.expand, children: [
+        widget.images.isNotEmpty
+            ? CarouselSlider(
+                options: CarouselOptions(
+                  height: 360,
+                  viewportFraction: 1.0,
+                  autoPlay: widget.images.length > 1,
+                  autoPlayInterval: const Duration(seconds: 5),
+                  onPageChanged: (i, _) => setState(() => _current = i),
+                ),
+                items: widget.images
+                    .map((img) => CachedNetworkImage(
+                          imageUrl: _img(img, width: 1200),
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          fadeInDuration: const Duration(milliseconds: 200),
+                          placeholder: (_, __) =>
+                              Container(color: _kDark.withOpacity(0.6)),
+                          errorWidget: (_, __, ___) => Container(color: _kDark),
+                        ))
+                    .toList(),
+              )
+            : Container(color: _kDark),
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0x55000000), Color(0xCC000000)],
             ),
           ),
-
-          // Content
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Badge
-
-              const SizedBox(height: 14),
-              // Title
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Text(
-                  widget.hostelName,
+        ),
+        Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(height: 14),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(widget.hostelName,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 36,
@@ -342,62 +339,55 @@ class _HeroSectionState extends State<_HeroSection> {
                     color: Colors.white,
                     letterSpacing: 0.5,
                     shadows: [Shadow(blurRadius: 12, color: Colors.black87)],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              // Breadcrumb
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _breadcrumb('Home', isActive: false),
-                  _sep(),
-                  _breadcrumb('Hostels / Apartments',
-                      isActive: false, isBold: true),
-                  _sep(),
-                  _breadcrumb(widget.hostelName, isActive: true),
-                ],
-              ),
-            ],
-          ),
-
-          // Image dots
-          if (widget.images.length > 1)
-            Positioned(
-              bottom: 16,
-              left: 0,
-              right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: widget.images
-                    .asMap()
-                    .entries
-                    .map((e) => AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          width: _current == e.key ? 20 : 6,
-                          height: 6,
-                          margin: const EdgeInsets.symmetric(horizontal: 3),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(3),
-                            color: Colors.white
-                                .withOpacity(_current == e.key ? 1 : 0.4),
-                          ),
-                        ))
-                    .toList(),
-              ),
+                  )),
             ),
-        ],
-      ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _crumb('Home'),
+                _sep(),
+                _crumb('Hostels / Apartments', bold: true),
+                _sep(),
+                _crumb(widget.hostelName, dim: true),
+              ],
+            ),
+          ],
+        ),
+        if (widget.images.length > 1)
+          Positioned(
+            bottom: 16,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: widget.images
+                  .asMap()
+                  .entries
+                  .map((e) => AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        width: _current == e.key ? 20 : 6,
+                        height: 6,
+                        margin: const EdgeInsets.symmetric(horizontal: 3),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(3),
+                          color: Colors.white
+                              .withOpacity(_current == e.key ? 1 : 0.4),
+                        ),
+                      ))
+                  .toList(),
+            ),
+          ),
+      ]),
     );
   }
 
-  Widget _breadcrumb(String t, {required bool isActive, bool isBold = false}) =>
-      Text(t,
-          style: TextStyle(
-            color: isActive ? Colors.white54 : Colors.white,
-            fontSize: 13,
-            fontWeight: isBold ? FontWeight.w700 : FontWeight.w400,
-          ));
+  Widget _crumb(String t, {bool bold = false, bool dim = false}) => Text(t,
+      style: TextStyle(
+        color: dim ? Colors.white54 : Colors.white,
+        fontSize: 13,
+        fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+      ));
 
   Widget _sep() => const Padding(
         padding: EdgeInsets.symmetric(horizontal: 8),
@@ -417,34 +407,28 @@ class _InfoSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final phones = _splitPhone(hostel.phone);
-
     return Container(
       color: _kCard,
-      child: Column(
-        children: [
-          // Top accent strip
-          Container(height: 4, color: _kPrimary),
-          Padding(
-            padding: EdgeInsets.symmetric(
-                horizontal: isWide ? 60 : 20, vertical: 40),
-            child: isWide
-                ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(flex: 6, child: _HeroImageBox(images: heroImages)),
-                    const SizedBox(width: 48),
-                    Expanded(
-                        flex: 5,
-                        child: _DetailsBox(hostel: hostel, phones: phones)),
-                  ])
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                        _HeroImageBox(images: heroImages),
-                        const SizedBox(height: 28),
-                        _DetailsBox(hostel: hostel, phones: phones),
-                      ]),
-          ),
-        ],
-      ),
+      child: Column(children: [
+        Container(height: 4, color: _kPrimary),
+        Padding(
+          padding:
+              EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 40),
+          child: isWide
+              ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Expanded(flex: 6, child: _HeroImageBox(images: heroImages)),
+                  const SizedBox(width: 48),
+                  Expanded(
+                      flex: 5,
+                      child: _DetailsBox(hostel: hostel, phones: phones)),
+                ])
+              : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  _HeroImageBox(images: heroImages),
+                  const SizedBox(height: 28),
+                  _DetailsBox(hostel: hostel, phones: phones),
+                ]),
+        ),
+      ]),
     );
   }
 }
@@ -462,7 +446,7 @@ class _HeroImageBox extends StatelessWidget {
           BoxShadow(
               color: Colors.black.withOpacity(0.15),
               blurRadius: 24,
-              offset: const Offset(0, 8)),
+              offset: const Offset(0, 8))
         ],
       ),
       child: ClipRRect(
@@ -470,18 +454,16 @@ class _HeroImageBox extends StatelessWidget {
         child: AspectRatio(
           aspectRatio: 4 / 3,
           child: images.isNotEmpty
-              ? Image.network(
-                  _img(images[0]),
+              ? CachedNetworkImage(
+                  imageUrl: _img(images[0], width: 1200),
                   fit: BoxFit.cover,
-                  loadingBuilder: (_, child, p) {
-                    if (p == null) return child;
-                    return Shimmer.fromColors(
-                      baseColor: Colors.grey[300]!,
-                      highlightColor: Colors.grey[100]!,
-                      child: Container(color: Colors.grey[300]),
-                    );
-                  },
-                  errorBuilder: (_, __, ___) => Container(
+                  fadeInDuration: const Duration(milliseconds: 200),
+                  placeholder: (_, __) => Shimmer.fromColors(
+                    baseColor: Colors.grey[300]!,
+                    highlightColor: Colors.grey[100]!,
+                    child: Container(color: Colors.grey[300]),
+                  ),
+                  errorWidget: (_, __, ___) => Container(
                     color: _kPrimary.withOpacity(0.08),
                     child: const Center(
                         child: Icon(Icons.apartment_rounded,
@@ -507,158 +489,130 @@ class _DetailsBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Name
-        Text(hostel.hostelName,
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(hostel.hostelName,
+          style: const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w900,
+              color: _kDark,
+              height: 1.2)),
+      const SizedBox(height: 8),
+      Row(children: [
+        const Icon(Icons.location_on_rounded, size: 16, color: _kPrimary),
+        const SizedBox(width: 4),
+        Text('${hostel.town ?? ''}, Ghana',
             style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w900,
-                color: _kDark,
-                height: 1.2)),
-        const SizedBox(height: 8),
-
-        // Location row
-        Row(children: [
-          const Icon(Icons.location_on_rounded, size: 16, color: _kPrimary),
-          const SizedBox(width: 4),
-          Text('${hostel.town ?? ''}, Ghana',
-              style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.black54,
-                  fontWeight: FontWeight.w500)),
-        ]),
-        const SizedBox(height: 16),
-
-        // Price pill
-        if (hostel.priceRange != null)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                  colors: [Color(0xFF16A34A), Color(0xFF15803D)]),
-              borderRadius: BorderRadius.circular(50),
-              boxShadow: [
-                BoxShadow(
-                    color: _kGreen.withOpacity(0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3))
-              ],
-            ),
-            child: Text(
-              '${hostel.priceRange!}  ·  ${hostel.durationType ?? 'per year'}',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14),
-            ),
-          ),
-
-        const SizedBox(height: 16),
-
-        // Description
-        if (hostel.description?.isNotEmpty == true) ...[
-          Text(hostel.description!,
-              style: const TextStyle(
-                  fontSize: 14, color: Colors.black54, height: 1.65)),
-          const SizedBox(height: 16),
-        ],
-
-        // School
-        if (hostel.schoolName?.isNotEmpty == true)
-          _InfoChip(
-            icon: Icons.school_rounded,
-            text: hostel.schoolShortName != null
-                ? '${hostel.schoolName} (${hostel.schoolShortName})'
-                : hostel.schoolName!,
-            color: _kPrimary,
-          ),
-
-        const SizedBox(height: 12),
-
-        // Phone enquiry
+                fontSize: 14,
+                color: Colors.black54,
+                fontWeight: FontWeight.w500)),
+      ]),
+      const SizedBox(height: 16),
+      if (hostel.priceRange != null)
         Container(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
-            color: _kPrimary.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _kPrimary.withOpacity(0.2)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('For enquiries or details call:',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.black45,
-                      fontWeight: FontWeight.w500)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: phones
-                    .map((p) => GestureDetector(
-                          onTap: () => launchUrl(Uri.parse('tel:$p')),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: _kPrimary,
-                              borderRadius: BorderRadius.circular(50),
-                              boxShadow: [
-                                BoxShadow(
-                                    color: _kPrimary.withOpacity(0.3),
-                                    blurRadius: 6,
-                                    offset: const Offset(0, 2))
-                              ],
-                            ),
-                            child:
-                                Row(mainAxisSize: MainAxisSize.min, children: [
-                              const Icon(Icons.phone_rounded,
-                                  size: 14, color: Colors.white),
-                              const SizedBox(width: 6),
-                              Text(p,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13)),
-                            ]),
-                          ),
-                        ))
-                    .toList(),
-              ),
+            gradient: const LinearGradient(
+                colors: [Color(0xFF16A34A), Color(0xFF15803D)]),
+            borderRadius: BorderRadius.circular(50),
+            boxShadow: [
+              BoxShadow(
+                  color: _kGreen.withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3))
             ],
           ),
-        ),
-
-        const SizedBox(height: 12),
-
-        // Note
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFF7ED),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFFED7AA)),
+          child: Text(
+            '${hostel.priceRange!}  ·  ${hostel.durationType}',
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14),
           ),
-          child: const Row(children: [
-            Icon(Icons.info_outline_rounded,
-                size: 16, color: Color(0xFFEA580C)),
-            SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                'NOTE: Any room you book will be unavailable for others',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFFEA580C)),
-              ),
-            ),
-          ]),
         ),
+      const SizedBox(height: 16),
+      if (hostel.description?.isNotEmpty == true) ...[
+        Text(hostel.description!,
+            style: const TextStyle(
+                fontSize: 14, color: Colors.black54, height: 1.65)),
+        const SizedBox(height: 16),
       ],
-    );
+      if (hostel.schoolName?.isNotEmpty == true)
+        _InfoChip(
+          icon: Icons.school_rounded,
+          text: hostel.schoolShortName != null
+              ? '${hostel.schoolName} (${hostel.schoolShortName})'
+              : hostel.schoolName!,
+          color: _kPrimary,
+        ),
+      const SizedBox(height: 12),
+      Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: _kPrimary.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kPrimary.withOpacity(0.2)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('For enquiries or details call:',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.black45,
+                  fontWeight: FontWeight.w500)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: phones
+                .map((p) => GestureDetector(
+                      onTap: () => launchUrl(Uri.parse('tel:$p')),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _kPrimary,
+                          borderRadius: BorderRadius.circular(50),
+                          boxShadow: [
+                            BoxShadow(
+                                color: _kPrimary.withOpacity(0.3),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2))
+                          ],
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.phone_rounded,
+                              size: 14, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Text(p,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13)),
+                        ]),
+                      ),
+                    ))
+                .toList(),
+          ),
+        ]),
+      ),
+      const SizedBox(height: 12),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7ED),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFFED7AA)),
+        ),
+        child: const Row(children: [
+          Icon(Icons.info_outline_rounded, size: 16, color: Color(0xFFEA580C)),
+          SizedBox(width: 8),
+          Flexible(
+              child: Text(
+                  'NOTE: Any room you book will be unavailable for others',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFEA580C)))),
+        ]),
+      ),
+    ]);
   }
 }
 
@@ -705,38 +659,29 @@ class _RoomsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cols = isWide ? 3 : 1;
     return Container(
       color: _kBg,
       padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 48),
-      child: Column(
-        children: [
-          // Section heading
-          _SectionHeading(
-              title: 'Available Rooms',
-              subtitle: 'Choose a room that suits you'),
-          const SizedBox(height: 32),
-
-          rooms.isEmpty
-              ? _EmptyBox(message: 'No rooms found for this hostel.')
-              : GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: cols,
-                    crossAxisSpacing: 20,
-                    mainAxisSpacing: 20,
-                    childAspectRatio: isWide ? 0.68 : 0.85,
-                  ),
-                  itemCount: rooms.length,
-                  itemBuilder: (_, i) => _RoomCard(
-                    room: rooms[i],
-                    hostel: hostel,
-                    onBooked: onBooked,
-                  ),
+      child: Column(children: [
+        _SectionHeading(
+            title: 'Available Rooms', subtitle: 'Choose a room that suits you'),
+        const SizedBox(height: 32),
+        rooms.isEmpty
+            ? _EmptyBox(message: 'No rooms found for this hostel.')
+            : GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: isWide ? 3 : 1,
+                  crossAxisSpacing: 20,
+                  mainAxisSpacing: 20,
+                  childAspectRatio: isWide ? 0.65 : 0.82,
                 ),
-        ],
-      ),
+                itemCount: rooms.length,
+                itemBuilder: (_, i) => _RoomCard(
+                    room: rooms[i], hostel: hostel, onBooked: onBooked),
+              ),
+      ]),
     );
   }
 }
@@ -765,187 +710,152 @@ class _RoomCard extends StatelessWidget {
         ],
       ),
       clipBehavior: Clip.hardEdge,
-      child: Column(
-        children: [
-          // Image with availability badge overlay
-          Stack(
-            children: [
-              _RoomImageSlider(
-                images: room.images.isNotEmpty
-                    ? room.images
-                    : (room.image != null ? [room.image!] : []),
-                height: 175,
-              ),
-              // Availability badge
-              Positioned(
-                top: 12,
-                right: 12,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: isAvail ? _kGreen : _kRed,
-                    borderRadius: BorderRadius.circular(50),
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.2), blurRadius: 4)
-                    ],
-                  ),
-                  child: Text(isAvail ? 'Available' : 'Full',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700)),
-                ),
-              ),
-            ],
+      child: Column(children: [
+        Stack(children: [
+          _RoomImageSlider(
+            images: room.images.isNotEmpty
+                ? room.images
+                : (room.image != null ? [room.image!] : []),
+            height: 175,
           ),
-
-          // Details
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    children: [
-                      // Room type
-                      Text('${room.type} Room',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                              color: _kDark)),
-                      const SizedBox(height: 4),
-
-                      // Room number
-                      RichText(
-                        textAlign: TextAlign.center,
-                        text: TextSpan(
-                          style: const TextStyle(
-                              fontSize: 13, color: Colors.black54),
-                          children: [
-                            const TextSpan(text: 'Room No: '),
-                            TextSpan(
-                                text: room.roomNumber,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    color: _kDark)),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-
-                      // Stats row
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _StatPill(
-                              icon: Icons.people_outline_rounded,
-                              label: 'Cap: ${room.capacity}',
-                              color: Colors.blueGrey),
-                          const SizedBox(width: 8),
-                          _StatPill(
-                            icon: Icons.door_front_door_outlined,
-                            label: '$rem slot${rem != 1 ? 's' : ''}',
-                            color: isAvail ? _kGreen : _kRed,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-
-                      // Price
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: _kGreen.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(50),
-                        ),
-                        child: Text(
-                          'GHS ${room.price.toStringAsFixed(2)} / person',
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w800,
-                              color: _kGreen),
-                        ),
-                      ),
-
-                      // Almost full warning
-                      if (rem == 1) ...[
-                        const SizedBox(height: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _kRed.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(50),
-                          ),
-                          child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text('🔥', style: TextStyle(fontSize: 12)),
-                                SizedBox(width: 4),
-                                Text('Almost Full!',
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        color: _kRed,
-                                        fontWeight: FontWeight.w700)),
-                              ]),
-                        ),
-                      ],
-                    ],
-                  ),
-
-                  // Buttons
-                  const SizedBox(height: 8),
-                  Row(children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed:
-                            (room.images.isNotEmpty || room.image != null)
-                                ? () => _showImages(context, room)
-                                : null,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: _kPrimary,
-                          side: const BorderSide(color: _kPrimary),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50)),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                        ),
-                        child: const Text('Images',
-                            style: TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w600)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed:
-                            isAvail ? () => _showBooking(context, room) : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor:
-                              isAvail ? _kPrimary : Colors.grey[400],
-                          foregroundColor: Colors.white,
-                          elevation: isAvail ? 3 : 0,
-                          shadowColor: _kPrimary.withOpacity(0.4),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50)),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                        ),
-                        child: Text(isAvail ? 'Book Now' : 'Full',
-                            style: const TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  ]),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: isAvail ? _kGreen : _kRed,
+                borderRadius: BorderRadius.circular(50),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 4)
                 ],
               ),
+              child: Text(isAvail ? 'Available' : 'Full',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700)),
             ),
           ),
-        ],
-      ),
+        ]),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(children: [
+                  Text('${room.type} Room',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: _kDark)),
+                  const SizedBox(height: 4),
+                  RichText(
+                    textAlign: TextAlign.center,
+                    text: TextSpan(
+                      style:
+                          const TextStyle(fontSize: 13, color: Colors.black54),
+                      children: [
+                        const TextSpan(text: 'Room No: '),
+                        TextSpan(
+                            text: room.roomNumber,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700, color: _kDark)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    _StatPill(
+                        icon: Icons.people_outline_rounded,
+                        label: 'Cap: ${room.capacity}',
+                        color: Colors.blueGrey),
+                    const SizedBox(width: 8),
+                    _StatPill(
+                        icon: Icons.door_front_door_outlined,
+                        label: '$rem slot${rem != 1 ? 's' : ''}',
+                        color: isAvail ? _kGreen : _kRed),
+                  ]),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    decoration: BoxDecoration(
+                        color: _kGreen.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(50)),
+                    child: Text('GHS ${room.price.toStringAsFixed(2)} / person',
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: _kGreen)),
+                  ),
+                  if (rem == 1) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                          color: _kRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(50)),
+                      child:
+                          const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text('🔥', style: TextStyle(fontSize: 12)),
+                        SizedBox(width: 4),
+                        Text('Almost Full!',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: _kRed,
+                                fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                  ],
+                ]),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: (room.images.isNotEmpty || room.image != null)
+                          ? () => _showImages(context, room)
+                          : null,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _kPrimary,
+                        side: const BorderSide(color: _kPrimary),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(50)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      child: const Text('Images',
+                          style: TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed:
+                          isAvail ? () => _showBooking(context, room) : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isAvail ? _kPrimary : Colors.grey[400],
+                        foregroundColor: Colors.white,
+                        elevation: isAvail ? 3 : 0,
+                        shadowColor: _kPrimary.withOpacity(0.4),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(50)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      child: Text(isAvail ? 'Book Now' : 'Full',
+                          style: const TextStyle(
+                              fontSize: 12, fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+        ),
+      ]),
     );
   }
 
@@ -986,13 +896,10 @@ class _RoomCard extends StatelessWidget {
       builder: (_) => _BookingSheet(
         room: room,
         hostel: hostel,
-        onSuccess: (slots) {
+        onSuccess: (bookingId, slots) {
           Navigator.pop(ctx);
           onBooked(room.id, slots);
-          ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
-            content: Text('🎉 Booking successful!'),
-            backgroundColor: _kGreen,
-          ));
+          ctx.go('/book/$bookingId');
         },
       ),
     );
@@ -1011,9 +918,8 @@ class _StatPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(50),
-      ),
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(50)),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 13, color: color),
         const SizedBox(width: 4),
@@ -1058,21 +964,19 @@ class _RoomImageSliderState extends State<_RoomImageSlider> {
           onPageChanged: (i, _) => setState(() => _cur = i),
         ),
         items: widget.images
-            .map((img) => Image.network(
-                  _img(img),
+            .map((img) => CachedNetworkImage(
+                  imageUrl: _img(img, width: 800),
                   fit: BoxFit.cover,
                   width: double.infinity,
                   height: widget.height,
-                  loadingBuilder: (_, child, p) {
-                    if (p == null) return child;
-                    return Shimmer.fromColors(
-                      baseColor: Colors.grey[300]!,
-                      highlightColor: Colors.grey[100]!,
-                      child: Container(
-                          height: widget.height, color: Colors.grey[300]),
-                    );
-                  },
-                  errorBuilder: (_, __, ___) => Container(
+                  fadeInDuration: const Duration(milliseconds: 150),
+                  placeholder: (_, __) => Shimmer.fromColors(
+                    baseColor: Colors.grey[300]!,
+                    highlightColor: Colors.grey[100]!,
+                    child: Container(
+                        height: widget.height, color: Colors.grey[300]),
+                  ),
+                  errorWidget: (_, __, ___) => Container(
                     height: widget.height,
                     color: _kPrimary.withOpacity(0.08),
                     child: const Center(
@@ -1084,24 +988,22 @@ class _RoomImageSliderState extends State<_RoomImageSlider> {
       ),
       if (widget.images.length > 1) ...[
         Positioned(
-          left: 6,
-          top: 0,
-          bottom: 0,
-          child: Center(
-              child: _ArrowBtn(Icons.chevron_left,
-                  onTap: () => setState(() => _cur =
-                      (_cur - 1 + widget.images.length) %
-                          widget.images.length))),
-        ),
+            left: 6,
+            top: 0,
+            bottom: 0,
+            child: Center(
+                child: _ArrowBtn(Icons.chevron_left,
+                    onTap: () => setState(() => _cur =
+                        (_cur - 1 + widget.images.length) %
+                            widget.images.length)))),
         Positioned(
-          right: 6,
-          top: 0,
-          bottom: 0,
-          child: Center(
-              child: _ArrowBtn(Icons.chevron_right,
-                  onTap: () => setState(
-                      () => _cur = (_cur + 1) % widget.images.length))),
-        ),
+            right: 6,
+            top: 0,
+            bottom: 0,
+            child: Center(
+                child: _ArrowBtn(Icons.chevron_right,
+                    onTap: () => setState(
+                        () => _cur = (_cur + 1) % widget.images.length)))),
       ],
     ]);
   }
@@ -1139,104 +1041,337 @@ class _FacilitiesSection extends StatelessWidget {
     return Container(
       color: _kCard,
       padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 48),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _SectionHeading(
-              title: 'Facilities & Amenities',
-              subtitle: 'Everything available at this hostel'),
-          const SizedBox(height: 28),
-          Wrap(
-            spacing: 14,
-            runSpacing: 14,
-            children: facilities
-                .map((f) => Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: _kPrimary.withOpacity(0.06),
-                        borderRadius: BorderRadius.circular(50),
-                        border: Border.all(color: _kPrimary.withOpacity(0.2)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _SectionHeading(
+            title: 'Facilities & Amenities',
+            subtitle: 'Everything available at this hostel'),
+        const SizedBox(height: 28),
+        Wrap(
+          spacing: 14,
+          runSpacing: 14,
+          children: facilities
+              .map((f) => Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: _kPrimary.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(50),
+                      border: Border.all(color: _kPrimary.withOpacity(0.2)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.check_circle_rounded,
+                          size: 16, color: _kGreen),
+                      const SizedBox(width: 8),
+                      Text(f,
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: _kDark)),
+                    ]),
+                  ))
+              .toList(),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─── 5. LOCATION — Geoapify snapshot + tap to open Google Maps ───────────────
+// Shows a real map snapshot with a pin using Geoapify (free, no credit card).
+// Tapping opens Google Maps on any platform.
+// Works on Android, iOS, Web, Windows, macOS — no WebView needed.
+
+const _kGeoapifyApiKey = '1f447c87da1949b48571d28867d1f6a6';
+
+class _LocationSection extends StatelessWidget {
+  final String mapSrc;
+  final bool isWide;
+  const _LocationSection({required this.mapSrc, required this.isWide});
+
+  /// Extracts latitude and longitude from Google Maps embed pb= parameter.
+  /// pb contains encoded data like !2d{lng}!3d{lat}
+  Map<String, double>? _extractCoords() {
+    try {
+      final uri = Uri.parse(mapSrc);
+      final pb = uri.queryParameters['pb'] ?? '';
+      final lngMatch = RegExp(r'!2d(-?\d+\.?\d*)').firstMatch(pb);
+      final latMatch = RegExp(r'!3d(-?\d+\.?\d*)').firstMatch(pb);
+      if (latMatch != null && lngMatch != null) {
+        return {
+          'lat': double.parse(latMatch.group(1)!),
+          'lng': double.parse(lngMatch.group(1)!),
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Builds Geoapify static map URL — real map image with green pin
+  String _staticMapUrl(double lat, double lng) {
+    return 'https://maps.geoapify.com/v1/staticmap'
+        '?style=osm-bright'
+        '&width=800'
+        '&height=400'
+        '&center=lonlat:$lng,$lat'
+        '&zoom=16'
+        '&marker=lonlat:$lng,$lat;color:%230f766e;size:large'
+        '&apiKey=$_kGeoapifyApiKey';
+  }
+
+  /// Builds a proper openable Google Maps link from coordinates
+  String _buildOpenUrl(double? lat, double? lng) {
+    if (lat != null && lng != null) {
+      return 'https://www.google.com/maps?q=$lat,$lng';
+    }
+    // Fallback — if it's already a plain URL use it directly
+    try {
+      if (!mapSrc.contains('/embed')) return mapSrc;
+    } catch (_) {}
+    return 'https://maps.google.com';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final coords = _extractCoords();
+    final lat = coords?['lat'];
+    final lng = coords?['lng'];
+    final openUrl = _buildOpenUrl(lat, lng);
+    final staticUrl =
+        (lat != null && lng != null) ? _staticMapUrl(lat, lng) : null;
+
+    return Container(
+      color: _kBg,
+      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 48),
+      child: Column(children: [
+        _SectionHeading(title: 'Our Location', subtitle: 'Find us on the map'),
+        const SizedBox(height: 24),
+
+        // ── Tappable map card ─────────────────────────────────
+        GestureDetector(
+          onTap: () async {
+            final uri = Uri.parse(openUrl);
+            if (await canLaunchUrl(uri)) {
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
+            }
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.12),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8)),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Stack(children: [
+                // ── Geoapify map snapshot ─────────────────────
+                if (staticUrl != null)
+                  CachedNetworkImage(
+                    imageUrl: staticUrl,
+                    height: 260,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    placeholder: (_, __) => _MapShimmer(),
+                    errorWidget: (_, __, ___) => _MapFallback(),
+                  )
+                else
+                  _MapFallback(),
+
+                // ── Bottom overlay — "Tap to open" bar ────────
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 14),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          Colors.black.withOpacity(0.65),
+                          Colors.transparent,
+                        ],
                       ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.check_circle_rounded,
-                            size: 16, color: _kGreen),
-                        const SizedBox(width: 8),
-                        Text(f,
-                            style: const TextStyle(
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.location_on_rounded,
+                          color: Colors.white, size: 18),
+                      const SizedBox(width: 6),
+                      const Expanded(
+                        child: Text('Tap to open in Google Maps',
+                            style: TextStyle(
+                                color: Colors.white,
                                 fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: _kDark)),
-                      ]),
-                    ))
-                .toList(),
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(50),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.open_in_new_rounded,
+                                size: 14, color: _kPrimary),
+                            SizedBox(width: 4),
+                            Text('Open',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: _kPrimary)),
+                          ],
+                        ),
+                      ),
+                    ]),
+                  ),
+                ),
+              ]),
+            ),
           ),
-        ],
+        ),
+      ]),
+    );
+  }
+}
+
+// ─── Shimmer while map image loads ───────────────────────────────────────────
+class _MapShimmer extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: Container(
+        height: 260,
+        width: double.infinity,
+        color: Colors.grey[300],
       ),
     );
   }
 }
 
-// for kIsWeb
-// ignore: avoid_web_libraries_in_flutter
-
-class _LocationSection extends StatelessWidget {
-  final String mapSrc;
-  final bool isWide;
-
-  const _LocationSection({
-    required this.mapSrc,
-    required this.isWide,
-  });
-
+// ─── Fallback when coords not found or image fails ───────────────────────────
+class _MapFallback extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: _kBg,
-      padding: EdgeInsets.symmetric(
-        horizontal: isWide ? 60 : 20,
-        vertical: 48,
+      height: 260,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            _kPrimary.withOpacity(0.12),
+            _kPrimary.withOpacity(0.05),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
       ),
-      child: Column(
-        children: [
-          _SectionHeading(
-            title: 'Our Location',
-            subtitle: 'Find us on the map',
-          ),
-          const SizedBox(height: 24),
-          Container(
-            height: 200,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              color: Colors.grey[200],
-            ),
-            child: const Center(
-              child: Icon(Icons.map, size: 60, color: Colors.grey),
-            ),
-          ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: () async {
-              final uri = Uri.parse(mapSrc);
-              if (await canLaunchUrl(uri)) {
-                await launchUrl(uri, mode: LaunchMode.externalApplication);
-              }
-            },
-            icon: const Icon(Icons.location_on),
-            label: const Text('Open in Google Maps'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kPrimary,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+      child: Stack(children: [
+        CustomPaint(
+          size: const Size(double.infinity, 260),
+          painter: _MapGridPainter(),
+        ),
+        Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: _kPrimary,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                        color: _kPrimary.withOpacity(0.4),
+                        blurRadius: 20,
+                        offset: const Offset(0, 6)),
+                  ],
+                ),
+                child: const Icon(Icons.location_on_rounded,
+                    color: Colors.white, size: 32),
               ),
-            ),
+              const SizedBox(height: 12),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(50),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withOpacity(0.1), blurRadius: 8),
+                  ],
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.touch_app_rounded, size: 14, color: _kPrimary),
+                  SizedBox(width: 6),
+                  Text('Tap to open in Google Maps',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: _kPrimary)),
+                ]),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
+}
+
+// ─── Decorative map grid painter ─────────────────────────────────────────────
+class _MapGridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final gridPaint = Paint()
+      ..color = const Color(0xFF0F766E).withOpacity(0.08)
+      ..strokeWidth = 1;
+
+    for (double y = 0; y < size.height; y += 28) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+    for (double x = 0; x < size.width; x += 40) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+    }
+
+    final roadPaint = Paint()
+      ..color = const Color(0xFF0F766E).withOpacity(0.18)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawLine(Offset(0, size.height * 0.55),
+        Offset(size.width, size.height * 0.38), roadPaint);
+    canvas.drawLine(Offset(size.width * 0.35, 0),
+        Offset(size.width * 0.55, size.height), roadPaint);
+
+    final blockPaint = Paint()
+      ..color = const Color(0xFF0F766E).withOpacity(0.07)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.05, size.height * 0.1, 60, 40),
+        blockPaint);
+    canvas.drawRect(
+        Rect.fromLTWH(size.width * 0.65, size.height * 0.15, 50, 35),
+        blockPaint);
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.1, size.height * 0.65, 45, 30),
+        blockPaint);
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.72, size.height * 0.6, 55, 38),
+        blockPaint);
+  }
+
+  @override
+  bool shouldRepaint(_) => false;
 }
 // ─── Section Heading ──────────────────────────────────────────────────────────
 
@@ -1247,35 +1382,30 @@ class _SectionHeading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-                width: 32,
-                height: 3,
-                decoration: BoxDecoration(
-                    color: _kPrimary, borderRadius: BorderRadius.circular(2))),
-            const SizedBox(width: 12),
-            Text(title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    fontSize: 22, fontWeight: FontWeight.w900, color: _kDark)),
-            const SizedBox(width: 12),
-            Container(
-                width: 32,
-                height: 3,
-                decoration: BoxDecoration(
-                    color: _kPrimary, borderRadius: BorderRadius.circular(2))),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Text(subtitle,
+    return Column(children: [
+      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Container(
+            width: 32,
+            height: 3,
+            decoration: BoxDecoration(
+                color: _kPrimary, borderRadius: BorderRadius.circular(2))),
+        const SizedBox(width: 12),
+        Text(title,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13, color: Colors.black45)),
-      ],
-    );
+            style: const TextStyle(
+                fontSize: 22, fontWeight: FontWeight.w900, color: _kDark)),
+        const SizedBox(width: 12),
+        Container(
+            width: 32,
+            height: 3,
+            decoration: BoxDecoration(
+                color: _kPrimary, borderRadius: BorderRadius.circular(2))),
+      ]),
+      const SizedBox(height: 6),
+      Text(subtitle,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 13, color: Colors.black45)),
+    ]);
   }
 }
 
@@ -1284,7 +1414,7 @@ class _SectionHeading extends StatelessWidget {
 class _BookingSheet extends StatefulWidget {
   final RoomModel room;
   final Hostel hostel;
-  final void Function(int) onSuccess;
+  final void Function(String bookingId, int slots) onSuccess;
   const _BookingSheet(
       {required this.room, required this.hostel, required this.onSuccess});
 
@@ -1297,249 +1427,917 @@ class _BookingSheetState extends State<_BookingSheet> {
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
+  final _momoNumber = TextEditingController();
   final _school = TextEditingController();
   final _schoolId = TextEditingController();
   final _notes = TextEditingController();
+
   bool _notStudent = false;
   int _slots = 1;
-  String? _payment;
+  String _momoProvider = 'mtn';
   bool _busy = false;
+  int _step = 0;
+  String? _bookingId;
+  String _paymentReference = _generateReference();
+
+  void _refreshReference() => _paymentReference = _generateReference();
 
   @override
   void dispose() {
     _name.dispose();
     _email.dispose();
     _phone.dispose();
+    _momoNumber.dispose();
     _school.dispose();
     _schoolId.dispose();
     _notes.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  double get _totalAmount => widget.room.price * _slots;
+
+  Future<void> _proceedToPayment() async {
     if (!_key.currentState!.validate()) return;
-    if (_payment == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select a payment method')));
-      return;
-    }
     setState(() => _busy = true);
+
     try {
       final r = widget.room;
       final h = widget.hostel;
-      await FirebaseFirestore.instance.collection('bookings').add({
+
+      final docRef =
+          await FirebaseFirestore.instance.collection('bookings').add({
         'room_id': r.id,
         'room_number': r.roomNumber,
         'hostel_id': h.id,
         'hostel_name': h.hostelName,
         'hostel_code': h.hostelCode,
+        'hostel_phone': h.phone,
         'name': _name.text.trim(),
         'email': _email.text.trim(),
         'phone': _phone.text.trim(),
+        'momo_number': _momoNumber.text.trim(),
+        'momo_provider': _momoProvider,
         'school': _school.text.trim(),
         'school_id': _notStudent ? '' : _schoolId.text.trim(),
         'not_student': _notStudent,
         'notes': _notes.text.trim(),
-        'payment_method': _payment,
+        'payment_method': 'Mobile Money',
+        'momo_type': _momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash',
         'slots_booked': _slots,
-        'status': 'booked',
+        'amount': _totalAmount,
+        'status': 'pending',
+        'payment_status': 'pending',
         'booked_at': FieldValue.serverTimestamp(),
       });
-      await FirebaseFirestore.instance
-          .collection('rooms')
-          .doc(r.id)
-          .update({'booked': FieldValue.increment(_slots)});
-      if (!mounted) return;
-      widget.onSuccess(_slots);
+
+      _bookingId = docRef.id;
+      setState(() {
+        _step = 1;
+        _busy = false;
+      });
+    } catch (e) {
+      setState(() => _busy = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: _kRed));
+      }
+    }
+  }
+
+  Future<void> _initiatePayment() async {
+    _refreshReference();
+    setState(() {
+      _step = 2;
+      _busy = true;
+    });
+
+    try {
+      final provider = _momoProvider == 'mtn' ? 'mtn' : 'vod';
+      final amountInPesewas = (_totalAmount * 100).toInt();
+
+      final chargeRes = await http.post(
+        Uri.parse('$_kPaystackBaseUrl/charge'),
+        headers: {
+          'Authorization': 'Bearer $_kPaystackSecretKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'email': _email.text.trim(),
+          'amount': amountInPesewas,
+          'currency': 'GHS',
+          'mobile_money': {
+            'phone': _momoNumber.text.trim(),
+            'provider': provider,
+          },
+          'reference': _paymentReference,
+          'metadata': {
+            'booking_id': _bookingId,
+            'hostel_name': widget.hostel.hostelName,
+            'room_number': widget.room.roomNumber,
+            'slots': _slots,
+          },
+        }),
+      );
+
+      final chargeData = jsonDecode(chargeRes.body);
+      final status = chargeData['data']?['status'];
+
+      if (status == 'pay_offline' ||
+          status == 'pending' ||
+          status == 'send_otp') {
+        await _pollPaymentStatus(_paymentReference);
+      } else if (status == 'success') {
+        await _onPaymentSuccess(_paymentReference);
+      } else {
+        throw Exception(chargeData['message'] ?? 'Payment failed. Try again.');
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Booking failed: $e'), backgroundColor: _kRed));
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      _refreshReference();
+      setState(() {
+        _step = 1;
+        _busy = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Payment error: $e'), backgroundColor: _kRed));
     }
+  }
+
+  Future<void> _pollPaymentStatus(String reference) async {
+    for (int i = 0; i < 12; i++) {
+      await Future.delayed(const Duration(seconds: 5));
+      if (!mounted) return;
+
+      final res = await http.get(
+        Uri.parse('$_kPaystackBaseUrl/transaction/verify/$reference'),
+        headers: {'Authorization': 'Bearer $_kPaystackSecretKey'},
+      );
+
+      final data = jsonDecode(res.body);
+      final status = data['data']?['status'];
+      debugPrint('🔁 Poll $i — status: $status');
+
+      if (status == 'success') {
+        await _onPaymentSuccess(reference);
+        return;
+      } else if (status == 'failed') {
+        if (!mounted) return;
+        _refreshReference();
+        setState(() {
+          _step = 1;
+          _busy = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Payment declined. Please try again.'),
+            backgroundColor: _kRed));
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    _refreshReference();
+    setState(() {
+      _step = 1;
+      _busy = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content:
+          Text('Payment is taking long. Check your phone for the MoMo prompt.'),
+      backgroundColor: _kOrange,
+      duration: Duration(seconds: 5),
+    ));
+  }
+
+  Future<void> _onPaymentSuccess(String reference) async {
+    await FirebaseFirestore.instance
+        .collection('bookings')
+        .doc(_bookingId)
+        .update({
+      'payment_status': 'paid',
+      'status': 'confirmed',
+      'payment_reference': reference,
+      'paid_at': FieldValue.serverTimestamp(),
+    });
+
+    await FirebaseFirestore.instance
+        .collection('rooms')
+        .doc(widget.room.id)
+        .update({
+      'booked': FieldValue.increment(_slots),
+    });
+
+    await BookingStorageService.saveBookingId(_bookingId!);
+
+    if (!mounted) return;
+    widget.onSuccess(_bookingId!, _slots);
   }
 
   @override
   Widget build(BuildContext context) {
-    final room = widget.room;
-    final rem = room.remaining;
-    final opts = room.paymentOptions;
-
     return DraggableScrollableSheet(
-      initialChildSize: 0.92,
+      initialChildSize: 0.94,
       maxChildSize: 0.97,
       minChildSize: 0.5,
       builder: (_, ctrl) => Container(
         decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
         child: Column(children: [
-          // Handle
           Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2))),
-          // Header
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2)),
+          ),
           Container(
-            padding: const EdgeInsets.fromLTRB(20, 4, 12, 14),
+            padding: const EdgeInsets.fromLTRB(20, 4, 12, 16),
             decoration: const BoxDecoration(
               gradient: LinearGradient(colors: [_kPrimary, Color(0xFF0D9488)]),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
             ),
             child: Row(children: [
               const Icon(Icons.hotel_rounded, color: Colors.white, size: 22),
               const SizedBox(width: 10),
               Expanded(
-                  child: Text('Book ${room.type} Room — ${room.roomNumber}',
-                      style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white))),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(
+                        'Book ${widget.room.type} Room — ${widget.room.roomNumber}',
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                    Text('GHS ${_totalAmount.toStringAsFixed(2)} total',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white.withOpacity(0.8))),
+                  ])),
               IconButton(
                   onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.close, color: Colors.white)),
             ]),
           ),
-          // Form
+          _StepIndicator(currentStep: _step),
           Expanded(
-            child: SingleChildScrollView(
-              controller: ctrl,
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
-              child: Form(
-                key: _key,
+              child: SingleChildScrollView(
+            controller: ctrl,
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+            child: _step == 0
+                ? _buildForm()
+                : _step == 1
+                    ? _buildPaymentStep()
+                    : _buildProcessingStep(),
+          )),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildForm() {
+    final rem = widget.room.remaining;
+    return Form(
+      key: _key,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _sectionLabel('Personal Information', Icons.person_rounded),
+        const SizedBox(height: 12),
+        _FF(
+            label: 'Full Name',
+            ctrl: _name,
+            icon: Icons.person_outline,
+            validator: (v) => v!.trim().isEmpty ? 'Required' : null),
+        _FF(
+            label: 'Email Address',
+            ctrl: _email,
+            icon: Icons.email_outlined,
+            kb: TextInputType.emailAddress,
+            validator: (v) => v!.trim().isEmpty ? 'Required' : null),
+        _FF(
+            label: 'Phone Number',
+            ctrl: _phone,
+            icon: Icons.phone_outlined,
+            kb: TextInputType.phone,
+            validator: (v) => v!.trim().isEmpty ? 'Required' : null),
+        const SizedBox(height: 8),
+        _sectionLabel('Academic Information', Icons.school_rounded),
+        const SizedBox(height: 12),
+        _FF(
+            label: 'School Name',
+            ctrl: _school,
+            icon: Icons.school_outlined,
+            validator: (v) => _notStudent
+                ? null
+                : v!.trim().isEmpty
+                    ? 'Required'
+                    : null),
+        if (!_notStudent)
+          _FF(
+              label: 'School ID (optional)',
+              ctrl: _schoolId,
+              icon: Icons.badge_outlined),
+        Row(children: [
+          Checkbox(
+              value: _notStudent,
+              onChanged: (v) => setState(() => _notStudent = v ?? false),
+              activeColor: _kPrimary),
+          const Text('I am not a student',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+        ]),
+        const SizedBox(height: 8),
+        _sectionLabel('Booking Details', Icons.hotel_rounded),
+        const SizedBox(height: 12),
+        const Text('Number of Slots',
+            style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+                color: Colors.black87)),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+              border: Border.all(color: Colors.black26),
+              borderRadius: BorderRadius.circular(12)),
+          child: DropdownButton<int>(
+            isExpanded: true,
+            underline: const SizedBox(),
+            value: _slots,
+            items: List.generate(
+                rem,
+                (i) => DropdownMenuItem(
+                      value: i + 1,
+                      child: Text(
+                          '${i + 1} slot${i + 1 > 1 ? 's' : ''} — GHS ${((i + 1) * widget.room.price).toStringAsFixed(2)}'),
+                    )),
+            onChanged: (v) => setState(() => _slots = v ?? 1),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(rem == 1 ? '🔥 Only 1 slot left!' : '$rem slots remaining',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: rem == 1 ? _kRed : _kGreen)),
+        const SizedBox(height: 14),
+        _FF(
+            label: 'Additional Notes (optional)',
+            ctrl: _notes,
+            icon: Icons.notes_rounded,
+            lines: 3,
+            hint: 'Special requests, move-in date, questions…'),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+                colors: [Color(0xFF0F766E), Color(0xFF0D9488)]),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(children: [
+            const Icon(Icons.receipt_rounded, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _FF(
-                          label: 'Full Name',
-                          ctrl: _name,
-                          validator: (v) => v!.isEmpty ? 'Required' : null),
-                      _FF(
-                          label: 'Email',
-                          ctrl: _email,
-                          kb: TextInputType.emailAddress,
-                          validator: (v) => v!.isEmpty ? 'Required' : null),
-                      _FF(
-                          label: 'Phone Number',
-                          ctrl: _phone,
-                          kb: TextInputType.phone,
-                          validator: (v) => v!.isEmpty ? 'Required' : null),
-                      _FF(
-                          label: 'School Name',
-                          ctrl: _school,
-                          validator: (v) => v!.isEmpty ? 'Required' : null),
-                      if (!_notStudent)
-                        _FF(label: 'School ID (optional)', ctrl: _schoolId),
-                      Row(children: [
-                        Checkbox(
-                            value: _notStudent,
-                            onChanged: (v) =>
-                                setState(() => _notStudent = v ?? false),
-                            activeColor: _kPrimary),
-                        const Text('I am not a student',
-                            style: TextStyle(fontWeight: FontWeight.w600)),
-                      ]),
-                      _FF(
-                          label: 'Additional Notes',
-                          ctrl: _notes,
-                          lines: 3,
-                          hint:
-                              'Amount paying, special requests, move-in date…'),
-                      const SizedBox(height: 6),
-
-                      // Slots
-                      const Text('Number of Slots',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 14)),
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: BoxDecoration(
-                            border: Border.all(color: Colors.black26),
-                            borderRadius: BorderRadius.circular(10)),
-                        child: DropdownButton<int>(
-                          isExpanded: true,
-                          underline: const SizedBox(),
-                          value: _slots,
-                          items: List.generate(
-                              rem,
-                              (i) => DropdownMenuItem(
-                                  value: i + 1,
-                                  child: Text(
-                                      '${i + 1} slot${i + 1 > 1 ? 's' : ''}'))),
-                          onChanged: (v) => setState(() => _slots = v ?? 1),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        rem == 1
-                            ? '🔥 Only 1 slot left!'
-                            : '$rem slots remaining',
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: rem == 1 ? _kRed : _kGreen),
-                      ),
-                      const SizedBox(height: 18),
-
-                      // Payment
-                      const Text('Payment Method',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 14)),
-                      const SizedBox(height: 8),
-                      ...opts.entries.map((e) => RadioListTile<String>(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(e.key,
-                                style: const TextStyle(fontSize: 14)),
-                            subtitle: _payment == e.key
-                                ? Text('Pay to: ${e.value}',
-                                    style: const TextStyle(
-                                        fontSize: 12, color: Colors.grey))
-                                : null,
-                            value: e.key,
-                            groupValue: _payment,
-                            activeColor: _kPrimary,
-                            onChanged: (v) => setState(() => _payment = v),
-                          )),
-                      const SizedBox(height: 20),
-
-                      // Submit
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: _busy ? null : _submit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _kGreen,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
-                            elevation: 3,
-                            shadowColor: _kGreen.withOpacity(0.4),
-                          ),
-                          child: _busy
-                              ? const SizedBox(
-                                  height: 18,
-                                  width: 18,
-                                  child: CircularProgressIndicator(
-                                      color: Colors.white, strokeWidth: 2))
-                              : const Text('Confirm Booking',
-                                  style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800)),
-                        ),
-                      ),
-                    ]),
-              ),
+                  const Text('Total Amount',
+                      style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  Text('GHS ${_totalAmount.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 20)),
+                ])),
+            Text('$_slots slot${_slots > 1 ? 's' : ''}',
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.8), fontSize: 13)),
+          ]),
+        ),
+        const SizedBox(height: 20),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _busy ? null : _proceedToPayment,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kPrimary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+              elevation: 3,
+              shadowColor: _kPrimary.withOpacity(0.4),
             ),
+            child: _busy
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                        Text('Continue to Payment',
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w800)),
+                        SizedBox(width: 8),
+                        Icon(Icons.arrow_forward_rounded),
+                      ]),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildPaymentStep() {
+    // ── Read payment info from HOSTEL (not room) ──────────────────────────
+    final momoNumber = widget.hostel.paymentMomo;
+    final cashPayment = widget.hostel.paymentCash;
+    final bankPayment = widget.hostel.paymentBank;
+    final otherPayment = widget.hostel.paymentOther;
+
+    // Check if any MoMo-type payment exists for Paystack charge button
+    final hasMomo = momoNumber.isNotEmpty;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _sectionLabel(
+          'Landlord\'s Payment Details', Icons.account_balance_wallet_rounded),
+      const SizedBox(height: 12),
+
+      // ── Show all available payment methods from hostel ────────────────
+      if (momoNumber.isNotEmpty)
+        _MomoNumberCard(
+            provider: 'MTN / Vodafone MoMo',
+            number: momoNumber,
+            color: const Color(0xFFFFCC00),
+            icon: '📱'),
+      if (cashPayment.isNotEmpty)
+        _MomoNumberCard(
+            provider: 'Cash Payment',
+            number: cashPayment,
+            color: const Color(0xFF16A34A),
+            icon: '💵'),
+      if (bankPayment.isNotEmpty)
+        _MomoNumberCard(
+            provider: 'Bank Payment',
+            number: bankPayment,
+            color: const Color(0xFF2563EB),
+            icon: '🏦'),
+      if (otherPayment.isNotEmpty)
+        _MomoNumberCard(
+            provider: 'Other Payment',
+            number: otherPayment,
+            color: const Color(0xFF7C3AED),
+            icon: '💳'),
+
+      // Fallback if no payment info set
+      if (momoNumber.isEmpty &&
+          cashPayment.isEmpty &&
+          bankPayment.isEmpty &&
+          otherPayment.isEmpty)
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.orange.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.orange.withOpacity(0.3)),
+          ),
+          child: const Row(children: [
+            Icon(Icons.info_outline_rounded, color: _kOrange),
+            SizedBox(width: 8),
+            Flexible(
+                child: Text('Contact the hostel directly for payment details.',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: _kOrange,
+                        fontWeight: FontWeight.w500))),
+          ]),
+        ),
+
+      const SizedBox(height: 20),
+
+      // ── Only show MoMo payment form if hostel has MoMo number ────────
+      if (hasMomo) ...[
+        _sectionLabel('Your MoMo Details', Icons.payment_rounded),
+        const SizedBox(height: 12),
+        const Text('Select Provider',
+            style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                color: Colors.black54)),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(
+              child: _ProviderBtn(
+                  label: 'MTN MoMo',
+                  color: const Color(0xFFFFCC00),
+                  isSelected: _momoProvider == 'mtn',
+                  onTap: () => setState(() => _momoProvider = 'mtn'))),
+          const SizedBox(width: 12),
+          Expanded(
+              child: _ProviderBtn(
+                  label: 'Vodafone Cash',
+                  color: const Color(0xFFE60000),
+                  isSelected: _momoProvider == 'vodafone',
+                  onTap: () => setState(() => _momoProvider = 'vodafone'))),
+        ]),
+        const SizedBox(height: 16),
+        _FF(
+            label: 'Your MoMo Number',
+            ctrl: _momoNumber,
+            icon: Icons.phone_android_rounded,
+            kb: TextInputType.phone,
+            hint: '024XXXXXXX or 050XXXXXXX',
+            validator: (v) =>
+                v!.trim().length < 10 ? 'Enter a valid MoMo number' : null),
+        const SizedBox(height: 16),
+      ],
+
+      // ── Summary ────────────────────────────────────────────────────────
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _kGreen.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _kGreen.withOpacity(0.3)),
+        ),
+        child: Column(children: [
+          _SummaryRow(
+              label: 'Room',
+              value: '${widget.room.type} — ${widget.room.roomNumber}'),
+          _SummaryRow(label: 'Slots', value: '$_slots'),
+          _SummaryRow(
+              label: 'Price/slot',
+              value: 'GHS ${widget.room.price.toStringAsFixed(2)}'),
+          const Divider(height: 20),
+          _SummaryRow(
+              label: 'Total',
+              value: 'GHS ${_totalAmount.toStringAsFixed(2)}',
+              bold: true),
+        ]),
+      ),
+      const SizedBox(height: 8),
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: const Color(0xFFFFF7ED),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFFED7AA))),
+        child: Row(children: [
+          const Icon(Icons.info_outline_rounded, size: 16, color: _kOrange),
+          const SizedBox(width: 8),
+          Flexible(
+              child: Text(
+            hasMomo
+                ? 'You will receive a MoMo prompt on your phone to approve the payment.'
+                : 'Please pay using one of the methods above and contact the hostel to confirm.',
+            style: const TextStyle(
+                fontSize: 12, color: _kOrange, fontWeight: FontWeight.w500),
+          )),
+        ]),
+      ),
+      const SizedBox(height: 20),
+
+      // ── Pay Now button (only if MoMo available) ────────────────────────
+      if (hasMomo)
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _busy ? null : _initiatePayment,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kGreen,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+              elevation: 3,
+              shadowColor: _kGreen.withOpacity(0.4),
+            ),
+            child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.lock_rounded, size: 18),
+                  SizedBox(width: 8),
+                  Text('Pay Now',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                ]),
+          ),
+        ),
+
+      // ── Confirm booking button (for cash/bank — no Paystack) ──────────
+      if (!hasMomo)
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _busy
+                ? null
+                : () async {
+                    setState(() => _busy = true);
+                    await FirebaseFirestore.instance
+                        .collection('bookings')
+                        .doc(_bookingId)
+                        .update({
+                      'status': 'pending',
+                      'payment_status': 'pending',
+                    });
+                    await BookingStorageService.saveBookingId(_bookingId!);
+                    if (!mounted) return;
+                    widget.onSuccess(_bookingId!, _slots);
+                  },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kPrimary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+              elevation: 3,
+            ),
+            child: _busy
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2))
+                : const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                        Icon(Icons.check_circle_rounded, size: 18),
+                        SizedBox(width: 8),
+                        Text('Confirm Booking',
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w800)),
+                      ]),
+          ),
+        ),
+
+      const SizedBox(height: 12),
+      SizedBox(
+        width: double.infinity,
+        child: TextButton(
+          onPressed: () => setState(() => _step = 0),
+          child: const Text('← Back to Form',
+              style: TextStyle(color: Colors.black45)),
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildProcessingStep() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 60),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const CircularProgressIndicator(color: _kPrimary, strokeWidth: 3),
+          const SizedBox(height: 24),
+          const Text('Processing Payment…',
+              style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.w700, color: _kDark)),
+          const SizedBox(height: 12),
+          Text(
+              'Check your ${_momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash'} phone for a payment prompt.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 14, color: Colors.black45, height: 1.5)),
+          const SizedBox(height: 24),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _kPrimary.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kPrimary.withOpacity(0.2)),
+            ),
+            child: Text('Amount: GHS ${_totalAmount.toStringAsFixed(2)}',
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: _kPrimary)),
           ),
         ]),
       ),
+    );
+  }
+
+  Widget _sectionLabel(String label, IconData icon) {
+    return Row(children: [
+      Icon(icon, size: 18, color: _kPrimary),
+      const SizedBox(width: 8),
+      Text(label,
+          style: const TextStyle(
+              fontSize: 15, fontWeight: FontWeight.w800, color: _kDark)),
+    ]);
+  }
+}
+
+// ─── Step Indicator ───────────────────────────────────────────────────────────
+
+class _StepIndicator extends StatelessWidget {
+  final int currentStep;
+  const _StepIndicator({required this.currentStep});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      child: Row(children: [
+        _Step(
+            number: 1,
+            label: 'Details',
+            isActive: currentStep >= 0,
+            isDone: currentStep > 0),
+        _StepLine(isActive: currentStep > 0),
+        _Step(
+            number: 2,
+            label: 'Payment',
+            isActive: currentStep >= 1,
+            isDone: currentStep > 1),
+        _StepLine(isActive: currentStep > 1),
+        _Step(
+            number: 3,
+            label: 'Processing',
+            isActive: currentStep >= 2,
+            isDone: false),
+      ]),
+    );
+  }
+}
+
+class _Step extends StatelessWidget {
+  final int number;
+  final String label;
+  final bool isActive;
+  final bool isDone;
+  const _Step(
+      {required this.number,
+      required this.label,
+      required this.isActive,
+      required this.isDone});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+            color: isActive ? _kPrimary : Colors.grey[200],
+            shape: BoxShape.circle),
+        child: Center(
+          child: isDone
+              ? const Icon(Icons.check, size: 16, color: Colors.white)
+              : Text('$number',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isActive ? Colors.white : Colors.grey)),
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(label,
+          style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: isActive ? _kPrimary : Colors.grey)),
+    ]);
+  }
+}
+
+class _StepLine extends StatelessWidget {
+  final bool isActive;
+  const _StepLine({required this.isActive});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+        child: Container(
+      height: 2,
+      margin: const EdgeInsets.only(bottom: 18),
+      color: isActive ? _kPrimary : Colors.grey[200],
+    ));
+  }
+}
+
+// ─── MoMo / Payment Number Card ──────────────────────────────────────────────
+
+class _MomoNumberCard extends StatelessWidget {
+  final String provider;
+  final String number;
+  final Color color;
+  final String icon;
+  const _MomoNumberCard(
+      {required this.provider,
+      required this.number,
+      required this.color,
+      required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(children: [
+        Text(icon, style: const TextStyle(fontSize: 24)),
+        const SizedBox(width: 12),
+        Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(provider,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+          Text(number,
+              style: const TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w800, color: _kDark)),
+        ])),
+        GestureDetector(
+          onTap: () {
+            // Only launch tel: for phone numbers, not text descriptions
+            final isPhone = RegExp(r'^\d').hasMatch(number.trim());
+            if (isPhone) launchUrl(Uri.parse('tel:$number'));
+          },
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+                color: color, borderRadius: BorderRadius.circular(8)),
+            child:
+                const Icon(Icons.phone_rounded, color: Colors.white, size: 16),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─── Provider Button ─────────────────────────────────────────────────────────
+
+class _ProviderBtn extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool isSelected;
+  final VoidCallback onTap;
+  const _ProviderBtn(
+      {required this.label,
+      required this.color,
+      required this.isSelected,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withOpacity(0.12) : Colors.grey[50],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: isSelected ? color : Colors.grey[300]!,
+              width: isSelected ? 2 : 1),
+        ),
+        child: Center(
+            child: Text(label,
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color:
+                        isSelected ? color.withOpacity(0.85) : Colors.grey))),
+      ),
+    );
+  }
+}
+
+// ─── Summary Row ──────────────────────────────────────────────────────────────
+
+class _SummaryRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool bold;
+  const _SummaryRow(
+      {required this.label, required this.value, this.bold = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.black54,
+                    fontWeight: bold ? FontWeight.w700 : FontWeight.w400))),
+        Text(value,
+            style: TextStyle(
+                fontSize: 13,
+                color: bold ? _kGreen : _kDark,
+                fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+      ]),
     );
   }
 }
@@ -1549,6 +2347,7 @@ class _BookingSheetState extends State<_BookingSheet> {
 class _FF extends StatelessWidget {
   final String label;
   final TextEditingController ctrl;
+  final IconData? icon;
   final TextInputType? kb;
   final int lines;
   final String? hint;
@@ -1556,6 +2355,7 @@ class _FF extends StatelessWidget {
   const _FF(
       {required this.label,
       required this.ctrl,
+      this.icon,
       this.kb,
       this.lines = 1,
       this.hint,
@@ -1569,7 +2369,7 @@ class _FF extends StatelessWidget {
         Text(label,
             style: const TextStyle(
                 fontWeight: FontWeight.w600,
-                fontSize: 14,
+                fontSize: 13,
                 color: Colors.black87)),
         const SizedBox(height: 6),
         TextFormField(
@@ -1580,17 +2380,24 @@ class _FF extends StatelessWidget {
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: const TextStyle(fontSize: 13, color: Colors.black38),
+            prefixIcon:
+                icon != null ? Icon(icon, size: 18, color: _kPrimary) : null,
             contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            filled: true,
+            fillColor: Colors.grey[50],
             border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: Colors.black26)),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.black12)),
             enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: Colors.black26)),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.black12)),
             focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(12),
                 borderSide: const BorderSide(color: _kPrimary, width: 1.5)),
+            errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: _kRed)),
           ),
         ),
       ]),
@@ -1619,10 +2426,9 @@ class _ErrorView extends StatelessWidget {
             style: const TextStyle(color: Colors.black54)),
         const SizedBox(height: 16),
         ElevatedButton(
-          onPressed: onRetry,
-          style: ElevatedButton.styleFrom(backgroundColor: _kPrimary),
-          child: const Text('Try Again'),
-        ),
+            onPressed: onRetry,
+            style: ElevatedButton.styleFrom(backgroundColor: _kPrimary),
+            child: const Text('Try Again')),
       ]),
     )));
   }

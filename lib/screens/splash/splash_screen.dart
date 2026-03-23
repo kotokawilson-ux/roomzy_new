@@ -1,3 +1,5 @@
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/theme/app_theme.dart';
@@ -19,6 +21,7 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
+
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
@@ -29,16 +32,83 @@ class _SplashScreenState extends State<SplashScreen>
     _scaleAnim = Tween<double>(begin: 0.7, end: 1).animate(
       CurvedAnimation(parent: _controller, curve: Curves.elasticOut),
     );
+
     _controller.forward();
-    _navigate();
+
+    // Use the 2s splash window to warm ALL image caches
+    // so the home screen loads instantly on arrival
+    _initAndNavigate();
   }
 
-  Future<void> _navigate() async {
-    await Future.delayed(const Duration(seconds: 2));
-    if (!mounted) return;
+  Future<void> _initAndNavigate() async {
+    // Run the minimum splash timer AND image precaching in parallel.
+    // Navigation only happens after BOTH are done — but since precaching
+    // is fast (fire-and-forget HTTP), the 2s timer is usually the bottleneck.
+    await Future.wait([
+      Future.delayed(const Duration(seconds: 2)),
+      _precacheEverything(),
+    ]);
 
-    // TODO: restore role-based routing when auth is ready
+    if (!mounted) return;
     context.go('/home');
+  }
+
+  /// Fetches hostel data and warms the CachedNetworkImage disk cache
+  /// for all images the home screen will display.
+  Future<void> _precacheEverything() async {
+    try {
+      // Hero section background images (Unsplash — static)
+      const heroImages = [
+        'https://images.unsplash.com/photo-1555854877-bab0e564b8d5?w=1600&q=80&fm=webp&fit=crop',
+        'https://images.unsplash.com/photo-1562664377-709f2c337eb2?w=1600&q=80&fm=webp&fit=crop',
+      ];
+      for (final url in heroImages) {
+        CachedNetworkImageProvider(url).resolve(const ImageConfiguration());
+      }
+
+      // Hostel images from Firestore (carousel + list)
+      final snapshot = await FirebaseFirestore.instance
+          .collection('hostels')
+          .orderBy('hostel_name')
+          .get();
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+
+        // Main image
+        final image = data['image'] as String?;
+        if (image != null && image.trim().isNotEmpty) {
+          final url = _optimizedUrl(image.trim());
+          CachedNetworkImageProvider(url).resolve(const ImageConfiguration());
+        }
+
+        // Extra images (comma-separated)
+        final images = data['images'] as String?;
+        if (images != null && images.trim().isNotEmpty) {
+          for (final img in images.split(',')) {
+            final trimmed = img.trim();
+            if (trimmed.isNotEmpty) {
+              CachedNetworkImageProvider(_optimizedUrl(trimmed))
+                  .resolve(const ImageConfiguration());
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Precaching is best-effort — never block navigation on failure
+      debugPrint('Precache error: $e');
+    }
+  }
+
+  /// Injects Cloudinary optimization params into the URL
+  String _optimizedUrl(String url) {
+    if (url.contains('cloudinary.com') && url.contains('/upload/')) {
+      return url.replaceFirst(
+        '/upload/',
+        '/upload/f_auto,q_auto:good,w_800,c_fill/',
+      );
+    }
+    return url;
   }
 
   @override

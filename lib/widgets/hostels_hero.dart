@@ -33,7 +33,7 @@ class _HostelsHeroState extends State<HostelsHero> {
             ),
           ),
         ),
-
+        
         /// Overlay
         Container(
           height: 400,

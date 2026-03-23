@@ -1,21 +1,41 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:animated_text_kit/animated_text_kit.dart';
 
-class HeroSection extends StatelessWidget {
+class HeroSection extends StatefulWidget {
   const HeroSection({super.key});
 
+  @override
+  State<HeroSection> createState() => _HeroSectionState();
+}
+
+class _HeroSectionState extends State<HeroSection> {
+  // Unsplash auto-optimization:
+  // - w=1600     → cap width to screen size
+  // - q=80       → compress quality (barely noticeable visually)
+  // - fm=webp    → serve WebP for smaller file size
+  // - fit=crop   → smart crop to fill frame
   static const List<String> _images = [
-    'https://images.unsplash.com/photo-1555854877-bab0e564b8d5?w=1600',
-    'https://images.unsplash.com/photo-1562664377-709f2c337eb2?w=1600',
+    'https://images.unsplash.com/photo-1555854877-bab0e564b8d5?w=1600&q=80&fm=webp&fit=crop',
+    'https://images.unsplash.com/photo-1562664377-709f2c337eb2?w=1600&q=80&fm=webp&fit=crop',
   ];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Precache both hero images as soon as the widget mounts
+    // so by the time the carousel starts they're already in memory
+    for (final url in _images) {
+      CachedNetworkImageProvider(url).resolve(const ImageConfiguration());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
     final screenWidth = MediaQuery.of(context).size.width;
 
-    // Dynamic text sizes for responsiveness
     final headlineSize = screenWidth < 600
         ? 20.0
         : screenWidth < 900
@@ -31,7 +51,7 @@ class HeroSection extends StatelessWidget {
       height: screenHeight * 0.85,
       child: Stack(
         children: [
-          // ── Background Carousel
+          // ── Background Carousel — cached + optimized
           CarouselSlider(
             options: CarouselOptions(
               height: screenHeight * 0.85,
@@ -45,19 +65,16 @@ class HeroSection extends StatelessWidget {
               return Stack(
                 fit: StackFit.expand,
                 children: [
-                  Image.network(
-                    url,
+                  // CachedNetworkImage — instant after first load
+                  CachedNetworkImage(
+                    imageUrl: url,
                     fit: BoxFit.cover,
-                    loadingBuilder: (context, child, progress) {
-                      if (progress == null) return child;
-                      return Container(
-                        color: Colors.black,
-                        child: const Center(
-                          child: CircularProgressIndicator(),
-                        ),
-                      );
-                    },
+                    fadeInDuration: const Duration(milliseconds: 300),
+                    // Dark placeholder while loading — matches the overlay
+                    placeholder: (_, __) => Container(color: Colors.black87),
+                    errorWidget: (_, __, ___) => Container(color: Colors.black),
                   ),
+                  // Gradient overlay
                   Container(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
