@@ -224,19 +224,22 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
   void _onBooked(String roomId, int slots) {
     setState(() {
       final i = _rooms.indexWhere((r) => r.id == roomId);
-      if (i != -1)
+      if (i != -1) {
         _rooms[i] = _rooms[i].copyWith(booked: _rooms[i].booked + slots);
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading)
+    if (_loading) {
       return const Scaffold(
           body: Center(child: CircularProgressIndicator(color: _kPrimary)));
+    }
     if (_error != null) return _ErrorView(message: _error!, onRetry: _load);
-    if (_hostel == null)
+    if (_hostel == null) {
       return const Scaffold(body: Center(child: Text('Hostel not found')));
+    }
 
     final hostel = _hostel!;
     final w = MediaQuery.of(context).size.width;
@@ -291,13 +294,17 @@ class _HeroSectionState extends State<_HeroSection> {
 
   @override
   Widget build(BuildContext context) {
+    // Responsive hero height: shorter on small screens
+    final screenH = MediaQuery.of(context).size.height;
+    final heroH = (screenH * 0.38).clamp(220.0, 380.0);
+
     return SizedBox(
-      height: 360,
+      height: heroH,
       child: Stack(fit: StackFit.expand, children: [
         widget.images.isNotEmpty
             ? CarouselSlider(
                 options: CarouselOptions(
-                  height: 360,
+                  height: heroH,
                   viewportFraction: 1.0,
                   autoPlay: widget.images.length > 1,
                   autoPlayInterval: const Duration(seconds: 5),
@@ -325,38 +332,53 @@ class _HeroSectionState extends State<_HeroSection> {
             ),
           ),
         ),
-        Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const SizedBox(height: 14),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(widget.hostelName,
+        // Use LayoutBuilder so text never overflows horizontally
+        LayoutBuilder(builder: (ctx, constraints) {
+          return Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  widget.hostelName,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 36,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    // Scale font slightly on very narrow screens
+                    fontSize: (constraints.maxWidth < 340) ? 26 : 32,
                     fontWeight: FontWeight.w900,
                     color: Colors.white,
                     letterSpacing: 0.5,
-                    shadows: [Shadow(blurRadius: 12, color: Colors.black87)],
-                  )),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _crumb('Home'),
-                _sep(),
-                _crumb('Hostels / Apartments', bold: true),
-                _sep(),
-                _crumb(widget.hostelName, dim: true),
-              ],
-            ),
-          ],
-        ),
+                    shadows: const [
+                      Shadow(blurRadius: 12, color: Colors.black87)
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Breadcrumb — wrap so it never overflows on tiny screens
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 4,
+                  children: [
+                    _crumb('Home'),
+                    _sep(),
+                    _crumb('Hostels / Apartments', bold: true),
+                    _sep(),
+                    _crumb(widget.hostelName, dim: true),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }),
         if (widget.images.length > 1)
           Positioned(
-            bottom: 16,
+            bottom: 14,
             left: 0,
             right: 0,
             child: Row(
@@ -383,15 +405,16 @@ class _HeroSectionState extends State<_HeroSection> {
   }
 
   Widget _crumb(String t, {bool bold = false, bool dim = false}) => Text(t,
+      overflow: TextOverflow.ellipsis,
       style: TextStyle(
         color: dim ? Colors.white54 : Colors.white,
-        fontSize: 13,
+        fontSize: 12,
         fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
       ));
 
   Widget _sep() => const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 8),
-        child: Text('/', style: TextStyle(color: Colors.white38, fontSize: 13)),
+        padding: EdgeInsets.symmetric(horizontal: 4),
+        child: Text('/', style: TextStyle(color: Colors.white38, fontSize: 12)),
       );
 }
 
@@ -413,7 +436,7 @@ class _InfoSection extends StatelessWidget {
         Container(height: 4, color: _kPrimary),
         Padding(
           padding:
-              EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 40),
+              EdgeInsets.symmetric(horizontal: isWide ? 60 : 16, vertical: 32),
           child: isWide
               ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Expanded(flex: 6, child: _HeroImageBox(images: heroImages)),
@@ -424,7 +447,7 @@ class _InfoSection extends StatelessWidget {
                 ])
               : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _HeroImageBox(images: heroImages),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
                   _DetailsBox(hostel: hostel, phones: phones),
                 ]),
         ),
@@ -490,9 +513,12 @@ class _DetailsBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Hostel name — never overflows
       Text(hostel.hostelName,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(
-              fontSize: 28,
+              fontSize: 24,
               fontWeight: FontWeight.w900,
               color: _kDark,
               height: 1.2)),
@@ -500,39 +526,49 @@ class _DetailsBox extends StatelessWidget {
       Row(children: [
         const Icon(Icons.location_on_rounded, size: 16, color: _kPrimary),
         const SizedBox(width: 4),
-        Text('${hostel.town ?? ''}, Ghana',
-            style: const TextStyle(
-                fontSize: 14,
-                color: Colors.black54,
-                fontWeight: FontWeight.w500)),
+        Flexible(
+          child: Text('${hostel.town ?? ''}, Ghana',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 14,
+                  color: Colors.black54,
+                  fontWeight: FontWeight.w500)),
+        ),
       ]),
-      const SizedBox(height: 16),
+      const SizedBox(height: 14),
+      // Price badge — uses FittedBox so it never overflows on narrow screens
       if (hostel.priceRange != null)
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-                colors: [Color(0xFF16A34A), Color(0xFF15803D)]),
-            borderRadius: BorderRadius.circular(50),
-            boxShadow: [
-              BoxShadow(
-                  color: _kGreen.withOpacity(0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3))
-            ],
-          ),
-          child: Text(
-            '${hostel.priceRange!}  ·  ${hostel.durationType}',
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                  colors: [Color(0xFF16A34A), Color(0xFF15803D)]),
+              borderRadius: BorderRadius.circular(50),
+              boxShadow: [
+                BoxShadow(
+                    color: _kGreen.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3))
+              ],
+            ),
+            child: Text(
+              '${hostel.priceRange!}  ·  ${hostel.durationType}',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14),
+            ),
           ),
         ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 14),
       if (hostel.description?.isNotEmpty == true) ...[
         Text(hostel.description!,
             style: const TextStyle(
                 fontSize: 14, color: Colors.black54, height: 1.65)),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
       ],
       if (hostel.schoolName?.isNotEmpty == true)
         _InfoChip(
@@ -543,6 +579,7 @@ class _DetailsBox extends StatelessWidget {
           color: _kPrimary,
         ),
       const SizedBox(height: 12),
+      // Phone box
       Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -565,7 +602,7 @@ class _DetailsBox extends StatelessWidget {
                       onTap: () => launchUrl(Uri.parse('tel:$p')),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
+                            horizontal: 12, vertical: 8),
                         decoration: BoxDecoration(
                           color: _kPrimary,
                           borderRadius: BorderRadius.circular(50),
@@ -593,23 +630,26 @@ class _DetailsBox extends StatelessWidget {
         ]),
       ),
       const SizedBox(height: 12),
+      // Note banner
       Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: const Color(0xFFFFF7ED),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: const Color(0xFFFED7AA)),
         ),
-        child: const Row(children: [
-          Icon(Icons.info_outline_rounded, size: 16, color: Color(0xFFEA580C)),
-          SizedBox(width: 8),
-          Flexible(
-              child: Text(
-                  'NOTE: Any room you book will be unavailable for others',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFFEA580C)))),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.info_outline_rounded,
+              size: 16, color: Color(0xFFEA580C)),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+                'NOTE: Any room you book will be unavailable for others',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFEA580C))),
+          ),
         ]),
       ),
     ]);
@@ -637,6 +677,7 @@ class _InfoChip extends StatelessWidget {
         const SizedBox(width: 6),
         Flexible(
             child: Text(text,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                     fontSize: 13, color: color, fontWeight: FontWeight.w600))),
       ]),
@@ -659,9 +700,23 @@ class _RoomsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenW = MediaQuery.of(context).size.width;
+    final hPad = isWide ? 60.0 : 16.0;
+
+    // ── Dynamically compute card height based on available width ──────────
+    // On wide screens: 3 columns. On narrow: 1 column.
+    // Card width = (available width - spacing) / columns
+    final cols = isWide ? 3 : 1;
+    final totalSpacing = (cols - 1) * 20.0; // gap between cards
+    final cardW = (screenW - hPad * 2 - totalSpacing) / cols;
+
+    // Image takes 160px, content area needs ~230px minimum
+    // Add 30px buffer so "Almost Full" badge never pushes over
+    final cardH = 160.0 + 240.0;
+
     return Container(
       color: _kBg,
-      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 48),
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 48),
       child: Column(children: [
         _SectionHeading(
             title: 'Available Rooms', subtitle: 'Choose a room that suits you'),
@@ -672,14 +727,18 @@ class _RoomsSection extends StatelessWidget {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: isWide ? 3 : 1,
+                  crossAxisCount: cols,
                   crossAxisSpacing: 20,
                   mainAxisSpacing: 20,
-                  childAspectRatio: isWide ? 0.65 : 0.82,
+                  // Fixed pixel height — never overflows regardless of screen
+                  mainAxisExtent: cardH,
                 ),
                 itemCount: rooms.length,
                 itemBuilder: (_, i) => _RoomCard(
-                    room: rooms[i], hostel: hostel, onBooked: onBooked),
+                    room: rooms[i],
+                    hostel: hostel,
+                    onBooked: onBooked,
+                    cardWidth: cardW),
               ),
       ]),
     );
@@ -690,8 +749,12 @@ class _RoomCard extends StatelessWidget {
   final RoomModel room;
   final Hostel hostel;
   final void Function(String, int) onBooked;
+  final double cardWidth;
   const _RoomCard(
-      {required this.room, required this.hostel, required this.onBooked});
+      {required this.room,
+      required this.hostel,
+      required this.onBooked,
+      required this.cardWidth});
 
   @override
   Widget build(BuildContext context) {
@@ -710,152 +773,191 @@ class _RoomCard extends StatelessWidget {
         ],
       ),
       clipBehavior: Clip.hardEdge,
-      child: Column(children: [
-        Stack(children: [
-          _RoomImageSlider(
-            images: room.images.isNotEmpty
-                ? room.images
-                : (room.image != null ? [room.image!] : []),
-            height: 175,
+      // Column with fixed image + flexible content
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Image area ────────────────────────────────────────────────
+          SizedBox(
+            height: 160,
+            child: Stack(children: [
+              _RoomImageSlider(
+                images: room.images.isNotEmpty
+                    ? room.images
+                    : (room.image != null ? [room.image!] : []),
+                height: 160,
+              ),
+              Positioned(
+                top: 10,
+                right: 10,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isAvail ? _kGreen : _kRed,
+                    borderRadius: BorderRadius.circular(50),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withOpacity(0.2), blurRadius: 4)
+                    ],
+                  ),
+                  child: Text(isAvail ? 'Available' : 'Full',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ]),
           ),
-          Positioned(
-            top: 12,
-            right: 12,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: isAvail ? _kGreen : _kRed,
-                borderRadius: BorderRadius.circular(50),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 4)
+          // ── Content area — Expanded so it fills remaining card height ──
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Top info block
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('${room.type} Room',
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: _kDark)),
+                      const SizedBox(height: 3),
+                      // Room number
+                      RichText(
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        text: TextSpan(
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.black54),
+                          children: [
+                            const TextSpan(text: 'Room No: '),
+                            TextSpan(
+                                text: room.roomNumber,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: _kDark)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      // Capacity & slots pills — wrap so they never overflow
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          _StatPill(
+                              icon: Icons.people_outline_rounded,
+                              label: 'Cap: ${room.capacity}',
+                              color: Colors.blueGrey),
+                          _StatPill(
+                              icon: Icons.door_front_door_outlined,
+                              label: '$rem slot${rem != 1 ? 's' : ''}',
+                              color: isAvail ? _kGreen : _kRed),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      // Price badge — FittedBox prevents right overflow
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 5),
+                          decoration: BoxDecoration(
+                              color: _kGreen.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(50)),
+                          child: Text(
+                              'GHS ${room.price.toStringAsFixed(2)} / person',
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: _kGreen)),
+                        ),
+                      ),
+                      // "Almost Full" badge — only shown when rem == 1
+                      if (rem == 1) ...[
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 3),
+                          decoration: BoxDecoration(
+                              color: _kRed.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(50)),
+                          child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('🔥', style: TextStyle(fontSize: 11)),
+                                SizedBox(width: 4),
+                                Text('Almost Full!',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: _kRed,
+                                        fontWeight: FontWeight.w700)),
+                              ]),
+                        ),
+                      ],
+                    ],
+                  ),
+                  // Bottom buttons
+                  Row(children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed:
+                            (room.images.isNotEmpty || room.image != null)
+                                ? () => _showImages(context, room)
+                                : null,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _kPrimary,
+                          side: const BorderSide(color: _kPrimary),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(50)),
+                          padding: const EdgeInsets.symmetric(vertical: 9),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text('Images',
+                            style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed:
+                            isAvail ? () => _showBooking(context, room) : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor:
+                              isAvail ? _kPrimary : Colors.grey[400],
+                          foregroundColor: Colors.white,
+                          elevation: isAvail ? 3 : 0,
+                          shadowColor: _kPrimary.withOpacity(0.4),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(50)),
+                          padding: const EdgeInsets.symmetric(vertical: 9),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: Text(isAvail ? 'Book Now' : 'Full',
+                            style: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ]),
                 ],
               ),
-              child: Text(isAvail ? 'Available' : 'Full',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700)),
             ),
           ),
-        ]),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(children: [
-                  Text('${room.type} Room',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: _kDark)),
-                  const SizedBox(height: 4),
-                  RichText(
-                    textAlign: TextAlign.center,
-                    text: TextSpan(
-                      style:
-                          const TextStyle(fontSize: 13, color: Colors.black54),
-                      children: [
-                        const TextSpan(text: 'Room No: '),
-                        TextSpan(
-                            text: room.roomNumber,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w700, color: _kDark)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    _StatPill(
-                        icon: Icons.people_outline_rounded,
-                        label: 'Cap: ${room.capacity}',
-                        color: Colors.blueGrey),
-                    const SizedBox(width: 8),
-                    _StatPill(
-                        icon: Icons.door_front_door_outlined,
-                        label: '$rem slot${rem != 1 ? 's' : ''}',
-                        color: isAvail ? _kGreen : _kRed),
-                  ]),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                        color: _kGreen.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(50)),
-                    child: Text('GHS ${room.price.toStringAsFixed(2)} / person',
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                            color: _kGreen)),
-                  ),
-                  if (rem == 1) ...[
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                          color: _kRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(50)),
-                      child:
-                          const Row(mainAxisSize: MainAxisSize.min, children: [
-                        Text('🔥', style: TextStyle(fontSize: 12)),
-                        SizedBox(width: 4),
-                        Text('Almost Full!',
-                            style: TextStyle(
-                                fontSize: 11,
-                                color: _kRed,
-                                fontWeight: FontWeight.w700)),
-                      ]),
-                    ),
-                  ],
-                ]),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: (room.images.isNotEmpty || room.image != null)
-                          ? () => _showImages(context, room)
-                          : null,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: _kPrimary,
-                        side: const BorderSide(color: _kPrimary),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(50)),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                      ),
-                      child: const Text('Images',
-                          style: TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w600)),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed:
-                          isAvail ? () => _showBooking(context, room) : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isAvail ? _kPrimary : Colors.grey[400],
-                        foregroundColor: Colors.white,
-                        elevation: isAvail ? 3 : 0,
-                        shadowColor: _kPrimary.withOpacity(0.4),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(50)),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                      ),
-                      child: Text(isAvail ? 'Book Now' : 'Full',
-                          style: const TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w700)),
-                    ),
-                  ),
-                ]),
-              ],
-            ),
-          ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -874,6 +976,7 @@ class _RoomCard extends StatelessWidget {
             child: Row(children: [
               Expanded(
                   child: Text('${room.type} Room — ${room.roomNumber}',
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                           fontSize: 15, fontWeight: FontWeight.w700))),
               IconButton(
@@ -916,16 +1019,16 @@ class _StatPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
           color: color.withOpacity(0.1),
           borderRadius: BorderRadius.circular(50)),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 13, color: color),
-        const SizedBox(width: 4),
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 3),
         Text(label,
             style: TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
       ]),
     );
   }
@@ -936,7 +1039,7 @@ class _StatPill extends StatelessWidget {
 class _RoomImageSlider extends StatefulWidget {
   final List<String> images;
   final double height;
-  const _RoomImageSlider({required this.images, this.height = 180});
+  const _RoomImageSlider({required this.images, this.height = 160});
 
   @override
   State<_RoomImageSlider> createState() => _RoomImageSliderState();
@@ -1019,11 +1122,11 @@ class _ArrowBtn extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 28,
-        height: 28,
+        width: 26,
+        height: 26,
         decoration: BoxDecoration(
-            color: Colors.black54, borderRadius: BorderRadius.circular(14)),
-        child: Icon(icon, color: Colors.white, size: 18),
+            color: Colors.black54, borderRadius: BorderRadius.circular(13)),
+        child: Icon(icon, color: Colors.white, size: 16),
       ),
     );
   }
@@ -1040,19 +1143,19 @@ class _FacilitiesSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: _kCard,
-      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 48),
+      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 16, vertical: 48),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _SectionHeading(
             title: 'Facilities & Amenities',
             subtitle: 'Everything available at this hostel'),
         const SizedBox(height: 28),
         Wrap(
-          spacing: 14,
-          runSpacing: 14,
+          spacing: 12,
+          runSpacing: 12,
           children: facilities
               .map((f) => Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                     decoration: BoxDecoration(
                       color: _kPrimary.withOpacity(0.06),
                       borderRadius: BorderRadius.circular(50),
@@ -1060,8 +1163,8 @@ class _FacilitiesSection extends StatelessWidget {
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       const Icon(Icons.check_circle_rounded,
-                          size: 16, color: _kGreen),
-                      const SizedBox(width: 8),
+                          size: 15, color: _kGreen),
+                      const SizedBox(width: 7),
                       Text(f,
                           style: const TextStyle(
                               fontSize: 13,
@@ -1076,10 +1179,7 @@ class _FacilitiesSection extends StatelessWidget {
   }
 }
 
-// ─── 5. LOCATION — Geoapify snapshot + tap to open Google Maps ───────────────
-// Shows a real map snapshot with a pin using Geoapify (free, no credit card).
-// Tapping opens Google Maps on any platform.
-// Works on Android, iOS, Web, Windows, macOS — no WebView needed.
+// ─── 5. LOCATION ─────────────────────────────────────────────────────────────
 
 const _kGeoapifyApiKey = '1f447c87da1949b48571d28867d1f6a6';
 
@@ -1088,8 +1188,6 @@ class _LocationSection extends StatelessWidget {
   final bool isWide;
   const _LocationSection({required this.mapSrc, required this.isWide});
 
-  /// Extracts latitude and longitude from Google Maps embed pb= parameter.
-  /// pb contains encoded data like !2d{lng}!3d{lat}
   Map<String, double>? _extractCoords() {
     try {
       final uri = Uri.parse(mapSrc);
@@ -1106,7 +1204,6 @@ class _LocationSection extends StatelessWidget {
     return null;
   }
 
-  /// Builds Geoapify static map URL — real map image with green pin
   String _staticMapUrl(double lat, double lng) {
     return 'https://maps.geoapify.com/v1/staticmap'
         '?style=osm-bright'
@@ -1118,12 +1215,10 @@ class _LocationSection extends StatelessWidget {
         '&apiKey=$_kGeoapifyApiKey';
   }
 
-  /// Builds a proper openable Google Maps link from coordinates
   String _buildOpenUrl(double? lat, double? lng) {
     if (lat != null && lng != null) {
       return 'https://www.google.com/maps?q=$lat,$lng';
     }
-    // Fallback — if it's already a plain URL use it directly
     try {
       if (!mapSrc.contains('/embed')) return mapSrc;
     } catch (_) {}
@@ -1141,12 +1236,10 @@ class _LocationSection extends StatelessWidget {
 
     return Container(
       color: _kBg,
-      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 48),
+      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 16, vertical: 48),
       child: Column(children: [
         _SectionHeading(title: 'Our Location', subtitle: 'Find us on the map'),
         const SizedBox(height: 24),
-
-        // ── Tappable map card ─────────────────────────────────
         GestureDetector(
           onTap: () async {
             final uri = Uri.parse(openUrl);
@@ -1167,11 +1260,10 @@ class _LocationSection extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
               child: Stack(children: [
-                // ── Geoapify map snapshot ─────────────────────
                 if (staticUrl != null)
                   CachedNetworkImage(
                     imageUrl: staticUrl,
-                    height: 260,
+                    height: 240,
                     width: double.infinity,
                     fit: BoxFit.cover,
                     placeholder: (_, __) => _MapShimmer(),
@@ -1179,15 +1271,13 @@ class _LocationSection extends StatelessWidget {
                   )
                 else
                   _MapFallback(),
-
-                // ── Bottom overlay — "Tap to open" bar ────────
                 Positioned(
                   bottom: 0,
                   left: 0,
                   right: 0,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 14),
+                        horizontal: 14, vertical: 12),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.bottomCenter,
@@ -1211,7 +1301,7 @@ class _LocationSection extends StatelessWidget {
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
+                            horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(50),
@@ -1220,7 +1310,7 @@ class _LocationSection extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(Icons.open_in_new_rounded,
-                                size: 14, color: _kPrimary),
+                                size: 13, color: _kPrimary),
                             SizedBox(width: 4),
                             Text('Open',
                                 style: TextStyle(
@@ -1242,7 +1332,6 @@ class _LocationSection extends StatelessWidget {
   }
 }
 
-// ─── Shimmer while map image loads ───────────────────────────────────────────
 class _MapShimmer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -1250,20 +1339,16 @@ class _MapShimmer extends StatelessWidget {
       baseColor: Colors.grey[300]!,
       highlightColor: Colors.grey[100]!,
       child: Container(
-        height: 260,
-        width: double.infinity,
-        color: Colors.grey[300],
-      ),
+          height: 240, width: double.infinity, color: Colors.grey[300]),
     );
   }
 }
 
-// ─── Fallback when coords not found or image fails ───────────────────────────
 class _MapFallback extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 260,
+      height: 240,
       width: double.infinity,
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -1277,7 +1362,7 @@ class _MapFallback extends StatelessWidget {
       ),
       child: Stack(children: [
         CustomPaint(
-          size: const Size(double.infinity, 260),
+          size: const Size(double.infinity, 240),
           painter: _MapGridPainter(),
         ),
         Center(
@@ -1285,8 +1370,8 @@ class _MapFallback extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Container(
-                width: 60,
-                height: 60,
+                width: 56,
+                height: 56,
                 decoration: BoxDecoration(
                   color: _kPrimary,
                   shape: BoxShape.circle,
@@ -1298,12 +1383,12 @@ class _MapFallback extends StatelessWidget {
                   ],
                 ),
                 child: const Icon(Icons.location_on_rounded,
-                    color: Colors.white, size: 32),
+                    color: Colors.white, size: 30),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(50),
@@ -1313,8 +1398,8 @@ class _MapFallback extends StatelessWidget {
                   ],
                 ),
                 child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.touch_app_rounded, size: 14, color: _kPrimary),
-                  SizedBox(width: 6),
+                  Icon(Icons.touch_app_rounded, size: 13, color: _kPrimary),
+                  SizedBox(width: 5),
                   Text('Tap to open in Google Maps',
                       style: TextStyle(
                           fontSize: 12,
@@ -1330,49 +1415,44 @@ class _MapFallback extends StatelessWidget {
   }
 }
 
-// ─── Decorative map grid painter ─────────────────────────────────────────────
 class _MapGridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final gridPaint = Paint()
       ..color = const Color(0xFF0F766E).withOpacity(0.08)
       ..strokeWidth = 1;
-
     for (double y = 0; y < size.height; y += 28) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
     for (double x = 0; x < size.width; x += 40) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
     }
-
     final roadPaint = Paint()
       ..color = const Color(0xFF0F766E).withOpacity(0.18)
       ..strokeWidth = 3
       ..strokeCap = StrokeCap.round;
-
     canvas.drawLine(Offset(0, size.height * 0.55),
         Offset(size.width, size.height * 0.38), roadPaint);
     canvas.drawLine(Offset(size.width * 0.35, 0),
         Offset(size.width * 0.55, size.height), roadPaint);
-
     final blockPaint = Paint()
       ..color = const Color(0xFF0F766E).withOpacity(0.07)
       ..style = PaintingStyle.fill;
-
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.05, size.height * 0.1, 60, 40),
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.05, size.height * 0.1, 55, 36),
         blockPaint);
     canvas.drawRect(
-        Rect.fromLTWH(size.width * 0.65, size.height * 0.15, 50, 35),
+        Rect.fromLTWH(size.width * 0.65, size.height * 0.15, 48, 32),
         blockPaint);
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.1, size.height * 0.65, 45, 30),
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.1, size.height * 0.65, 42, 28),
         blockPaint);
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.72, size.height * 0.6, 55, 38),
+    canvas.drawRect(Rect.fromLTWH(size.width * 0.72, size.height * 0.6, 52, 34),
         blockPaint);
   }
 
   @override
   bool shouldRepaint(_) => false;
 }
+
 // ─── Section Heading ──────────────────────────────────────────────────────────
 
 class _SectionHeading extends StatelessWidget {
@@ -1385,18 +1465,20 @@ class _SectionHeading extends StatelessWidget {
     return Column(children: [
       Row(mainAxisAlignment: MainAxisAlignment.center, children: [
         Container(
-            width: 32,
+            width: 28,
             height: 3,
             decoration: BoxDecoration(
                 color: _kPrimary, borderRadius: BorderRadius.circular(2))),
-        const SizedBox(width: 12),
-        Text(title,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-                fontSize: 22, fontWeight: FontWeight.w900, color: _kDark)),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
+        Flexible(
+          child: Text(title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 20, fontWeight: FontWeight.w900, color: _kDark)),
+        ),
+        const SizedBox(width: 10),
         Container(
-            width: 32,
+            width: 28,
             height: 3,
             decoration: BoxDecoration(
                 color: _kPrimary, borderRadius: BorderRadius.circular(2))),
@@ -1459,11 +1541,9 @@ class _BookingSheetState extends State<_BookingSheet> {
   Future<void> _proceedToPayment() async {
     if (!_key.currentState!.validate()) return;
     setState(() => _busy = true);
-
     try {
       final r = widget.room;
       final h = widget.hostel;
-
       final docRef =
           await FirebaseFirestore.instance.collection('bookings').add({
         'room_id': r.id,
@@ -1489,7 +1569,6 @@ class _BookingSheetState extends State<_BookingSheet> {
         'payment_status': 'pending',
         'booked_at': FieldValue.serverTimestamp(),
       });
-
       _bookingId = docRef.id;
       setState(() {
         _step = 1;
@@ -1510,11 +1589,9 @@ class _BookingSheetState extends State<_BookingSheet> {
       _step = 2;
       _busy = true;
     });
-
     try {
       final provider = _momoProvider == 'mtn' ? 'mtn' : 'vod';
       final amountInPesewas = (_totalAmount * 100).toInt();
-
       final chargeRes = await http.post(
         Uri.parse('$_kPaystackBaseUrl/charge'),
         headers: {
@@ -1538,10 +1615,8 @@ class _BookingSheetState extends State<_BookingSheet> {
           },
         }),
       );
-
       final chargeData = jsonDecode(chargeRes.body);
       final status = chargeData['data']?['status'];
-
       if (status == 'pay_offline' ||
           status == 'pending' ||
           status == 'send_otp') {
@@ -1567,16 +1642,13 @@ class _BookingSheetState extends State<_BookingSheet> {
     for (int i = 0; i < 12; i++) {
       await Future.delayed(const Duration(seconds: 5));
       if (!mounted) return;
-
       final res = await http.get(
         Uri.parse('$_kPaystackBaseUrl/transaction/verify/$reference'),
         headers: {'Authorization': 'Bearer $_kPaystackSecretKey'},
       );
-
       final data = jsonDecode(res.body);
       final status = data['data']?['status'];
       debugPrint('🔁 Poll $i — status: $status');
-
       if (status == 'success') {
         await _onPaymentSuccess(reference);
         return;
@@ -1593,7 +1665,6 @@ class _BookingSheetState extends State<_BookingSheet> {
         return;
       }
     }
-
     if (!mounted) return;
     _refreshReference();
     setState(() {
@@ -1618,16 +1689,11 @@ class _BookingSheetState extends State<_BookingSheet> {
       'payment_reference': reference,
       'paid_at': FieldValue.serverTimestamp(),
     });
-
     await FirebaseFirestore.instance
         .collection('rooms')
         .doc(widget.room.id)
-        .update({
-      'booked': FieldValue.increment(_slots),
-    });
-
+        .update({'booked': FieldValue.increment(_slots)});
     await BookingStorageService.saveBookingId(_bookingId!);
-
     if (!mounted) return;
     widget.onSuccess(_bookingId!, _slots);
   }
@@ -1667,6 +1733,7 @@ class _BookingSheetState extends State<_BookingSheet> {
                       children: [
                     Text(
                         'Book ${widget.room.type} Room — ${widget.room.roomNumber}',
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -1743,8 +1810,10 @@ class _BookingSheetState extends State<_BookingSheet> {
               value: _notStudent,
               onChanged: (v) => setState(() => _notStudent = v ?? false),
               activeColor: _kPrimary),
-          const Text('I am not a student',
-              style: TextStyle(fontWeight: FontWeight.w600)),
+          const Flexible(
+            child: Text('I am not a student',
+                style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
         ]),
         const SizedBox(height: 8),
         _sectionLabel('Booking Details', Icons.hotel_rounded),
@@ -1851,21 +1920,16 @@ class _BookingSheetState extends State<_BookingSheet> {
   }
 
   Widget _buildPaymentStep() {
-    // ── Read payment info from HOSTEL (not room) ──────────────────────────
     final momoNumber = widget.hostel.paymentMomo;
     final cashPayment = widget.hostel.paymentCash;
     final bankPayment = widget.hostel.paymentBank;
     final otherPayment = widget.hostel.paymentOther;
-
-    // Check if any MoMo-type payment exists for Paystack charge button
     final hasMomo = momoNumber.isNotEmpty;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionLabel(
           'Landlord\'s Payment Details', Icons.account_balance_wallet_rounded),
       const SizedBox(height: 12),
-
-      // ── Show all available payment methods from hostel ────────────────
       if (momoNumber.isNotEmpty)
         _MomoNumberCard(
             provider: 'MTN / Vodafone MoMo',
@@ -1890,8 +1954,6 @@ class _BookingSheetState extends State<_BookingSheet> {
             number: otherPayment,
             color: const Color(0xFF7C3AED),
             icon: '💳'),
-
-      // Fallback if no payment info set
       if (momoNumber.isEmpty &&
           cashPayment.isEmpty &&
           bankPayment.isEmpty &&
@@ -1914,10 +1976,7 @@ class _BookingSheetState extends State<_BookingSheet> {
                         fontWeight: FontWeight.w500))),
           ]),
         ),
-
       const SizedBox(height: 20),
-
-      // ── Only show MoMo payment form if hostel has MoMo number ────────
       if (hasMomo) ...[
         _sectionLabel('Your MoMo Details', Icons.payment_rounded),
         const SizedBox(height: 12),
@@ -1953,8 +2012,6 @@ class _BookingSheetState extends State<_BookingSheet> {
                 v!.trim().length < 10 ? 'Enter a valid MoMo number' : null),
         const SizedBox(height: 16),
       ],
-
-      // ── Summary ────────────────────────────────────────────────────────
       Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -1998,8 +2055,6 @@ class _BookingSheetState extends State<_BookingSheet> {
         ]),
       ),
       const SizedBox(height: 20),
-
-      // ── Pay Now button (only if MoMo available) ────────────────────────
       if (hasMomo)
         SizedBox(
           width: double.infinity,
@@ -2025,8 +2080,6 @@ class _BookingSheetState extends State<_BookingSheet> {
                 ]),
           ),
         ),
-
-      // ── Confirm booking button (for cash/bank — no Paystack) ──────────
       if (!hasMomo)
         SizedBox(
           width: double.infinity,
@@ -2071,7 +2124,6 @@ class _BookingSheetState extends State<_BookingSheet> {
                       ]),
           ),
         ),
-
       const SizedBox(height: 12),
       SizedBox(
         width: double.infinity,
@@ -2123,9 +2175,11 @@ class _BookingSheetState extends State<_BookingSheet> {
     return Row(children: [
       Icon(icon, size: 18, color: _kPrimary),
       const SizedBox(width: 8),
-      Text(label,
-          style: const TextStyle(
-              fontSize: 15, fontWeight: FontWeight.w800, color: _kDark)),
+      Flexible(
+        child: Text(label,
+            style: const TextStyle(
+                fontSize: 15, fontWeight: FontWeight.w800, color: _kDark)),
+      ),
     ]);
   }
 }
@@ -2242,8 +2296,8 @@ class _MomoNumberCard extends StatelessWidget {
         border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Row(children: [
-        Text(icon, style: const TextStyle(fontSize: 24)),
-        const SizedBox(width: 12),
+        Text(icon, style: const TextStyle(fontSize: 22)),
+        const SizedBox(width: 10),
         Expanded(
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2251,12 +2305,12 @@ class _MomoNumberCard extends StatelessWidget {
               style: TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w600, color: color)),
           Text(number,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w800, color: _kDark)),
+                  fontSize: 14, fontWeight: FontWeight.w800, color: _kDark)),
         ])),
         GestureDetector(
           onTap: () {
-            // Only launch tel: for phone numbers, not text descriptions
             final isPhone = RegExp(r'^\d').hasMatch(number.trim());
             if (isPhone) launchUrl(Uri.parse('tel:$number'));
           },
@@ -2312,7 +2366,7 @@ class _ProviderBtn extends StatelessWidget {
   }
 }
 
-// ─── Summary Row ──────────────────────────────────────────────────────────────
+// ─── Summary Row ─────────────────────────────────────────────────────────────
 
 class _SummaryRow extends StatelessWidget {
   final String label;
@@ -2332,11 +2386,14 @@ class _SummaryRow extends StatelessWidget {
                     fontSize: 13,
                     color: Colors.black54,
                     fontWeight: bold ? FontWeight.w700 : FontWeight.w400))),
-        Text(value,
-            style: TextStyle(
-                fontSize: 13,
-                color: bold ? _kGreen : _kDark,
-                fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+        Flexible(
+          child: Text(value,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 13,
+                  color: bold ? _kGreen : _kDark,
+                  fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+        ),
       ]),
     );
   }

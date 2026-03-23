@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -16,8 +17,76 @@ import '../../screens/contact/contact_screen.dart';
 import '../../screens/landlord/landlord_dashboard_screen.dart';
 import '../../screens/admin/admin_dashboard_screen.dart';
 
+/// ─── BACK HANDLER WRAPPER ───────────────────────────────
+class BackHandlerWrapper extends StatelessWidget {
+  final Widget child;
+  const BackHandlerWrapper({required this.child, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return WillPopScope(
+      onWillPop: () async {
+        // 1️⃣ If navigator can pop, just pop
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+          return false;
+        }
+
+        // 2️⃣ Exit dialog only for HomeScreen
+        if (child is HomeScreen) {
+          final shouldExit = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.exit_to_app_rounded, color: Color(0xFF0F766E)),
+                  SizedBox(width: 10),
+                  Text('Exit App',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                ],
+              ),
+              content: const Text(
+                'Are you sure you want to exit RoomzyFind?',
+                style: TextStyle(fontSize: 14, color: Colors.black54),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Stay'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Exit'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldExit == true) {
+            if (!kIsWeb) SystemNavigator.pop(); // Android
+            if (kIsWeb) print("Exit pressed (web)"); // Web test
+          }
+          return false;
+        }
+
+        // 3️⃣ Other pages with no back stack do nothing
+        return false;
+      },
+      child: child,
+    );
+  }
+}
+
+/// ─── APP ROUTER ─────────────────────────────────────────
 class AppRouter {
   static final _rootNavigatorKey = GlobalKey<NavigatorState>();
+
+  // Helper to wrap each screen with BackHandlerWrapper
+  static Widget _wrap(Widget screen) => BackHandlerWrapper(child: screen);
 
   static GoRouter router([AuthService? authService]) {
     return GoRouter(
@@ -38,157 +107,72 @@ class AppRouter {
       },
       routes: [
         GoRoute(
-          path: '/',
-          builder: (context, state) => const SplashScreen(),
-        ),
-
-        // ── Home — intercepts back button to show exit dialog
+            path: '/',
+            builder: (context, state) => _wrap(const SplashScreen())),
         GoRoute(
-          path: '/home',
-          builder: (context, state) => const _BackHandlerWrapper(
-            child: HomeScreen(),
-          ),
-        ),
-
+            path: '/home',
+            builder: (context, state) => _wrap(const HomeScreen())),
         GoRoute(
-          path: '/about',
-          builder: (context, state) => const AboutScreen(),
-        ),
+            path: '/about',
+            builder: (context, state) => _wrap(const AboutScreen())),
         GoRoute(
-          path: '/contact',
-          builder: (context, state) => const ContactScreen(),
-        ),
+            path: '/contact',
+            builder: (context, state) => _wrap(const ContactScreen())),
         GoRoute(
-          path: '/login',
-          builder: (context, state) => const LoginScreen(),
-        ),
+            path: '/login',
+            builder: (context, state) => _wrap(const LoginScreen())),
         GoRoute(
-          path: '/register',
-          builder: (context, state) => const RegisterScreen(),
-        ),
+            path: '/register',
+            builder: (context, state) => _wrap(const RegisterScreen())),
         GoRoute(
-          path: '/hostels',
-          builder: (context, state) => const HostelsScreen(),
-        ),
+            path: '/hostels',
+            builder: (context, state) => _wrap(const HostelsScreen())),
         GoRoute(
           path: '/hostels/:id',
           builder: (context, state) {
             final id = state.pathParameters['id']!;
-            return HostelDetailScreen(hostelId: id);
+            return _wrap(HostelDetailScreen(hostelId: id));
           },
         ),
         GoRoute(
-          path: '/bookings',
-          builder: (context, state) => const BookingsScreen(),
-        ),
-
-        // ── Booking confirm — uses bookingId (Firestore doc ID)
+            path: '/bookings',
+            builder: (context, state) => _wrap(const BookingsScreen())),
         GoRoute(
           path: '/book/:bookingId',
           builder: (context, state) {
             final bookingId = state.pathParameters['bookingId']!;
-            return BookingConfirmScreen(bookingId: bookingId);
+            return _wrap(BookingConfirmScreen(bookingId: bookingId));
           },
         ),
-
         GoRoute(
-          path: '/profile',
-          builder: (context, state) => const ProfileScreen(),
-        ),
+            path: '/profile',
+            builder: (context, state) => _wrap(const ProfileScreen())),
         GoRoute(
-          path: '/landlord',
-          builder: (context, state) => const LandlordDashboardScreen(),
-        ),
+            path: '/landlord',
+            builder: (context, state) =>
+                _wrap(const LandlordDashboardScreen())),
         GoRoute(
-          path: '/admin',
-          builder: (context, state) => const AdminDashboardScreen(),
-        ),
+            path: '/admin',
+            builder: (context, state) => _wrap(const AdminDashboardScreen())),
       ],
-      errorBuilder: (context, state) => Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error_outline, size: 64, color: Colors.red),
-              const SizedBox(height: 16),
-              Text('Page not found: ${state.uri}'),
-              TextButton(
-                onPressed: () => context.go('/home'),
-                child: const Text('Go Home'),
-              ),
-            ],
+      errorBuilder: (context, state) => _wrap(
+        Scaffold(
+          body: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                const SizedBox(height: 16),
+                Text('Page not found: ${state.uri}'),
+                TextButton(
+                  onPressed: () => context.go('/home'),
+                  child: const Text('Go Home'),
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    );
-  }
-}
-
-// ─── Back Button Handler ──────────────────────────────────────────────────────
-
-class _BackHandlerWrapper extends StatelessWidget {
-  final Widget child;
-  const _BackHandlerWrapper({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) return;
-
-        if (context.canPop()) {
-          context.pop();
-          return;
-        }
-
-        final shouldExit = await showDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            title: const Row(
-              children: [
-                Icon(Icons.exit_to_app_rounded, color: Color(0xFF0F766E)),
-                SizedBox(width: 10),
-                Text('Exit App',
-                    style:
-                        TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-              ],
-            ),
-            content: const Text(
-              'Are you sure you want to exit RoomzyFind?',
-              style: TextStyle(fontSize: 14, color: Colors.black54),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Stay',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w600, color: Color(0xFF0F766E))),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF0F766E),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                child: const Text('Exit',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
-              ),
-            ],
-          ),
-        );
-
-        if (shouldExit == true && context.mounted) {
-          SystemNavigator.pop();
-        }
-      },
-      child: child,
     );
   }
 }
