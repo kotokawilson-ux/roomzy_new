@@ -16,12 +16,12 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = "17"                // ← fix 1: was JavaVersion.VERSION_17.toString()
+        jvmTarget = "17"
     }
 
     defaultConfig {
         applicationId = "com.example.roomzy_new"
-        minSdk = flutter.minSdkVersion                     // ← fix 2: was flutter.minSdkVersion (too low)
+        minSdk = flutter.minSdkVersion
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -39,11 +39,17 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false     // ← fix 3: was minifyEnabled
-            isShrinkResources = false   // ← fix 4: was shrinkResources
+            isMinifyEnabled = true          // ← removes unused code
+            isShrinkResources = true        // ← removes unused assets/images
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         debug {
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
