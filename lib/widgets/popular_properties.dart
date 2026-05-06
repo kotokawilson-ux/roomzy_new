@@ -1,5 +1,4 @@
 // lib/widgets/popular_properties.dart
-
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -10,25 +9,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 
-/// Builds an optimized Cloudinary URL for fast loading.
-/// - f_auto      → serves WebP/AVIF automatically (smaller file)
-/// - q_auto:good → best quality/size balance
-/// - w_800       → caps width at 800px (enough for cards)
-/// - c_fill      → crops smartly to fill the frame
+/// Returns the image URL directly.
+/// ImgBB URLs work as-is — no transformation needed.
+/// Falls back to a placeholder if the URL is empty or null.
 String buildImageUrl(String? imageUrl,
     {String seed = 'hostel', int width = 800}) {
   if (imageUrl == null || imageUrl.trim().isEmpty) {
     return 'https://placehold.co/600x400?text=No+Image';
   }
-  final url = imageUrl.trim();
-
-  if (url.contains('cloudinary.com') && url.contains('/upload/')) {
-    return url.replaceFirst(
-      '/upload/',
-      '/upload/f_auto,q_auto:good,w_$width,c_fill/',
-    );
-  }
-  return url;
+  return imageUrl.trim();
 }
 
 enum _LoadState { loading, success, empty, error }

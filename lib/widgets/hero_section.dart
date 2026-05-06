@@ -17,8 +17,8 @@ class _HeroSectionState extends State<HeroSection> {
   // - fm=webp    → serve WebP for smaller file size
   // - fit=crop   → smart crop to fill frame
   static const List<String> _images = [
-    'https://images.unsplash.com/photo-1555854877-bab0e564b8d5?w=1600&q=80&fm=webp&fit=crop',
-    'https://images.unsplash.com/photo-1562664377-709f2c337eb2?w=1600&q=80&fm=webp&fit=crop',
+    'https://i.ibb.co/hJph6Xyc/h1.jpg',
+    'https://i.ibb.co/fzcNGgwq/hostel.jpg',
   ];
 
   @override
