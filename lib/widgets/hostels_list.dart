@@ -277,7 +277,7 @@ class _HostelCard extends StatelessWidget {
     final imageUrl = buildImageUrl(hostel.image, width: 800);
 
     return GestureDetector(
-      onTap: () => context.go('/hostels/${hostel.id}'),
+      onTap: () => context.push('/hostels/${hostel.id}'),
       child: Container(
         decoration: BoxDecoration(
           color: surfaceColor,
@@ -394,7 +394,7 @@ class _HostelCard extends StatelessWidget {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () => context.go('/hostels/${hostel.id}'),
+                        onPressed: () => context.push('/hostels/${hostel.id}'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           foregroundColor: Colors.white,

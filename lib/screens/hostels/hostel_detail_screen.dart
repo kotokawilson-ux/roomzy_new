@@ -1002,7 +1002,7 @@ class _RoomCard extends StatelessWidget {
         onSuccess: (bookingId, slots) {
           Navigator.pop(ctx);
           onBooked(room.id, slots);
-          ctx.go('/book/$bookingId');
+          ctx.push('/book/$bookingId');
         },
       ),
     );

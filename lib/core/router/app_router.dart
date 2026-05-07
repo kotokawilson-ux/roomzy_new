@@ -18,22 +18,28 @@ import '../../screens/landlord/landlord_dashboard_screen.dart';
 import '../../screens/admin/admin_dashboard_screen.dart';
 
 /// ─── BACK HANDLER WRAPPER ───────────────────────────────
+/// Replaces the deprecated WillPopScope with PopScope.
+/// - On HomeScreen: shows an exit confirmation dialog.
+/// - On all other screens: lets GoRouter handle back navigation normally.
 class BackHandlerWrapper extends StatelessWidget {
   final Widget child;
-  const BackHandlerWrapper({required this.child, super.key});
+  final bool isHome;
+
+  const BackHandlerWrapper({
+    required this.child,
+    this.isHome = false,
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        // 1️⃣ If navigator can pop, just pop
-        if (Navigator.of(context).canPop()) {
-          Navigator.of(context).pop();
-          return false;
-        }
+    if (isHome) {
+      // ── Home screen: intercept back and show exit dialog ──
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) async {
+          if (didPop) return;
 
-        // 2️⃣ Exit dialog only for HomeScreen
-        if (child is HomeScreen) {
           final shouldExit = await showDialog<bool>(
             context: context,
             barrierDismissible: false,
@@ -44,9 +50,10 @@ class BackHandlerWrapper extends StatelessWidget {
                 children: [
                   Icon(Icons.exit_to_app_rounded, color: Color(0xFF0F766E)),
                   SizedBox(width: 10),
-                  Text('Exit App',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  Text(
+                    'Exit App',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                  ),
                 ],
               ),
               content: const Text(
@@ -67,15 +74,16 @@ class BackHandlerWrapper extends StatelessWidget {
           );
 
           if (shouldExit == true) {
-            if (!kIsWeb) SystemNavigator.pop(); // Android
-            if (kIsWeb) print("Exit pressed (web)"); // Web test
+            if (!kIsWeb) SystemNavigator.pop();
           }
-          return false;
-        }
+        },
+        child: child,
+      );
+    }
 
-        // 3️⃣ Other pages with no back stack do nothing
-        return false;
-      },
+    // ── All other screens: allow normal GoRouter back navigation ──
+    return PopScope(
+      canPop: true,
       child: child,
     );
   }
@@ -85,8 +93,12 @@ class BackHandlerWrapper extends StatelessWidget {
 class AppRouter {
   static final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
-  // Helper to wrap each screen with BackHandlerWrapper
+  // Wrap normal screens (back navigation works as expected)
   static Widget _wrap(Widget screen) => BackHandlerWrapper(child: screen);
+
+  // Wrap home screen (shows exit dialog on back press)
+  static Widget _wrapHome(Widget screen) =>
+      BackHandlerWrapper(child: screen, isHome: true);
 
   static GoRouter router([AuthService? authService]) {
     return GoRouter(
@@ -106,27 +118,39 @@ class AppRouter {
         return null;
       },
       routes: [
+        // Splash — no back navigation needed
         GoRoute(
-            path: '/',
-            builder: (context, state) => _wrap(const SplashScreen())),
+          path: '/',
+          builder: (context, state) => _wrap(const SplashScreen()),
+        ),
+
+        // Home — shows exit dialog on back press
         GoRoute(
-            path: '/home',
-            builder: (context, state) => _wrap(const HomeScreen())),
+          path: '/home',
+          builder: (context, state) => _wrapHome(const HomeScreen()),
+        ),
+
+        // All other screens — normal back navigation
         GoRoute(
-            path: '/about',
-            builder: (context, state) => _wrap(const AboutScreen())),
+          path: '/about',
+          builder: (context, state) => _wrap(const AboutScreen()),
+        ),
         GoRoute(
-            path: '/contact',
-            builder: (context, state) => _wrap(const ContactScreen())),
+          path: '/contact',
+          builder: (context, state) => _wrap(const ContactScreen()),
+        ),
         GoRoute(
-            path: '/login',
-            builder: (context, state) => _wrap(const LoginScreen())),
+          path: '/login',
+          builder: (context, state) => _wrap(const LoginScreen()),
+        ),
         GoRoute(
-            path: '/register',
-            builder: (context, state) => _wrap(const RegisterScreen())),
+          path: '/register',
+          builder: (context, state) => _wrap(const RegisterScreen()),
+        ),
         GoRoute(
-            path: '/hostels',
-            builder: (context, state) => _wrap(const HostelsScreen())),
+          path: '/hostels',
+          builder: (context, state) => _wrap(const HostelsScreen()),
+        ),
         GoRoute(
           path: '/hostels/:id',
           builder: (context, state) {
@@ -135,8 +159,9 @@ class AppRouter {
           },
         ),
         GoRoute(
-            path: '/bookings',
-            builder: (context, state) => _wrap(const BookingsScreen())),
+          path: '/bookings',
+          builder: (context, state) => _wrap(const BookingsScreen()),
+        ),
         GoRoute(
           path: '/book/:bookingId',
           builder: (context, state) {
@@ -145,15 +170,17 @@ class AppRouter {
           },
         ),
         GoRoute(
-            path: '/profile',
-            builder: (context, state) => _wrap(const ProfileScreen())),
+          path: '/profile',
+          builder: (context, state) => _wrap(const ProfileScreen()),
+        ),
         GoRoute(
-            path: '/landlord',
-            builder: (context, state) =>
-                _wrap(const LandlordDashboardScreen())),
+          path: '/landlord',
+          builder: (context, state) => _wrap(const LandlordDashboardScreen()),
+        ),
         GoRoute(
-            path: '/admin',
-            builder: (context, state) => _wrap(const AdminDashboardScreen())),
+          path: '/admin',
+          builder: (context, state) => _wrap(const AdminDashboardScreen()),
+        ),
       ],
       errorBuilder: (context, state) => _wrap(
         Scaffold(
