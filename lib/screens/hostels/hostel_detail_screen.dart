@@ -1715,19 +1715,53 @@ class _BookingSheetState extends State<_BookingSheet> {
   }
 
   Future<void> _onPaymentSuccess(String reference) async {
-    await FirebaseFirestore.instance
-        .collection('bookings')
-        .doc(_bookingId)
-        .update({
-      'payment_status': 'paid',
-      'status': 'confirmed',
-      'payment_reference': reference,
-      'paid_at': FieldValue.serverTimestamp(),
-    });
-    await FirebaseFirestore.instance
-        .collection('rooms')
-        .doc(widget.room.id)
-        .update({'booked': FieldValue.increment(_slots)});
+    final roomRef =
+        FirebaseFirestore.instance.collection('rooms').doc(widget.room.id);
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((txn) async {
+        final snap = await txn.get(roomRef);
+        final capacity = (snap.data()?['capacity'] ?? 1) as int;
+        final booked = (snap.data()?['booked'] ?? 0) as int;
+        final remaining = capacity - booked;
+
+        if (remaining < _slots) {
+          throw Exception('Not enough slots left');
+        }
+
+        // Decrement room atomically
+        txn.update(roomRef, {'booked': FieldValue.increment(_slots)});
+
+        // Confirm the booking doc inside the same transaction
+        txn.update(
+          FirebaseFirestore.instance.collection('bookings').doc(_bookingId),
+          {
+            'payment_status': 'paid',
+            'status': 'confirmed',
+            'payment_reference': reference,
+            'paid_at': FieldValue.serverTimestamp(),
+          },
+        );
+      });
+    } catch (e) {
+      // Slots were taken by someone else between form open and payment
+      if (!mounted) return;
+      setState(() {
+        _step = 1;
+        _busy = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          e.toString().contains('Not enough slots')
+              ? 'Sorry, those slots were just taken. Please choose fewer slots or a different room.'
+              : 'Payment error: $e',
+        ),
+        backgroundColor: _kRed,
+        duration: const Duration(seconds: 5),
+      ));
+      return;
+    }
+
     await BookingStorageService.saveBookingId(_bookingId!);
     if (!mounted) return;
     widget.onSuccess(_bookingId!, _slots);
