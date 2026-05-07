@@ -1,4 +1,6 @@
 // lib/widgets/popular_properties.dart
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -32,53 +34,56 @@ class PopularProperties extends StatefulWidget {
 class _PopularPropertiesState extends State<PopularProperties> {
   final CarouselSliderController _controller = CarouselSliderController();
 
+  StreamSubscription<QuerySnapshot>? _sub;
   List<Hostel> _hostels = [];
   _LoadState _state = _LoadState.loading;
 
   @override
   void initState() {
     super.initState();
-    _loadHostels();
+    _listenHostels();
   }
 
-  Future<void> _loadHostels() async {
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  void _listenHostels() {
     setState(() => _state = _LoadState.loading);
-
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('hostels')
-          .orderBy('hostel_name')
-          .limit(10)
-          .get();
-
-      if (!mounted) return;
-
-      if (snapshot.docs.isEmpty) {
-        setState(() => _state = _LoadState.empty);
-        return;
-      }
-
-      final hostels = <Hostel>[];
-      for (final doc in snapshot.docs) {
-        try {
-          hostels.add(Hostel.fromJson(doc.id, doc.data()));
-        } catch (e) {
-          debugPrint('❌ Failed to parse ${doc.id}: $e');
+    _sub = FirebaseFirestore.instance
+        .collection('hostels')
+        .orderBy('hostel_name')
+        .limit(10)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        if (snapshot.docs.isEmpty) {
+          setState(() => _state = _LoadState.empty);
+          return;
         }
-      }
-
-      setState(() {
-        _hostels = hostels;
-        _state = hostels.isEmpty ? _LoadState.empty : _LoadState.success;
-      });
-
-      // Warm image cache immediately after data loads
-      if (mounted) _precacheImages();
-    } catch (e) {
-      debugPrint('❌ Firestore error: $e');
-      if (!mounted) return;
-      setState(() => _state = _LoadState.error);
-    }
+        final hostels = <Hostel>[];
+        for (final doc in snapshot.docs) {
+          try {
+            hostels.add(Hostel.fromJson(doc.id, doc.data()));
+          } catch (e) {
+            debugPrint('❌ Failed to parse ${doc.id}: $e');
+          }
+        }
+        setState(() {
+          _hostels = hostels;
+          _state = hostels.isEmpty ? _LoadState.empty : _LoadState.success;
+        });
+        if (mounted) _precacheImages();
+      },
+      onError: (e) {
+        debugPrint('❌ Firestore stream error: $e');
+        if (!mounted) return;
+        setState(() => _state = _LoadState.error);
+      },
+    );
   }
 
   /// Downloads all carousel images into cache in the background.
@@ -230,7 +235,10 @@ class _PopularPropertiesState extends State<PopularProperties> {
           const Text('Could not load hostels', style: TextStyle(fontSize: 16)),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: _loadHostels,
+            onPressed: () {
+              _sub?.cancel();
+              _listenHostels();
+            },
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
             child: const Text('Retry'),
           ),
@@ -262,7 +270,6 @@ class _HostelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Optimized Cloudinary URL — WebP/AVIF, compressed, resized
     final imageUrl =
         buildImageUrl(hostel.image, seed: hostel.hostelCode, width: 800);
     final available = hostel.roomsAvailable;

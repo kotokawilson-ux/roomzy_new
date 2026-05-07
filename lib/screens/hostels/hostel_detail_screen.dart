@@ -15,6 +15,9 @@ import '../../services/booking_storage_service.dart';
 import '../../models/models.dart';
 import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
+import 'dart:async'; // ← add this
+import 'dart:convert';
+import 'dart:math';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -132,7 +135,6 @@ class RoomModel {
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
-
 class HostelDetailScreen extends StatefulWidget {
   final String hostelId;
   const HostelDetailScreen({super.key, required this.hostelId});
@@ -148,59 +150,96 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
   bool _loading = true;
   String? _error;
 
+  // Keep stream subscriptions so we can cancel them on dispose
+  StreamSubscription? _hostelSub;
+  StreamSubscription? _roomsSub;
+  StreamSubscription? _facilitiesSub;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _startListeners();
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _hostelSub?.cancel();
+    _roomsSub?.cancel();
+    _facilitiesSub?.cancel();
+    super.dispose();
+  }
+
+  void _startListeners() {
     setState(() {
       _loading = true;
       _error = null;
     });
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('hostels')
-          .doc(widget.hostelId)
-          .get();
-      if (!doc.exists) throw Exception('Hostel not found');
 
-      final roomsSnap = await FirebaseFirestore.instance
-          .collection('rooms')
-          .where('hostel_id', isEqualTo: widget.hostelId)
-          .get();
+    // ── 1. Hostel details — live
+    _hostelSub = FirebaseFirestore.instance
+        .collection('hostels')
+        .doc(widget.hostelId)
+        .snapshots()
+        .listen(
+      (doc) {
+        if (!mounted) return;
+        if (!doc.exists) {
+          setState(() {
+            _error = 'Hostel not found';
+            _loading = false;
+          });
+          return;
+        }
+        final hostel = Hostel.fromJson(doc.id, doc.data()!);
+        setState(() {
+          _hostel = hostel;
+          _loading = false;
+        });
+        _precacheAllImages(hostel, _rooms);
+      },
+      onError: (e) {
+        if (!mounted) return;
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      },
+    );
 
-      final facSnap = await FirebaseFirestore.instance
-          .collection('facilities')
-          .where('hostel_id', isEqualTo: widget.hostelId)
-          .get();
-
-      if (!mounted) return;
-
-      final hostel = Hostel.fromJson(doc.id, doc.data()!);
-      final rooms = roomsSnap.docs
-          .map((d) => RoomModel.fromFirestore(d.id, d.data()))
-          .toList();
-
-      setState(() {
-        _hostel = hostel;
-        _rooms = rooms;
-        _facilities = facSnap.docs
-            .map((d) => (d.data()['facility_name'] ?? '') as String)
-            .where((f) => f.isNotEmpty)
+    // ── 2. Rooms — live
+    _roomsSub = FirebaseFirestore.instance
+        .collection('rooms')
+        .where('hostel_id', isEqualTo: widget.hostelId)
+        .snapshots()
+        .listen(
+      (snap) {
+        if (!mounted) return;
+        final rooms = snap.docs
+            .map((d) => RoomModel.fromFirestore(d.id, d.data()))
             .toList();
-        _loading = false;
-      });
+        setState(() => _rooms = rooms);
+        if (_hostel != null) _precacheAllImages(_hostel!, rooms);
+      },
+      onError: (e) => debugPrint('Rooms error: $e'),
+    );
 
-      if (mounted) _precacheAllImages(hostel, rooms);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
-    }
+    // ── 3. Facilities — live
+    _facilitiesSub = FirebaseFirestore.instance
+        .collection('facilities')
+        .where('hostel_id', isEqualTo: widget.hostelId)
+        .snapshots()
+        .listen(
+      (snap) {
+        if (!mounted) return;
+        setState(() {
+          _facilities = snap.docs
+              .map((d) => (d.data()['facility_name'] ?? '') as String)
+              .where((f) => f.isNotEmpty)
+              .toList();
+        });
+      },
+      onError: (e) => debugPrint('Facilities error: $e'),
+    );
   }
 
   void _precacheAllImages(Hostel hostel, List<RoomModel> rooms) {
@@ -222,12 +261,7 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
   }
 
   void _onBooked(String roomId, int slots) {
-    setState(() {
-      final i = _rooms.indexWhere((r) => r.id == roomId);
-      if (i != -1) {
-        _rooms[i] = _rooms[i].copyWith(booked: _rooms[i].booked + slots);
-      }
-    });
+    // Rooms listener handles this automatically in real-time
   }
 
   @override
@@ -236,7 +270,9 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
       return const Scaffold(
           body: Center(child: CircularProgressIndicator(color: _kPrimary)));
     }
-    if (_error != null) return _ErrorView(message: _error!, onRetry: _load);
+    if (_error != null) {
+      return _ErrorView(message: _error!, onRetry: _startListeners);
+    }
     if (_hostel == null) {
       return const Scaffold(body: Center(child: Text('Hostel not found')));
     }
@@ -277,7 +313,6 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
     );
   }
 }
-
 // ─── 1. HERO ─────────────────────────────────────────────────────────────────
 
 class _HeroSection extends StatefulWidget {

@@ -9,6 +9,8 @@ import 'package:responsive_framework/responsive_framework.dart';
 
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
+import 'dart:async'; // ← add this
+import 'package:cached_network_image/cached_network_image.dart';
 
 enum _LoadState { loading, success, empty, error }
 
@@ -44,11 +46,18 @@ class _HostelsListState extends State<HostelsList> {
   List<Hostel> _hostels = [];
   List<Hostel> _filtered = [];
   _LoadState _state = _LoadState.loading;
+  StreamSubscription? _hostelsSub; // ← add this
 
   @override
   void initState() {
     super.initState();
-    _loadHostels();
+    _startListener();
+  }
+
+  @override
+  void dispose() {
+    _hostelsSub?.cancel(); // ← cancel on dispose
+    super.dispose();
   }
 
   @override
@@ -59,49 +68,47 @@ class _HostelsListState extends State<HostelsList> {
     }
   }
 
-  Future<void> _loadHostels() async {
+  void _startListener() {
     setState(() => _state = _LoadState.loading);
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('hostels')
-          .orderBy('hostel_name')
-          .get();
-      if (!mounted) return;
 
-      if (snapshot.docs.isEmpty) {
-        setState(() => _state = _LoadState.empty);
-        return;
-      }
+    _hostelsSub = FirebaseFirestore.instance
+        .collection('hostels')
+        .orderBy('hostel_name')
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
 
-      final hostels = <Hostel>[];
-      for (final doc in snapshot.docs) {
-        try {
-          hostels.add(Hostel.fromJson(doc.id, doc.data()));
-        } catch (e) {
-          debugPrint('❌ Failed to parse ${doc.id}: $e');
+        if (snapshot.docs.isEmpty) {
+          setState(() => _state = _LoadState.empty);
+          return;
         }
-      }
 
-      setState(() {
-        _hostels = hostels;
-        _filtered = hostels;
-        _state = _LoadState.success;
-      });
+        final hostels = <Hostel>[];
+        for (final doc in snapshot.docs) {
+          try {
+            hostels.add(Hostel.fromJson(doc.id, doc.data()));
+          } catch (e) {
+            debugPrint('❌ Failed to parse ${doc.id}: $e');
+          }
+        }
 
-      // Warm the image cache right after data loads — before user even scrolls
-      if (mounted) _precacheImages();
+        setState(() {
+          _hostels = hostels;
+          _state = _LoadState.success;
+        });
 
-      if (widget.searchQuery.isNotEmpty) {
         _applySearch(widget.searchQuery);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _state = _LoadState.error);
-    }
+        if (mounted) _precacheImages();
+      },
+      onError: (e) {
+        if (!mounted) return;
+        debugPrint('❌ Hostels listener error: $e');
+        setState(() => _state = _LoadState.error);
+      },
+    );
   }
 
-  /// Downloads all hostel images into cache in the background.
-  /// By the time the user scrolls, images are already cached — instant display.
   void _precacheImages() {
     for (final hostel in _hostels) {
       final url = buildImageUrl(hostel.image, width: 800);
@@ -230,7 +237,7 @@ class _HostelsListState extends State<HostelsList> {
                 style: TextStyle(fontSize: 16)),
             const SizedBox(height: 12),
             ElevatedButton(
-              onPressed: _loadHostels,
+              onPressed: _startListener,
               style:
                   ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
               child: const Text('Retry'),
