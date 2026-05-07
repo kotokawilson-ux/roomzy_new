@@ -268,7 +268,7 @@ class _HostelCard extends StatelessWidget {
     final available = hostel.roomsAvailable;
 
     return GestureDetector(
-      onTap: () => context.go('/hostels/${hostel.id}'),
+      onTap: () => context.push('/hostels/${hostel.id}'),
       child: Container(
         width: width,
         margin: const EdgeInsets.symmetric(horizontal: 8),
@@ -437,7 +437,8 @@ class _HostelCard extends StatelessWidget {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: () => context.go('/hostels/${hostel.id}'),
+                          onPressed: () =>
+                              context.push('/hostels/${hostel.id}'),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.primary,
                             foregroundColor: Colors.white,

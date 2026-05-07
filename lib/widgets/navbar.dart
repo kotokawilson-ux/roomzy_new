@@ -17,13 +17,21 @@ class _MenuItem {
   });
 }
 
+/// Helper — decides whether to push or go based on the route
+void _navigate(BuildContext context, String route) {
+  if (route == '/home') {
+    context.go(route); // Home always clears the stack
+  } else {
+    context.push(route); // All other routes keep the stack
+  }
+}
+
 /// NAVBAR
 class Navbar extends StatelessWidget implements PreferredSizeWidget {
   const Navbar({super.key});
 
-  // Increase the height here
   @override
-  Size get preferredSize => const Size.fromHeight(140); // was 100
+  Size get preferredSize => const Size.fromHeight(140);
 
   static const List<_MenuItem> _menuItems = [
     _MenuItem(label: "Home", route: "/home", icon: Icons.home),
@@ -41,7 +49,7 @@ class Navbar extends StatelessWidget implements PreferredSizeWidget {
 
     return Container(
       decoration: const BoxDecoration(
-        color: Color(0xFF0F766E), // teal
+        color: Color(0xFF0F766E),
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(12)),
         boxShadow: [
           BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 3))
@@ -49,12 +57,11 @@ class Navbar extends StatelessWidget implements PreferredSizeWidget {
       ),
       child: SafeArea(
         child: Padding(
-          // Increase vertical padding to make it taller
           padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              /// LOGO
+              /// LOGO — always goes home and clears stack
               GestureDetector(
                 onTap: () => context.go('/home'),
                 child: const Text(
@@ -95,7 +102,7 @@ class Navbar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-/// NAV ITEM
+/// NAV ITEM (desktop)
 class _NavItem extends StatelessWidget {
   final _MenuItem item;
   const _NavItem({required this.item});
@@ -103,7 +110,7 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => context.go(item.route),
+      onTap: () => _navigate(context, item.route),
       child: Text(
         item.label,
         style: TextStyle(
@@ -167,8 +174,8 @@ class NavbarDrawer extends StatelessWidget {
                     style: TextStyle(
                         color: item.isLogout ? Colors.redAccent : null)),
                 onTap: () {
-                  context.go(item.route);
-                  Navigator.pop(context); // close drawer after tap
+                  Navigator.pop(context); // close drawer first
+                  _navigate(context, item.route); // then navigate
                 },
               )),
         ],
