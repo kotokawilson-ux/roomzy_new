@@ -151,7 +151,7 @@ class _NavItem extends StatelessWidget {
     return InkWell(
       onTap: () {
         if (item.isLogout) {
-          _handleLogout(context); // ← logout action, not navigation
+          _handleLogout(context);
         } else {
           _navigate(context, item.route);
         }
@@ -219,10 +219,15 @@ class NavbarDrawer extends StatelessWidget {
                     style: TextStyle(
                         color: item.isLogout ? Colors.redAccent : null)),
                 onTap: () {
-                  Navigator.pop(context); // close drawer first
                   if (item.isLogout) {
-                    _handleLogout(context); // ← logout action, not navigation
+                    // Close drawer first, then logout after frame completes
+                    // so the context remains valid for the dialog and navigation
+                    Navigator.pop(context);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (context.mounted) _handleLogout(context);
+                    });
                   } else {
+                    Navigator.pop(context);
                     _navigate(context, item.route);
                   }
                 },
