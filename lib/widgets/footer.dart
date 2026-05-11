@@ -150,7 +150,7 @@ class Footer extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-        _contactItem(Icons.email_rounded, 'kotokawilson@roomzyfind.com'),
+        _contactItem(Icons.email_rounded, 'roomzyfind@roomzyfind.com'),
         _contactItem(Icons.phone_rounded, '+233 25 721 9035'),
         _contactItem(Icons.location_on_rounded, 'Ghana'),
       ],

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 import 'package:responsive_framework/responsive_framework.dart';
+
+import '../../services/auth_service.dart';
 
 /// Menu item model
 class _MenuItem {
@@ -20,9 +23,45 @@ class _MenuItem {
 /// Helper — decides whether to push or go based on the route
 void _navigate(BuildContext context, String route) {
   if (route == '/home') {
-    context.go(route); // Home always clears the stack
+    context.go(route);
   } else {
-    context.push(route); // All other routes keep the stack
+    context.push(route);
+  }
+}
+
+/// Handles logout — calls AuthService then redirects to /login
+Future<void> _handleLogout(BuildContext context) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Row(
+        children: [
+          Icon(Icons.logout, color: Colors.redAccent),
+          SizedBox(width: 10),
+          Text('Logout',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        ],
+      ),
+      content: const Text('Are you sure you want to logout?',
+          style: TextStyle(fontSize: 14, color: Colors.black54)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Logout', style: TextStyle(color: Colors.white)),
+        ),
+      ],
+    ),
+  );
+
+  if (confirmed == true && context.mounted) {
+    await context.read<AuthService>().logout();
+    if (context.mounted) context.go('/login');
   }
 }
 
@@ -61,7 +100,7 @@ class Navbar extends StatelessWidget implements PreferredSizeWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              /// LOGO — always goes home and clears stack
+              /// LOGO
               GestureDetector(
                 onTap: () => context.go('/home'),
                 child: const Text(
@@ -110,7 +149,13 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => _navigate(context, item.route),
+      onTap: () {
+        if (item.isLogout) {
+          _handleLogout(context); // ← logout action, not navigation
+        } else {
+          _navigate(context, item.route);
+        }
+      },
       child: Text(
         item.label,
         style: TextStyle(
@@ -175,7 +220,11 @@ class NavbarDrawer extends StatelessWidget {
                         color: item.isLogout ? Colors.redAccent : null)),
                 onTap: () {
                   Navigator.pop(context); // close drawer first
-                  _navigate(context, item.route); // then navigate
+                  if (item.isLogout) {
+                    _handleLogout(context); // ← logout action, not navigation
+                  } else {
+                    _navigate(context, item.route);
+                  }
                 },
               )),
         ],

@@ -1,9 +1,10 @@
+// lib/core/router/app_router.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+
 import '../../services/auth_service.dart';
-import '../../screens/splash/splash_screen.dart';
 import '../../screens/home/home_screen.dart';
 import '../../screens/auth/login_screen.dart';
 import '../../screens/auth/register_screen.dart';
@@ -16,11 +17,8 @@ import '../../screens/about/about_screen.dart';
 import '../../screens/contact/contact_screen.dart';
 import '../../screens/landlord/landlord_dashboard_screen.dart';
 import '../../screens/admin/admin_dashboard_screen.dart';
+import 'auth_gate.dart';
 
-/// ─── BACK HANDLER WRAPPER ───────────────────────────────
-/// Replaces the deprecated WillPopScope with PopScope.
-/// - On HomeScreen: shows an exit confirmation dialog.
-/// - On all other screens: lets GoRouter handle back navigation normally.
 class BackHandlerWrapper extends StatelessWidget {
   final Widget child;
   final bool isHome;
@@ -34,12 +32,10 @@ class BackHandlerWrapper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (isHome) {
-      // ── Home screen: intercept back and show exit dialog ──
       return PopScope(
         canPop: false,
         onPopInvokedWithResult: (didPop, result) async {
           if (didPop) return;
-
           final shouldExit = await showDialog<bool>(
             context: context,
             barrierDismissible: false,
@@ -50,10 +46,9 @@ class BackHandlerWrapper extends StatelessWidget {
                 children: [
                   Icon(Icons.exit_to_app_rounded, color: Color(0xFF0F766E)),
                   SizedBox(width: 10),
-                  Text(
-                    'Exit App',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                  ),
+                  Text('Exit App',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                 ],
               ),
               content: const Text(
@@ -72,7 +67,6 @@ class BackHandlerWrapper extends StatelessWidget {
               ],
             ),
           );
-
           if (shouldExit == true) {
             if (!kIsWeb) SystemNavigator.pop();
           }
@@ -80,23 +74,14 @@ class BackHandlerWrapper extends StatelessWidget {
         child: child,
       );
     }
-
-    // ── All other screens: allow normal GoRouter back navigation ──
-    return PopScope(
-      canPop: true,
-      child: child,
-    );
+    return PopScope(canPop: true, child: child);
   }
 }
 
-/// ─── APP ROUTER ─────────────────────────────────────────
 class AppRouter {
   static final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
-  // Wrap normal screens (back navigation works as expected)
   static Widget _wrap(Widget screen) => BackHandlerWrapper(child: screen);
-
-  // Wrap home screen (shows exit dialog on back press)
   static Widget _wrapHome(Widget screen) =>
       BackHandlerWrapper(child: screen, isHome: true);
 
@@ -104,40 +89,38 @@ class AppRouter {
     return GoRouter(
       navigatorKey: _rootNavigatorKey,
       initialLocation: '/',
+
+      // ── Minimal redirect — only blocks truly unauthorized access ──────────
+      // We do NOT redirect based on role here because login_screen.dart and
+      // auth_gate.dart already handle role-based routing directly.
+      // Adding role redirects here caused the bug: after login, the router
+      // would fire redirect before the role loaded and send admin to /home.
       redirect: (context, state) {
         if (authService == null) return null;
 
         final isLoggedIn = authService.isLoggedIn;
-        final role = authService.userRole;
         final path = state.uri.path;
 
-        if (path.startsWith('/landlord') && role != 'landlord') return '/login';
-        if (path.startsWith('/admin') && role != 'admin') return '/login';
-        if (path.startsWith('/bookings') && !isLoggedIn) return '/login';
+        // Only block guests from protected routes
+        if (!isLoggedIn &&
+            (path.startsWith('/bookings') ||
+                path.startsWith('/profile') ||
+                path.startsWith('/admin') ||
+                path.startsWith('/landlord'))) {
+          return '/login';
+        }
 
         return null;
       },
+
       routes: [
-        // Splash — no back navigation needed
         GoRoute(
           path: '/',
-          builder: (context, state) => _wrap(const SplashScreen()),
+          builder: (context, state) => const AuthGate(),
         ),
-
-        // Home — shows exit dialog on back press
         GoRoute(
           path: '/home',
           builder: (context, state) => _wrapHome(const HomeScreen()),
-        ),
-
-        // All other screens — normal back navigation
-        GoRoute(
-          path: '/about',
-          builder: (context, state) => _wrap(const AboutScreen()),
-        ),
-        GoRoute(
-          path: '/contact',
-          builder: (context, state) => _wrap(const ContactScreen()),
         ),
         GoRoute(
           path: '/login',
@@ -146,6 +129,14 @@ class AppRouter {
         GoRoute(
           path: '/register',
           builder: (context, state) => _wrap(const RegisterScreen()),
+        ),
+        GoRoute(
+          path: '/about',
+          builder: (context, state) => _wrap(const AboutScreen()),
+        ),
+        GoRoute(
+          path: '/contact',
+          builder: (context, state) => _wrap(const ContactScreen()),
         ),
         GoRoute(
           path: '/hostels',

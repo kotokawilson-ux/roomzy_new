@@ -1,30 +1,45 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:provider/provider.dart';
 import 'package:responsive_framework/responsive_framework.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'services/auth_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  runApp(const RoomzyFindApp());
+
+  final authService = AuthService();
+  // Router is created ONCE here — never recreated on rebuilds
+  final router = AppRouter.router(authService);
+
+  runApp(
+    ChangeNotifierProvider<AuthService>.value(
+      value: authService,
+      child: RoomzyFindApp(router: router),
+    ),
+  );
 }
 
 class RoomzyFindApp extends StatelessWidget {
-  const RoomzyFindApp({super.key});
+  const RoomzyFindApp({super.key, required this.router});
+  final dynamic router;
 
   @override
   Widget build(BuildContext context) {
+    // Use context.read — NOT context.watch — so rebuilds don't affect the router
     return MaterialApp.router(
       title: 'RoomzyFind',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      routerConfig: AppRouter.router(),
+      routerConfig: router,
       scrollBehavior: _AppScrollBehavior(),
       builder: _responsiveBuilder,
     );
