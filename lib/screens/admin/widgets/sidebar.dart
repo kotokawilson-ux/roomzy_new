@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../constants/admin_theme.dart';
 import '../../../utils/activity_logger.dart';
 import '../admin_section.dart';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // SIDEBAR
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,23 +320,20 @@ class _SidebarItemState extends State<_SidebarItem> {
                   ),
 
                   // ── Badge ──
-                  if (badge != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE24B4A),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        '$badge',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
+                  if (widget.section == AdminSection.liveChat)
+                    StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('chats')
+                          .where('unreadByAdmin', isEqualTo: true)
+                          .snapshots(),
+                      builder: (_, snap) {
+                        final count = snap.data?.docs.length ?? 0;
+                        if (count == 0) return const SizedBox.shrink();
+                        return _Badge(count: count);
+                      },
+                    )
+                  else if (badge != null)
+                    _Badge(count: badge!),
                 ],
               ],
             ),
@@ -430,4 +427,28 @@ class _SidebarDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       const Divider(color: Colors.white10, height: 1, thickness: 1);
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge({required this.count});
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE24B4A),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '$count',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
 }

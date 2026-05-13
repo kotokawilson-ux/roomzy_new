@@ -115,7 +115,6 @@ extension AdminSectionInfo on AdminSection {
   int? get staticBadge => const {
         AdminSection.bookings: 5,
         AdminSection.payments: 2,
-        AdminSection.liveChat: 3,
       }[this];
 
   /// Show a green "live" dot instead of a numbered badge

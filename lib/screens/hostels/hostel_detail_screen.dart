@@ -1,5 +1,6 @@
 // lib/screens/hostel/hostel_detail_screen.dart
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -15,9 +16,6 @@ import '../../services/booking_storage_service.dart';
 import '../../models/models.dart';
 import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
-import 'dart:async'; // ← add this
-import 'dart:convert';
-import 'dart:math';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -31,6 +29,17 @@ const _kOrange = Color(0xFFEA580C);
 // ── Paystack secret key ───────────────────────────────────────────────────────
 const _kPaystackSecretKey = 'sk_test_6350329ac171a2de1a9b7e6309865e837b163d12';
 const _kPaystackBaseUrl = 'https://api.paystack.co';
+
+// ── Paystack test MoMo numbers (Ghana sandbox) ──────────────────────────────
+// These are Paystack's official test numbers for Ghana MoMo sandbox testing.
+// In test mode, any of these numbers will simulate a successful payment
+// without real money being deducted.
+const _kTestMomoNumbers = {
+  '0551234987', // MTN — success
+  '0571234987', // Vodafone — success
+  '0201234987', // MTN — success (alternate)
+  '0261234987', // AirtelTigo — success
+};
 
 // ─── Unique reference generator ──────────────────────────────────────────────
 String _generateReference() {
@@ -76,6 +85,24 @@ String _mapSrc(String? iframe) {
   if (iframe == null) return '';
   final cleaned = iframe.replaceAll(r'\"', '"').replaceAll('&amp;', '&');
   return RegExp(r'src="([^"]+)"').firstMatch(cleaned)?.group(1) ?? '';
+}
+
+// ─── Activity Log Helper ──────────────────────────────────────────────────────
+Future<void> _logActivity({
+  required String action,
+  required String details,
+  required String userEmail,
+}) async {
+  try {
+    await FirebaseFirestore.instance.collection('activityLog').add({
+      'action': action,
+      'details': details,
+      'userEmail': userEmail,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    debugPrint('Failed to log activity: $e');
+  }
 }
 
 // ─── RoomModel ───────────────────────────────────────────────────────────────
@@ -1559,6 +1586,10 @@ class _BookingSheetState extends State<_BookingSheet> {
 
   void _refreshReference() => _paymentReference = _generateReference();
 
+  // Check if the entered MoMo number is a test number
+  bool get _isTestNumber =>
+      _kTestMomoNumbers.contains(_momoNumber.text.trim().replaceAll(' ', ''));
+
   @override
   void dispose() {
     _name.dispose();
@@ -1624,9 +1655,23 @@ class _BookingSheetState extends State<_BookingSheet> {
       _step = 2;
       _busy = true;
     });
+
     try {
+      // ── TEST MODE SHORTCUT ────────────────────────────────────────────────
+      // If the user entered a known Paystack sandbox test number, skip the
+      // real API call and simulate an instant success. When you switch to
+      // your live secret key (sk_live_...) this branch is never reached
+      // because real numbers won't match the test set.
+      if (_isTestNumber) {
+        await Future.delayed(const Duration(seconds: 2)); // mimic network delay
+        await _onPaymentSuccess(_paymentReference);
+        return;
+      }
+
+      // ── LIVE / NORMAL PAYSTACK FLOW ───────────────────────────────────────
       final provider = _momoProvider == 'mtn' ? 'mtn' : 'vod';
       final amountInPesewas = (_totalAmount * 100).toInt();
+
       final chargeRes = await http.post(
         Uri.parse('$_kPaystackBaseUrl/charge'),
         headers: {
@@ -1650,8 +1695,10 @@ class _BookingSheetState extends State<_BookingSheet> {
           },
         }),
       );
+
       final chargeData = jsonDecode(chargeRes.body);
       final status = chargeData['data']?['status'];
+
       if (status == 'pay_offline' ||
           status == 'pending' ||
           status == 'send_otp') {
@@ -1743,6 +1790,14 @@ class _BookingSheetState extends State<_BookingSheet> {
           },
         );
       });
+
+      // ── Log the booking activity ──────────────────────────────────────────
+      await _logActivity(
+        action: 'Booking Confirmed',
+        details:
+            'User ${_email.text.trim()} booked ${_slots} slot(s) in Room ${widget.room.roomNumber} (${widget.room.type}) at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. ${_isTestNumber ? "(Test mode payment)" : "(Live payment)"}',
+        userEmail: _email.text.trim(),
+      );
     } catch (e) {
       // Slots were taken by someone else between form open and payment
       if (!mounted) return;
@@ -1995,6 +2050,9 @@ class _BookingSheetState extends State<_BookingSheet> {
     final otherPayment = widget.hostel.paymentOther;
     final hasMomo = momoNumber.isNotEmpty;
 
+    // Show test mode indicator if the user enters a test number
+    final isTestMode = _isTestNumber;
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionLabel(
           'Landlord\'s Payment Details', Icons.account_balance_wallet_rounded),
@@ -2080,6 +2138,32 @@ class _BookingSheetState extends State<_BookingSheet> {
             validator: (v) =>
                 v!.trim().length < 10 ? 'Enter a valid MoMo number' : null),
         const SizedBox(height: 16),
+
+        // Test mode indicator
+        if (isTestMode)
+          Container(
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+              color: _kGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kGreen.withOpacity(0.3)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.science_rounded, color: _kGreen),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Test Mode Detected: Your payment will be simulated. No real money will be deducted.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _kGreen,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ]),
+          ),
       ],
       Container(
         padding: const EdgeInsets.all(16),
@@ -2116,7 +2200,9 @@ class _BookingSheetState extends State<_BookingSheet> {
           Flexible(
               child: Text(
             hasMomo
-                ? 'You will receive a MoMo prompt on your phone to approve the payment.'
+                ? isTestMode
+                    ? 'TEST MODE: No actual payment will be processed. Your booking will be confirmed immediately.'
+                    : 'You will receive a MoMo prompt on your phone to approve the payment.'
                 : 'Please pay using one of the methods above and contact the hostel to confirm.',
             style: const TextStyle(
                 fontSize: 12, color: _kOrange, fontWeight: FontWeight.w500),
@@ -2130,7 +2216,7 @@ class _BookingSheetState extends State<_BookingSheet> {
           child: ElevatedButton(
             onPressed: _busy ? null : _initiatePayment,
             style: ElevatedButton.styleFrom(
-              backgroundColor: _kGreen,
+              backgroundColor: isTestMode ? _kGreen : _kGreen,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(
@@ -2138,15 +2224,14 @@ class _BookingSheetState extends State<_BookingSheet> {
               elevation: 3,
               shadowColor: _kGreen.withOpacity(0.4),
             ),
-            child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.lock_rounded, size: 18),
-                  SizedBox(width: 8),
-                  Text('Pay Now',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                ]),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Icon(isTestMode ? Icons.science_rounded : Icons.lock_rounded,
+                  size: 18),
+              const SizedBox(width: 8),
+              Text(isTestMode ? 'Simulate Payment' : 'Pay Now',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w800)),
+            ]),
           ),
         ),
       if (!hasMomo)
@@ -2164,6 +2249,15 @@ class _BookingSheetState extends State<_BookingSheet> {
                       'status': 'pending',
                       'payment_status': 'pending',
                     });
+
+                    // Log the booking (offline payment)
+                    await _logActivity(
+                      action: 'Booking Created (Offline Payment)',
+                      details:
+                          'User ${_email.text.trim()} created booking for ${_slots} slot(s) in Room ${widget.room.roomNumber} (${widget.room.type}) at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. Payment to be made offline.',
+                      userEmail: _email.text.trim(),
+                    );
+
                     await BookingStorageService.saveBookingId(_bookingId!);
                     if (!mounted) return;
                     widget.onSuccess(_bookingId!, _slots);
@@ -2206,21 +2300,31 @@ class _BookingSheetState extends State<_BookingSheet> {
   }
 
   Widget _buildProcessingStep() {
+    final isTestMode = _isTestNumber;
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 60),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const CircularProgressIndicator(color: _kPrimary, strokeWidth: 3),
           const SizedBox(height: 24),
-          const Text('Processing Payment…',
-              style: TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w700, color: _kDark)),
-          const SizedBox(height: 12),
           Text(
-              'Check your ${_momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash'} phone for a payment prompt.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 14, color: Colors.black45, height: 1.5)),
+            isTestMode ? 'Simulating Payment…' : 'Processing Payment…',
+            style: const TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w700, color: _kDark),
+          ),
+          const SizedBox(height: 12),
+          if (!isTestMode)
+            Text(
+                'Check your ${_momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash'} phone for a payment prompt.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 14, color: Colors.black45, height: 1.5)),
+          if (isTestMode)
+            const Text(
+                'Test Mode: No actual payment required. Confirming your booking...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 14, color: Colors.black45, height: 1.5)),
           const SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.all(16),

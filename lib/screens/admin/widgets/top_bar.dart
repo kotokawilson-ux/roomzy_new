@@ -82,31 +82,16 @@ bool _isTablet(BuildContext ctx) {
 // TOP BAR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Place this widget at the top of every admin page / scaffold.
-///
-/// Required props
-/// • [section]              – current [AdminSection] (drives the breadcrumb label)
-/// • [onMenuTap]            – called when the hamburger icon is tapped (phone)
-/// • [onNavigateToSection]  – called when "View all" / "Open Live Chat" is tapped
-///
-/// Integration example (in your admin shell):
-/// ```dart
-/// TopBar(
-///   section: _currentSection,
-///   onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
-///   onNavigateToSection: (s) => setState(() => _currentSection = s),
-/// )
-/// ```
 class TopBar extends StatefulWidget {
   const TopBar({
     super.key,
     required this.section,
-    required this.onMenuTap,
+    this.onMenuTap,
     required this.onNavigateToSection,
   });
 
   final AdminSection section;
-  final VoidCallback onMenuTap;
+  final VoidCallback? onMenuTap;
   final void Function(AdminSection) onNavigateToSection;
 
   @override
@@ -131,11 +116,14 @@ class _TopBarState extends State<TopBar> {
       .map((s) => s.docs.length);
 
   Stream<int> get _unreadMsgCount => FirebaseFirestore.instance
-      .collection('messages')
-      .where('toAdmin', isEqualTo: true)
-      .where('read', isEqualTo: false)
-      .snapshots()
-      .map((s) => s.docs.length);
+          .collection('chats')
+          .where('unreadByAdmin', isEqualTo: true)
+          .snapshots()
+          .map((s) => s.docs.length)
+          .handleError((e) {
+        debugPrint('🔴 unreadMsgCount error: $e');
+        return 0;
+      });
 
   // ── Overlay helpers ───────────────────────────────────────────────────────
 
@@ -148,6 +136,8 @@ class _TopBarState extends State<TopBar> {
     _msgOverlay = null;
   }
 
+  // FIX: tighter edge clamp (screenW - 16) and added Offset(8, 8) so the
+  // panel never bleeds off the right edge on narrow phones.
   OverlayEntry _buildOverlay({
     required LayerLink link,
     required double desiredWidth,
@@ -156,7 +146,7 @@ class _TopBarState extends State<TopBar> {
     return OverlayEntry(
       builder: (ctx) {
         final screenW = MediaQuery.of(ctx).size.width;
-        final safeW = desiredWidth.clamp(0.0, screenW - 24);
+        final safeW = desiredWidth.clamp(0.0, screenW - 16);
         return Stack(
           children: [
             Positioned.fill(
@@ -169,7 +159,7 @@ class _TopBarState extends State<TopBar> {
               link: link,
               targetAnchor: Alignment.bottomRight,
               followerAnchor: Alignment.topRight,
-              offset: const Offset(0, 8),
+              offset: const Offset(8, 8), // FIX: breathing room from edge
               child: Material(
                 color: Colors.transparent,
                 child: SizedBox(width: safeW, child: child),
@@ -204,10 +194,9 @@ class _TopBarState extends State<TopBar> {
     final w = MediaQuery.of(ctx).size.width;
     _notifOverlay = _buildOverlay(
       link: _notifLink,
-      desiredWidth: w < 400 ? w - 32 : 340,
+      desiredWidth: w < 400 ? w - 16 : 340, // FIX: tighter clamp for phones
       child: _NotificationPanel(
         onClose: _closeAll,
-        // ✅ navigates to the Activity Log page
         onViewAll: () {
           _closeAll();
           widget.onNavigateToSection(AdminSection.activityLog);
@@ -226,10 +215,9 @@ class _TopBarState extends State<TopBar> {
     final w = MediaQuery.of(ctx).size.width;
     _msgOverlay = _buildOverlay(
       link: _msgLink,
-      desiredWidth: w < 400 ? w - 32 : 320,
+      desiredWidth: w < 400 ? w - 16 : 320, // FIX: tighter clamp for phones
       child: _MessagesPanel(
         onClose: _closeAll,
-        // ✅ navigates to the Live Chat page
         onOpenChat: () {
           _closeAll();
           widget.onNavigateToSection(AdminSection.liveChat);
@@ -251,11 +239,10 @@ class _TopBarState extends State<TopBar> {
   Widget build(BuildContext context) {
     final phone = _isPhone(context);
     final tablet = _isTablet(context);
-    final showBreadcrumb = !phone; // tablet + desktop
-    final showNameText = !phone && !tablet; // desktop only
+    final showBreadcrumb = !phone;
+    final showNameText = !phone && !tablet;
 
     return Container(
-      // ✅ Always visible on every screen size; height adapts
       height: phone ? 56 : 64,
       padding: EdgeInsets.symmetric(horizontal: phone ? 12 : 20),
       decoration: const BoxDecoration(
@@ -268,12 +255,21 @@ class _TopBarState extends State<TopBar> {
       child: Row(
         children: [
           // ── Hamburger (phone only) ──────────────────────────────────────
-          if (phone) ...[
+          if (phone && widget.onMenuTap != null) ...[
+            // FIX: wrapped in 44×44 tap target for mobile accessibility
             GestureDetector(
-              onTap: widget.onMenuTap,
-              child: const Icon(Icons.menu_rounded, size: 22, color: kTextDark),
+              onTap: widget.onMenuTap ?? () {},
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: const Icon(
+                  Icons.menu_rounded,
+                  size: 22,
+                  color: kTextDark,
+                ),
+              ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 4),
           ],
 
           // ── Breadcrumb / page title ─────────────────────────────────────
@@ -320,7 +316,8 @@ class _TopBarState extends State<TopBar> {
             ),
           ),
 
-          SizedBox(width: phone ? 2 : 6),
+          // FIX: consistent spacing on all screen sizes (was 2px on phone)
+          const SizedBox(width: 6),
 
           // ── Notifications icon ──────────────────────────────────────────
           CompositedTransformTarget(
@@ -358,6 +355,8 @@ class _TopBarState extends State<TopBar> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ICON BUTTON WITH BADGE
+// FIX: increased touch target from 38×38 to 44×44 (meets iOS/Android HIG)
+//      increased icon size from 20 to 22 for better visibility on mobile
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _TopBarIconButton extends StatefulWidget {
@@ -386,8 +385,8 @@ class _TopBarIconButtonState extends State<_TopBarIconButton> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          width: 38,
-          height: 38,
+          width: 44, // FIX: was 38 — too small for mobile tap targets
+          height: 44, // FIX: was 38
           decoration: BoxDecoration(
             color: _hovered ? kGreen.withOpacity(0.08) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
@@ -395,8 +394,11 @@ class _TopBarIconButtonState extends State<_TopBarIconButton> {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              Icon(widget.icon,
-                  size: 20, color: _hovered ? kGreen : kTextMuted),
+              Icon(
+                widget.icon,
+                size: 22, // FIX: was 20 — slightly larger for mobile clarity
+                color: _hovered ? kGreen : kTextMuted,
+              ),
               if (widget.badgeCount != null && widget.badgeCount! > 0)
                 Positioned(
                   top: 6,
@@ -413,9 +415,10 @@ class _TopBarIconButtonState extends State<_TopBarIconButton> {
                     child: Text(
                       widget.badgeCount! > 99 ? '99+' : '${widget.badgeCount}',
                       style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800),
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                 ),
@@ -429,6 +432,8 @@ class _TopBarIconButtonState extends State<_TopBarIconButton> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN AVATAR BUTTON
+// FIX: compact horizontal padding increased from 6 to 10 so the avatar
+//      circle is not squeezed against the edge on tablet/phone
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _AdminAvatar extends StatefulWidget {
@@ -453,13 +458,17 @@ class _AdminAvatarState extends State<_AdminAvatar> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
+          // FIX: compact horizontal padding was 6 — too tight on mobile
           padding: EdgeInsets.symmetric(
-              horizontal: widget.compact ? 6 : 12, vertical: 6),
+            horizontal: widget.compact ? 10 : 12,
+            vertical: 6,
+          ),
           decoration: BoxDecoration(
             color: _hovered ? kGreen.withOpacity(0.07) : Colors.transparent,
             borderRadius: BorderRadius.circular(30),
-            border:
-                Border.all(color: _hovered ? kGreen.withOpacity(0.3) : kBorder),
+            border: Border.all(
+              color: _hovered ? kGreen.withOpacity(0.3) : kBorder,
+            ),
           ),
           child: StreamBuilder<DocumentSnapshot>(
             stream: uid != null
@@ -477,7 +486,10 @@ class _AdminAvatarState extends State<_AdminAvatar> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _AvatarCircle(
-                      photoUrl: photoUrl, initials: initials, size: 32),
+                    photoUrl: photoUrl,
+                    initials: initials,
+                    size: 32,
+                  ),
                   if (!widget.compact) ...[
                     const SizedBox(width: 10),
                     Column(
@@ -487,17 +499,23 @@ class _AdminAvatarState extends State<_AdminAvatar> {
                         Text(
                           name.length > 20 ? '${name.substring(0, 20)}…' : name,
                           style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: kTextDark),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: kTextDark,
+                          ),
                         ),
-                        const Text('Administrator',
-                            style: TextStyle(fontSize: 10, color: kTextMuted)),
+                        const Text(
+                          'Administrator',
+                          style: TextStyle(fontSize: 10, color: kTextMuted),
+                        ),
                       ],
                     ),
                     const SizedBox(width: 6),
-                    const Icon(Icons.keyboard_arrow_down_rounded,
-                        size: 18, color: kTextMuted),
+                    const Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 18,
+                      color: kTextMuted,
+                    ),
                   ],
                 ],
               );
@@ -557,7 +575,9 @@ class _AvatarCircle extends StatelessWidget {
                       width: size * 0.4,
                       height: size * 0.4,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: kGreen),
+                        strokeWidth: 2,
+                        color: kGreen,
+                      ),
                     ),
                   );
                 },
@@ -572,9 +592,10 @@ class _AvatarCircle extends StatelessWidget {
         child: Text(
           initials,
           style: TextStyle(
-              color: kGreen,
-              fontWeight: FontWeight.w800,
-              fontSize: size * 0.38),
+            color: kGreen,
+            fontWeight: FontWeight.w800,
+            fontSize: size * 0.38,
+          ),
         ),
       );
 }
@@ -607,10 +628,14 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
   void initState() {
     super.initState();
     _anim = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 200));
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
     _fade = CurvedAnimation(parent: _anim, curve: Curves.easeOut);
-    _slide = Tween<Offset>(begin: const Offset(0, -0.04), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _anim, curve: Curves.easeOut));
+    _slide =
+        Tween<Offset>(begin: const Offset(0, -0.04), end: Offset.zero).animate(
+      CurvedAnimation(parent: _anim, curve: Curves.easeOut),
+    );
     _anim.forward();
     _loadProfile();
   }
@@ -632,7 +657,10 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
   Future<void> _pickAndUpload() async {
     final picker = ImagePicker();
     final picked = await picker.pickImage(
-        source: ImageSource.gallery, imageQuality: 80, maxWidth: 400);
+      source: ImageSource.gallery,
+      imageQuality: 80,
+      maxWidth: 400,
+    );
     if (picked == null) return;
     setState(() => _uploading = true);
     try {
@@ -714,7 +742,10 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
             border: Border.all(color: kBorder),
             boxShadow: const [
               BoxShadow(
-                  color: Colors.black12, blurRadius: 20, offset: Offset(0, 8)),
+                color: Colors.black12,
+                blurRadius: 20,
+                offset: Offset(0, 8),
+              ),
             ],
           ),
           child: StreamBuilder<DocumentSnapshot>(
@@ -736,29 +767,31 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // ── Header ──────────────────────────────────────────────
+                  // ── Header ─────────────────────────────────────────────
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: [
                           kGreen.withOpacity(0.12),
-                          kGreen.withOpacity(0.04)
+                          kGreen.withOpacity(0.04),
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
-                      borderRadius:
-                          const BorderRadius.vertical(top: Radius.circular(16)),
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(16),
+                      ),
                     ),
                     child: Row(
                       children: [
                         Stack(
                           children: [
                             _AvatarCircle(
-                                photoUrl: photoUrl,
-                                initials: initials,
-                                size: 56),
+                              photoUrl: photoUrl,
+                              initials: initials,
+                              size: 56,
+                            ),
                             Positioned(
                               bottom: 0,
                               right: 0,
@@ -768,16 +801,22 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
                                   width: 22,
                                   height: 22,
                                   decoration: const BoxDecoration(
-                                      color: kGreen, shape: BoxShape.circle),
+                                    color: kGreen,
+                                    shape: BoxShape.circle,
+                                  ),
                                   child: _uploading
                                       ? const Padding(
                                           padding: EdgeInsets.all(4),
                                           child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.white),
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
                                         )
-                                      : const Icon(Icons.camera_alt_rounded,
-                                          size: 12, color: Colors.white),
+                                      : const Icon(
+                                          Icons.camera_alt_rounded,
+                                          size: 12,
+                                          color: Colors.white,
+                                        ),
                                 ),
                               ),
                             ),
@@ -788,34 +827,50 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(name,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 14,
-                                      color: kTextDark)),
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 14,
+                                  color: kTextDark,
+                                ),
+                              ),
                               const SizedBox(height: 2),
-                              Text(email,
-                                  style: const TextStyle(
-                                      fontSize: 11, color: kTextMuted),
-                                  overflow: TextOverflow.ellipsis),
+                              Text(
+                                email,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: kTextMuted,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                               const SizedBox(height: 4),
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 2),
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
-                                    color: kGreen.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(20)),
+                                  color: kGreen.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(Icons.shield_rounded,
-                                        color: kGreen, size: 10),
+                                    Icon(
+                                      Icons.shield_rounded,
+                                      color: kGreen,
+                                      size: 10,
+                                    ),
                                     SizedBox(width: 4),
-                                    Text('Administrator',
-                                        style: TextStyle(
-                                            color: kGreen,
-                                            fontSize: 9,
-                                            fontWeight: FontWeight.w700)),
+                                    Text(
+                                      'Administrator',
+                                      style: TextStyle(
+                                        color: kGreen,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
@@ -826,21 +881,23 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
                     ),
                   ),
 
-                  // ── Edit form ────────────────────────────────────────────
+                  // ── Edit form ───────────────────────────────────────────
                   if (_editing)
                     Padding(
                       padding: const EdgeInsets.all(12),
                       child: Column(
                         children: [
                           _EditField(
-                              ctrl: _nameCtrl,
-                              label: 'Display Name',
-                              icon: Icons.person_outline_rounded),
+                            ctrl: _nameCtrl,
+                            label: 'Display Name',
+                            icon: Icons.person_outline_rounded,
+                          ),
                           const SizedBox(height: 8),
                           _EditField(
-                              ctrl: _phoneCtrl,
-                              label: 'Phone',
-                              icon: Icons.phone_outlined),
+                            ctrl: _phoneCtrl,
+                            label: 'Phone',
+                            icon: Icons.phone_outlined,
+                          ),
                           const SizedBox(height: 12),
                           Row(
                             children: [
@@ -849,8 +906,10 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
                                   onPressed: () =>
                                       setState(() => _editing = false),
                                   style: OutlinedButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 10)),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                    ),
+                                  ),
                                   child: const Text('Cancel'),
                                 ),
                               ),
@@ -859,11 +918,15 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
                                 child: ElevatedButton(
                                   onPressed: _saveProfile,
                                   style: ElevatedButton.styleFrom(
-                                      backgroundColor: kGreen,
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 10)),
-                                  child: const Text('Save',
-                                      style: TextStyle(color: Colors.white)),
+                                    backgroundColor: kGreen,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'Save',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
                                 ),
                               ),
                             ],
@@ -872,20 +935,23 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
                       ),
                     ),
 
-                  // ── Menu items ───────────────────────────────────────────
+                  // ── Menu items ──────────────────────────────────────────
                   if (!_editing) ...[
                     _MenuItem(
-                        icon: Icons.edit_outlined,
-                        label: 'Edit Profile',
-                        onTap: () => setState(() => _editing = true)),
+                      icon: Icons.edit_outlined,
+                      label: 'Edit Profile',
+                      onTap: () => setState(() => _editing = true),
+                    ),
                     _MenuItem(
-                        icon: Icons.camera_alt_outlined,
-                        label: 'Upload Photo',
-                        onTap: _pickAndUpload),
+                      icon: Icons.camera_alt_outlined,
+                      label: 'Upload Photo',
+                      onTap: _pickAndUpload,
+                    ),
                     _MenuItem(
-                        icon: Icons.lock_outline_rounded,
-                        label: 'Change Password',
-                        onTap: _changePassword),
+                      icon: Icons.lock_outline_rounded,
+                      label: 'Change Password',
+                      onTap: _changePassword,
+                    ),
                     const Divider(height: 1, color: kBorder),
                   ],
                 ],
@@ -945,9 +1011,14 @@ class _MenuItemState extends State<_MenuItem> {
             children: [
               Icon(widget.icon, size: 16, color: color),
               const SizedBox(width: 10),
-              Text(widget.label,
-                  style: TextStyle(
-                      fontSize: 13, color: color, fontWeight: FontWeight.w500)),
+              Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: color,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
         ),
@@ -961,8 +1032,11 @@ class _MenuItemState extends State<_MenuItem> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _EditField extends StatelessWidget {
-  const _EditField(
-      {required this.ctrl, required this.label, required this.icon});
+  const _EditField({
+    required this.ctrl,
+    required this.label,
+    required this.icon,
+  });
   final TextEditingController ctrl;
   final String label;
   final IconData icon;
@@ -979,14 +1053,17 @@ class _EditField extends StatelessWidget {
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: kBorder)),
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kBorder),
+        ),
         enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: kBorder)),
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kBorder),
+        ),
         focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: kGreen, width: 1.5)),
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kGreen, width: 1.5),
+        ),
         filled: true,
         fillColor: Colors.white,
       ),
@@ -1004,7 +1081,7 @@ class _NotificationPanel extends StatefulWidget {
     required this.onViewAll,
   });
   final VoidCallback onClose;
-  final VoidCallback onViewAll; // ✅ navigates to ActivityLog
+  final VoidCallback onViewAll;
 
   @override
   State<_NotificationPanel> createState() => _NotificationPanelState();
@@ -1020,10 +1097,14 @@ class _NotificationPanelState extends State<_NotificationPanel>
   void initState() {
     super.initState();
     _anim = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 200));
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
     _fade = CurvedAnimation(parent: _anim, curve: Curves.easeOut);
-    _slide = Tween<Offset>(begin: const Offset(0, -0.04), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _anim, curve: Curves.easeOut));
+    _slide =
+        Tween<Offset>(begin: const Offset(0, -0.04), end: Offset.zero).animate(
+      CurvedAnimation(parent: _anim, curve: Curves.easeOut),
+    );
     _anim.forward();
   }
 
@@ -1041,7 +1122,9 @@ class _NotificationPanelState extends State<_NotificationPanel>
         .then((snap) {
       if (snap.docs.isEmpty) return;
       final batch = FirebaseFirestore.instance.batch();
-      for (final doc in snap.docs) batch.update(doc.reference, {'read': true});
+      for (final doc in snap.docs) {
+        batch.update(doc.reference, {'read': true});
+      }
       batch.commit();
     });
   }
@@ -1060,44 +1143,58 @@ class _NotificationPanelState extends State<_NotificationPanel>
             border: Border.all(color: kBorder),
             boxShadow: const [
               BoxShadow(
-                  color: Colors.black12, blurRadius: 20, offset: Offset(0, 8)),
+                color: Colors.black12,
+                blurRadius: 20,
+                offset: Offset(0, 8),
+              ),
             ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // ── Header ────────────────────────────────────────────────────
+              // ── Header ──────────────────────────────────────────────────
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 child: Row(
                   children: [
-                    const Text('Notifications',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 15,
-                            color: kTextDark)),
+                    const Text(
+                      'Notifications',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: kTextDark,
+                      ),
+                    ),
                     const Spacer(),
                     GestureDetector(
                       onTap: _markAllRead,
-                      child: const Text('Mark all read',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: kGreen,
-                              fontWeight: FontWeight.w600)),
+                      child: const Text(
+                        'Mark all read',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: kGreen,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                     const SizedBox(width: 12),
                     GestureDetector(
                       onTap: widget.onClose,
-                      child: const Icon(Icons.close_rounded,
-                          size: 16, color: kTextMuted),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: kTextMuted,
+                      ),
                     ),
                   ],
                 ),
               ),
               const Divider(height: 1, color: kBorder),
 
-              // ── List ──────────────────────────────────────────────────────
+              // ── List ────────────────────────────────────────────────────
               Flexible(
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
@@ -1110,7 +1207,8 @@ class _NotificationPanelState extends State<_NotificationPanel>
                       return const Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(
-                            child: CircularProgressIndicator(color: kGreen)),
+                          child: CircularProgressIndicator(color: kGreen),
+                        ),
                       );
                     }
                     final docs = snap.data?.docs ?? [];
@@ -1118,8 +1216,11 @@ class _NotificationPanelState extends State<_NotificationPanel>
                       return const Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(
-                            child: Text('No notifications',
-                                style: TextStyle(color: kTextMuted))),
+                          child: Text(
+                            'No notifications',
+                            style: TextStyle(color: kTextMuted),
+                          ),
+                        ),
                       );
                     }
                     return ListView.separated(
@@ -1135,25 +1236,29 @@ class _NotificationPanelState extends State<_NotificationPanel>
                         final timeStr = _formatTime(d['timestamp']);
                         final isUnread = d['read'] == false;
                         return _NotificationTile(
-                            action: action,
-                            details: details,
-                            time: timeStr,
-                            isUnread: isUnread);
+                          action: action,
+                          details: details,
+                          time: timeStr,
+                          isUnread: isUnread,
+                        );
                       },
                     );
                   },
                 ),
               ),
 
-              // ── Footer ────────────────────────────────────────────────────
+              // ── Footer ──────────────────────────────────────────────────
               const Divider(height: 1, color: kBorder),
               TextButton(
-                onPressed: widget.onViewAll, // ✅ actually navigates
-                child: const Text('View all activity logs',
-                    style: TextStyle(
-                        color: kGreen,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
+                onPressed: widget.onViewAll,
+                child: const Text(
+                  'View all activity logs',
+                  style: TextStyle(
+                    color: kGreen,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1185,40 +1290,54 @@ class _NotificationTile extends StatelessWidget {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-                color: kGreen.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8)),
-            child: const Icon(Icons.notifications_active_rounded,
-                color: kGreen, size: 16),
+              color: kGreen.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.notifications_active_rounded,
+              color: kGreen,
+              size: 16,
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(action,
-                    style: TextStyle(
-                        fontWeight:
-                            isUnread ? FontWeight.w800 : FontWeight.w600,
-                        fontSize: 12.5,
-                        color: kTextDark)),
+                Text(
+                  action,
+                  style: TextStyle(
+                    fontWeight: isUnread ? FontWeight.w800 : FontWeight.w600,
+                    fontSize: 12.5,
+                    color: kTextDark,
+                  ),
+                ),
                 if (details.isNotEmpty)
-                  Text(details,
-                      style: const TextStyle(fontSize: 11, color: kTextMuted),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    details,
+                    style: const TextStyle(fontSize: 11, color: kTextMuted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
               ],
             ),
           ),
           if (time.isNotEmpty)
-            Text(time, style: const TextStyle(fontSize: 10, color: kTextMuted)),
+            Text(
+              time,
+              style: const TextStyle(fontSize: 10, color: kTextMuted),
+            ),
           if (isUnread) ...[
             const SizedBox(width: 4),
             Container(
-                width: 7,
-                height: 7,
-                margin: const EdgeInsets.only(top: 3),
-                decoration:
-                    const BoxDecoration(color: kGreen, shape: BoxShape.circle)),
+              width: 7,
+              height: 7,
+              margin: const EdgeInsets.only(top: 3),
+              decoration: const BoxDecoration(
+                color: kGreen,
+                shape: BoxShape.circle,
+              ),
+            ),
           ],
         ],
       ),
@@ -1236,7 +1355,7 @@ class _MessagesPanel extends StatefulWidget {
     required this.onOpenChat,
   });
   final VoidCallback onClose;
-  final VoidCallback onOpenChat; // ✅ navigates to LiveChat
+  final VoidCallback onOpenChat;
 
   @override
   State<_MessagesPanel> createState() => _MessagesPanelState();
@@ -1252,10 +1371,14 @@ class _MessagesPanelState extends State<_MessagesPanel>
   void initState() {
     super.initState();
     _anim = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 200));
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
     _fade = CurvedAnimation(parent: _anim, curve: Curves.easeOut);
-    _slide = Tween<Offset>(begin: const Offset(0, -0.04), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _anim, curve: Curves.easeOut));
+    _slide =
+        Tween<Offset>(begin: const Offset(0, -0.04), end: Offset.zero).animate(
+      CurvedAnimation(parent: _anim, curve: Curves.easeOut),
+    );
     _anim.forward();
   }
 
@@ -1279,41 +1402,51 @@ class _MessagesPanelState extends State<_MessagesPanel>
             border: Border.all(color: kBorder),
             boxShadow: const [
               BoxShadow(
-                  color: Colors.black12, blurRadius: 20, offset: Offset(0, 8)),
+                color: Colors.black12,
+                blurRadius: 20,
+                offset: Offset(0, 8),
+              ),
             ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // ── Header ────────────────────────────────────────────────────
+              // ── Header ──────────────────────────────────────────────────
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 child: Row(
                   children: [
-                    const Text('Messages',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 15,
-                            color: kTextDark)),
+                    const Text(
+                      'Messages',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: kTextDark,
+                      ),
+                    ),
                     const Spacer(),
                     GestureDetector(
                       onTap: widget.onClose,
-                      child: const Icon(Icons.close_rounded,
-                          size: 16, color: kTextMuted),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: kTextMuted,
+                      ),
                     ),
                   ],
                 ),
               ),
               const Divider(height: 1, color: kBorder),
 
-              // ── List ──────────────────────────────────────────────────────
+              // ── List ────────────────────────────────────────────────────
               Flexible(
                 child: StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
-                      .collection('messages')
-                      .where('toAdmin', isEqualTo: true)
-                      .orderBy('timestamp', descending: true)
+                      .collection('chats')
+                      .orderBy('lastUpdated', descending: true)
                       .limit(20)
                       .snapshots(),
                   builder: (_, snap) {
@@ -1321,7 +1454,8 @@ class _MessagesPanelState extends State<_MessagesPanel>
                       return const Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(
-                            child: CircularProgressIndicator(color: kGreen)),
+                          child: CircularProgressIndicator(color: kGreen),
+                        ),
                       );
                     }
                     final docs = snap.data?.docs ?? [];
@@ -1332,11 +1466,16 @@ class _MessagesPanelState extends State<_MessagesPanel>
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.chat_bubble_outline_rounded,
-                                  size: 32, color: kTextMuted),
+                              Icon(
+                                Icons.chat_bubble_outline_rounded,
+                                size: 32,
+                                color: kTextMuted,
+                              ),
                               SizedBox(height: 8),
-                              Text('No messages yet',
-                                  style: TextStyle(color: kTextMuted)),
+                              Text(
+                                'No messages yet',
+                                style: TextStyle(color: kTextMuted),
+                              ),
                             ],
                           ),
                         ),
@@ -1350,21 +1489,21 @@ class _MessagesPanelState extends State<_MessagesPanel>
                           const Divider(height: 1, color: kBorder),
                       itemBuilder: (_, i) {
                         final d = docs[i].data() as Map<String, dynamic>;
-                        final sender = d['senderName'] as String? ?? 'User';
-                        final text = d['text'] as String? ?? '';
-                        final unread = d['read'] == false;
-                        final timeStr = _formatTime(d['timestamp']);
+                        final sender = d['studentName'] as String? ?? 'User';
+                        final text = d['lastMessage'] as String? ?? '';
+                        final unread = d['unreadByAdmin'] == true;
+                        final timeStr = _formatTime(d['lastUpdated']);
                         final initials =
                             sender.isNotEmpty ? sender[0].toUpperCase() : 'U';
                         return GestureDetector(
-                          onTap: widget
-                              .onOpenChat, // ✅ tapping a message opens chat
+                          onTap: widget.onOpenChat,
                           child: _MessageTile(
-                              sender: sender,
-                              text: text,
-                              time: timeStr,
-                              unread: unread,
-                              initials: initials),
+                            sender: sender,
+                            text: text,
+                            time: timeStr,
+                            unread: unread,
+                            initials: initials,
+                          ),
                         );
                       },
                     );
@@ -1372,15 +1511,18 @@ class _MessagesPanelState extends State<_MessagesPanel>
                 ),
               ),
 
-              // ── Footer ────────────────────────────────────────────────────
+              // ── Footer ──────────────────────────────────────────────────
               const Divider(height: 1, color: kBorder),
               TextButton(
-                onPressed: widget.onOpenChat, // ✅ actually navigates
-                child: const Text('Open Live Chat',
-                    style: TextStyle(
-                        color: kGreen,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
+                onPressed: widget.onOpenChat,
+                child: const Text(
+                  'Open Live Chat',
+                  style: TextStyle(
+                    color: kGreen,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1417,32 +1559,44 @@ class _MessageTile extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(sender,
-                          style: TextStyle(
-                              fontWeight:
-                                  unread ? FontWeight.w800 : FontWeight.w500,
-                              fontSize: 12.5,
-                              color: kTextDark)),
+                      child: Text(
+                        sender,
+                        style: TextStyle(
+                          fontWeight:
+                              unread ? FontWeight.w800 : FontWeight.w500,
+                          fontSize: 12.5,
+                          color: kTextDark,
+                        ),
+                      ),
                     ),
                     if (time.isNotEmpty)
-                      Text(time,
-                          style:
-                              const TextStyle(fontSize: 10, color: kTextMuted)),
+                      Text(
+                        time,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: kTextMuted,
+                        ),
+                      ),
                     if (unread) ...[
                       const SizedBox(width: 6),
                       Container(
-                          width: 7,
-                          height: 7,
-                          decoration: const BoxDecoration(
-                              color: kGreen, shape: BoxShape.circle)),
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(
+                          color: kGreen,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
                     ],
                   ],
                 ),
                 const SizedBox(height: 2),
-                Text(text,
-                    style: const TextStyle(fontSize: 11, color: kTextMuted),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis),
+                Text(
+                  text,
+                  style: const TextStyle(fontSize: 11, color: kTextMuted),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
@@ -1455,28 +1609,6 @@ class _MessageTile extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 // USER-SIDE LIVE CHAT WIDGET
 // ─────────────────────────────────────────────────────────────────────────────
-//
-// Drop this widget anywhere on the user side (e.g. inside a Scaffold body or
-// as a floating chat bubble sheet).
-//
-// It:
-//   • reads / writes to  messages/{auto-id}
-//   • marks  toAdmin: true  so admin sees them in the TopBar badge
-//   • marks  read: false    so the badge count updates in real-time
-//   • when the user sends a message it is immediately marked read: false
-//   • when admin replies, mark messages with toAdmin: false, toUser: true
-//
-// Firestore document schema:
-//   {
-//     senderName : String,   // user's display name
-//     senderId   : String,   // user's UID
-//     text       : String,
-//     timestamp  : Timestamp,
-//     toAdmin    : bool,     // true  → user → admin
-//     toUser     : bool,     // true  → admin → user
-//     read       : bool,
-//     sessionId  : String,   // groups messages into one chat session
-//   }
 
 class UserLiveChatWidget extends StatefulWidget {
   const UserLiveChatWidget({super.key});
@@ -1492,9 +1624,6 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? 'guest';
   String get _name => FirebaseAuth.instance.currentUser?.displayName ?? 'User';
-
-  // Each user gets one stable session per UID for simplicity.
-  // For multiple sessions, generate a unique sessionId elsewhere.
   String get _sessionId => 'session_$_uid';
 
   Stream<QuerySnapshot> get _messages => FirebaseFirestore.instance
@@ -1519,7 +1648,6 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
         'read': false,
         'sessionId': _sessionId,
       });
-      // scroll to bottom
       await Future.delayed(const Duration(milliseconds: 100));
       if (_scroll.hasClients) {
         _scroll.animateTo(
@@ -1544,19 +1672,34 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // ── Message list ──────────────────────────────────────────────────
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
             stream: _messages,
             builder: (_, snap) {
+              if (snap.hasError) {
+                debugPrint('🔴 MessagesPanel error: ${snap.error}');
+                return Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Center(
+                    child: Text(
+                      'Failed to load messages.\n${snap.error}',
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(color: Colors.red.shade300, fontSize: 11),
+                    ),
+                  ),
+                );
+              }
               if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
               final docs = snap.data?.docs ?? [];
               if (docs.isEmpty) {
                 return const Center(
-                  child: Text('Send a message to start chatting.',
-                      style: TextStyle(color: Colors.grey)),
+                  child: Text(
+                    'Send a message to start chatting.',
+                    style: TextStyle(color: Colors.grey),
+                  ),
                 );
               }
               return ListView.builder(
@@ -1566,16 +1709,18 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
                 itemBuilder: (_, i) {
                   final d = docs[i].data() as Map<String, dynamic>;
                   final text = d['text'] as String? ?? '';
-                  final isMe = d['toAdmin'] == true; // sent by user
+                  final isMe = d['toAdmin'] == true;
                   final timeStr = _formatTime(d['timestamp']);
-                  return _ChatBubble(text: text, isMe: isMe, time: timeStr);
+                  return _ChatBubble(
+                    text: text,
+                    isMe: isMe,
+                    time: timeStr,
+                  );
                 },
               );
             },
           ),
         ),
-
-        // ── Input bar ─────────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
           decoration: const BoxDecoration(
@@ -1590,20 +1735,29 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
                   onSubmitted: (_) => _send(),
                   decoration: InputDecoration(
                     hintText: 'Type a message…',
-                    hintStyle:
-                        const TextStyle(fontSize: 13, color: Colors.grey),
+                    hintStyle: const TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey,
+                    ),
                     contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                     border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                    ),
                     enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                    ),
                     focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: const BorderSide(
-                            color: Color(0xFF22C55E), width: 1.5)),
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: const BorderSide(
+                        color: Color(0xFF22C55E),
+                        width: 1.5,
+                      ),
+                    ),
                     filled: true,
                     fillColor: const Color(0xFFF9FAFB),
                   ),
@@ -1614,8 +1768,8 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
                 onTap: _sending ? null : _send,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
-                  width: 42,
-                  height: 42,
+                  width: 44,
+                  height: 44,
                   decoration: BoxDecoration(
                     color: _sending
                         ? const Color(0xFF22C55E).withOpacity(0.5)
@@ -1626,10 +1780,15 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
                       ? const Padding(
                           padding: EdgeInsets.all(10),
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
-                      : const Icon(Icons.send_rounded,
-                          color: Colors.white, size: 18),
+                      : const Icon(
+                          Icons.send_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
                 ),
               ),
             ],
@@ -1657,8 +1816,9 @@ class _ChatBubble extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.72,
+        ),
         decoration: BoxDecoration(
           color: isMe ? const Color(0xFF22C55E) : const Color(0xFFF3F4F6),
           borderRadius: BorderRadius.only(
@@ -1672,17 +1832,22 @@ class _ChatBubble extends StatelessWidget {
           crossAxisAlignment:
               isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Text(text,
-                style: TextStyle(
-                    fontSize: 13.5,
-                    color: isMe ? Colors.white : const Color(0xFF111827))),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 13.5,
+                color: isMe ? Colors.white : const Color(0xFF111827),
+              ),
+            ),
             if (time.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(time,
-                  style: TextStyle(
-                      fontSize: 10,
-                      color:
-                          isMe ? Colors.white.withOpacity(0.7) : Colors.grey)),
+              Text(
+                time,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isMe ? Colors.white.withOpacity(0.7) : Colors.grey,
+                ),
+              ),
             ],
           ],
         ),

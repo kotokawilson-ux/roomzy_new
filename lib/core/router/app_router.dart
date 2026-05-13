@@ -17,8 +17,15 @@ import '../../screens/about/about_screen.dart';
 import '../../screens/contact/contact_screen.dart';
 import '../../screens/landlord/landlord_dashboard_screen.dart';
 import '../../screens/admin/admin_dashboard_screen.dart';
+import '../../screens/chat/chat_screen.dart'; // ← NEW
 import 'auth_gate.dart';
+import 'app_shell.dart';
+// Add this import at the top
+import '../../screens/admin/chat/admin_live_chat_screen.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  BACK HANDLER  –  unchanged
+// ─────────────────────────────────────────────────────────────────────────────
 class BackHandlerWrapper extends StatelessWidget {
   final Widget child;
   final bool isHome;
@@ -78,8 +85,12 @@ class BackHandlerWrapper extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  ROUTER
+// ─────────────────────────────────────────────────────────────────────────────
 class AppRouter {
   static final _rootNavigatorKey = GlobalKey<NavigatorState>();
+  static final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
   static Widget _wrap(Widget screen) => BackHandlerWrapper(child: screen);
   static Widget _wrapHome(Widget screen) =>
@@ -90,21 +101,17 @@ class AppRouter {
       navigatorKey: _rootNavigatorKey,
       initialLocation: '/',
 
-      // ── Minimal redirect — only blocks truly unauthorized access ──────────
-      // We do NOT redirect based on role here because login_screen.dart and
-      // auth_gate.dart already handle role-based routing directly.
-      // Adding role redirects here caused the bug: after login, the router
-      // would fire redirect before the role loaded and send admin to /home.
+      // ── Redirect — unchanged + /chat protected ──────────────────────────
       redirect: (context, state) {
         if (authService == null) return null;
 
         final isLoggedIn = authService.isLoggedIn;
         final path = state.uri.path;
 
-        // Only block guests from protected routes
         if (!isLoggedIn &&
             (path.startsWith('/bookings') ||
                 path.startsWith('/profile') ||
+                path.startsWith('/chat') || // ← NEW: protect chat route
                 path.startsWith('/admin') ||
                 path.startsWith('/landlord'))) {
           return '/login';
@@ -114,13 +121,10 @@ class AppRouter {
       },
 
       routes: [
+        // ── Auth & entry routes (NO shell, NO bottom nav) ─────────────────
         GoRoute(
           path: '/',
           builder: (context, state) => const AuthGate(),
-        ),
-        GoRoute(
-          path: '/home',
-          builder: (context, state) => _wrapHome(const HomeScreen()),
         ),
         GoRoute(
           path: '/login',
@@ -138,32 +142,8 @@ class AppRouter {
           path: '/contact',
           builder: (context, state) => _wrap(const ContactScreen()),
         ),
-        GoRoute(
-          path: '/hostels',
-          builder: (context, state) => _wrap(const HostelsScreen()),
-        ),
-        GoRoute(
-          path: '/hostels/:id',
-          builder: (context, state) {
-            final id = state.pathParameters['id']!;
-            return _wrap(HostelDetailScreen(hostelId: id));
-          },
-        ),
-        GoRoute(
-          path: '/bookings',
-          builder: (context, state) => _wrap(const BookingsScreen()),
-        ),
-        GoRoute(
-          path: '/book/:bookingId',
-          builder: (context, state) {
-            final bookingId = state.pathParameters['bookingId']!;
-            return _wrap(BookingConfirmScreen(bookingId: bookingId));
-          },
-        ),
-        GoRoute(
-          path: '/profile',
-          builder: (context, state) => _wrap(const ProfileScreen()),
-        ),
+
+        // ── Role-specific dashboards (NO shell, NO bottom nav) ────────────
         GoRoute(
           path: '/landlord',
           builder: (context, state) => _wrap(const LandlordDashboardScreen()),
@@ -172,7 +152,75 @@ class AppRouter {
           path: '/admin',
           builder: (context, state) => _wrap(const AdminDashboardScreen()),
         ),
+
+        // ── SHELL: routes that show the bottom nav bar ────────────────────
+        ShellRoute(
+          navigatorKey: _shellNavigatorKey,
+          builder: (context, state, child) => AppShell(child: child),
+          routes: [
+            // Home tab
+            GoRoute(
+              path: '/home',
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: _wrapHome(const HomeScreen()),
+              ),
+            ),
+
+            // Hostels tab
+            GoRoute(
+              path: '/hostels',
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: _wrap(const HostelsScreen()),
+              ),
+              routes: [
+                GoRoute(
+                  path: ':id',
+                  builder: (context, state) {
+                    final id = state.pathParameters['id']!;
+                    return _wrap(HostelDetailScreen(hostelId: id));
+                  },
+                ),
+              ],
+            ),
+
+            // Bookings tab
+            GoRoute(
+              path: '/bookings',
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: _wrap(const BookingsScreen()),
+              ),
+              routes: [
+                GoRoute(
+                  path: ':bookingId',
+                  parentNavigatorKey: _rootNavigatorKey,
+                  builder: (context, state) {
+                    final bookingId = state.pathParameters['bookingId']!;
+                    return _wrap(BookingConfirmScreen(bookingId: bookingId));
+                  },
+                ),
+              ],
+            ),
+
+            // Chat tab ← NEW
+            GoRoute(
+              path: '/chat',
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: _wrap(const ChatScreen()),
+              ),
+            ),
+
+            // Profile tab
+            GoRoute(
+              path: '/profile',
+              pageBuilder: (context, state) => NoTransitionPage(
+                child: _wrap(const ProfileScreen()),
+              ),
+            ),
+          ],
+        ),
       ],
+
+      // ── Error page — unchanged ──────────────────────────────────────────
       errorBuilder: (context, state) => _wrap(
         Scaffold(
           body: Center(

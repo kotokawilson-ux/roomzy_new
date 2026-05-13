@@ -11,15 +11,12 @@ class AuthService extends ChangeNotifier {
 
   UserModel? _currentUser;
   bool _isLoading = false;
+  bool _sessionLoaded = false; // ← NEW: prevents race on re-entry
   String? _errorMessage;
 
   UserModel? get currentUser => _currentUser;
 
-  // ── FIXED: isLoggedIn only checks Firebase auth, not _currentUser ──────────
-  // Previously: _auth.currentUser != null && _currentUser != null
-  // Problem: right after login, _currentUser could briefly be null even though
-  // Firebase says the user is logged in, causing the router redirect to think
-  // the user is logged out and routing them to /home via AuthGate.
+  // isLoggedIn checks Firebase auth only — _currentUser may still be loading
   bool get isLoggedIn => _auth.currentUser != null;
 
   bool get isLoading => _isLoading;
@@ -28,10 +25,19 @@ class AuthService extends ChangeNotifier {
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
+  /// Called once by AuthGate on cold launch.
+  /// Sets isLoading = true so any screen that mounts before navigation
+  /// completes (e.g. ChatScreen) shows a spinner instead of "not logged in".
   Future<void> loadSession() async {
+    // ── Guard: if already loaded (e.g. AuthGate re-mounts), skip entirely ──
+    if (_sessionLoaded) return;
+    _sessionLoaded = true;
+
     final firebaseUser = _auth.currentUser;
     if (firebaseUser != null) {
+      _setLoading(true); // ← signals UI to wait
       await _fetchAndCacheProfile(firebaseUser.uid);
+      _setLoading(false);
     }
   }
 
@@ -104,6 +110,8 @@ class AuthService extends ChangeNotifier {
         phone: phone.trim(),
         role: 'student',
       );
+      // Mark session as loaded so AuthGate doesn't wipe _currentUser on re-entry
+      _sessionLoaded = true;
       notifyListeners();
       return true;
     } on FirebaseAuthException catch (e) {
@@ -120,6 +128,7 @@ class AuthService extends ChangeNotifier {
   Future<void> logout() async {
     await _auth.signOut();
     _currentUser = null;
+    _sessionLoaded = false; // ← reset so next login re-runs loadSession cleanly
     notifyListeners();
   }
 
@@ -137,7 +146,8 @@ class AuthService extends ChangeNotifier {
       final doc = await _db.collection('users').doc(uid).get();
       if (doc.exists && doc.data() != null) {
         _currentUser = UserModel.fromJson(uid, doc.data()!);
-        debugPrint('AuthService: profile loaded — role: ${_currentUser?.role}');
+        debugPrint(
+            'AuthService: profile loaded — uid=$uid role=${_currentUser?.role}');
         notifyListeners();
       } else {
         debugPrint('AuthService: no Firestore document found for uid: $uid');

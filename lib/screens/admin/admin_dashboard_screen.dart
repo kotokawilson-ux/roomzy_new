@@ -16,7 +16,7 @@ import 'panes/facilities_pane.dart';
 import 'panes/schools_pane.dart';
 import 'panes/users_pane.dart';
 import 'panes/activity_log_pane.dart';
-
+import 'chat/admin_live_chat_screen.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN DASHBOARD SCREEN — shell only, all logic lives in panes + widgets
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,6 +32,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   AdminSection _current = AdminSection.dashboard;
   bool _sidebarCollapsed = false;
 
+  // FIX: key needed so _narrowLayout can open the drawer programmatically
+  // from the TopBar's onMenuTap callback
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // FIX: shared navigation handler used by BOTH layouts and passed into
+  // TopBar's onNavigateToSection — was an empty lambda `(p1) {}` before,
+  // which meant "View all activity logs" and "Open Live Chat" never worked
+  void _navigateTo(AdminSection section) {
+    setState(() => _current = section);
+    // Close the drawer if it's open (narrow layout)
+    if (_scaffoldKey.currentState?.isDrawerOpen == true) {
+      Navigator.pop(context);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.of(context).size.width >= 900;
@@ -41,16 +56,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  // ── Wide layout: persistent sidebar + content ──
+  // ── Wide layout: persistent sidebar + content ──────────────────────────────
   Widget _wideLayout() => Row(
         children: [
           Sidebar(
             current: _current,
             collapsed: _sidebarCollapsed,
             onSelect: (s) => setState(() => _current = s),
-            onToggleCollapse: () => setState(
-              () => _sidebarCollapsed = !_sidebarCollapsed,
-            ),
+            onToggleCollapse: () =>
+                setState(() => _sidebarCollapsed = !_sidebarCollapsed),
             onLogout: _logout,
           ),
           Expanded(
@@ -58,10 +72,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               children: [
                 TopBar(
                   section: _current,
-                  onMenuTap: () => setState(
-                    () => _sidebarCollapsed = !_sidebarCollapsed,
-                  ),
-                  onNavigateToSection: (AdminSection p1) {},
+                  onMenuTap: null, // ← this hides/disables the ≡ icon in TopBar
+                  onNavigateToSection: _navigateTo,
                 ),
                 Expanded(child: _body()),
               ],
@@ -70,8 +82,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         ],
       );
 
-  // ── Narrow layout: drawer sidebar + app bar ──
+  // ── Narrow layout: drawer sidebar + app bar ────────────────────────────────
   Widget _narrowLayout() => Scaffold(
+        key: _scaffoldKey, // FIX: attach key so onMenuTap can open drawer
         backgroundColor: kCream,
         drawer: Drawer(
           child: Sidebar(
@@ -116,10 +129,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             ],
           ),
         ),
-        body: _body(),
+        // FIX: wrap body in a TopBar so the notification/message/profile
+        // icons are visible and functional on narrow screens too.
+        // Previously _body() was used directly, so those icons were missing
+        // entirely on mobile — only the AppBar was shown.
+        body: Column(
+          children: [
+            TopBar(
+              section: _current,
+              onMenuTap: null,
+              onNavigateToSection: _navigateTo,
+            ),
+            Expanded(child: _body()),
+          ],
+        ),
       );
 
-  // ── Body: switch between panes based on current section ──
+  // ── Body: switch between panes based on current section ───────────────────
   Widget _body() => switch (_current) {
         AdminSection.dashboard => const DashboardPane(),
         AdminSection.bookings => const BookingsPane(),
@@ -130,19 +156,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         AdminSection.schools => const SchoolsPane(),
         AdminSection.users => const UsersPane(),
         AdminSection.activityLog => const ActivityLogPane(),
-        // TODO: Handle this case.
-        AdminSection.analytics => throw UnimplementedError(),
-        // TODO: Handle this case.
-        AdminSection.payments => throw UnimplementedError(),
-        // TODO: Handle this case.
-        AdminSection.revenue => throw UnimplementedError(),
-        // TODO: Handle this case.
-        AdminSection.liveChat => throw UnimplementedError(),
-        // TODO: Handle this case.
-        AdminSection.settings => throw UnimplementedError(),
+        AdminSection.liveChat => const AdminLiveChatScreen(),
+        AdminSection.analytics => const _PlaceholderPane(label: 'Analytics'),
+        AdminSection.payments => const _PlaceholderPane(label: 'Payments'),
+        AdminSection.revenue => const _PlaceholderPane(label: 'Revenue'),
+        AdminSection.settings => const _PlaceholderPane(label: 'Settings'),
       };
 
-  // ── Logout with confirmation dialog ──
+  // ── Logout with confirmation dialog ───────────────────────────────────────
   Future<void> _logout() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -175,5 +196,35 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       await context.read<AuthService>().logout();
       if (mounted) context.go('/login');
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLACEHOLDER PANE — shown for sections not yet implemented
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PlaceholderPane extends StatelessWidget {
+  const _PlaceholderPane({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.construction_rounded,
+              size: 48, color: Colors.grey.shade300),
+          const SizedBox(height: 12),
+          Text(
+            '$label — Coming Soon',
+            style: TextStyle(
+                fontSize: 16,
+                color: Colors.grey.shade400,
+                fontWeight: FontWeight.w500),
+          ),
+        ],
+      ),
+    );
   }
 }
