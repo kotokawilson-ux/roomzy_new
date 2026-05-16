@@ -40,11 +40,14 @@ dependencies:
   shared_preferences: ^2.3.2
   timeago: ^3.6.1
   
-  # Firebase - Compatible versions
+  # Firebase
   firebase_core: ^3.8.0
   cloud_firestore: ^5.4.0
   firebase_auth: ^5.3.0
   firebase_storage: ^12.3.0
+
+  # Push notifications — OneSignal (replaces firebase_messaging + flutter_local_notifications)
+  onesignal_flutter: ^5.2.5
 
 dev_dependencies:
   flutter_test:

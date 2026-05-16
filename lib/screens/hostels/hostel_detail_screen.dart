@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:shimmer/shimmer.dart';
@@ -17,43 +18,42 @@ import '../../models/models.dart';
 import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── Design Tokens ────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
+const _kPrimaryDark = Color(0xFF0D5F58);
+const _kAccent = Color(0xFF14B8A6);
 const _kDark = Color(0xFF0D1B2A);
 const _kBg = Color(0xFFF0F4F8);
 const _kCard = Colors.white;
 const _kGreen = Color(0xFF16A34A);
 const _kRed = Color(0xFFDC2626);
 const _kOrange = Color(0xFFEA580C);
+const _kSurface = Color(0xFFF8FAFC);
+const _kBorder = Color(0xFFE2E8F0);
+const _kTextMuted = Color(0xFF64748B);
+const _kTextDim = Color(0xFF94A3B8);
 
-// ── Paystack secret key ───────────────────────────────────────────────────────
+// ── Paystack ─────────────────────────────────────────────────────────────────
 const _kPaystackSecretKey = 'sk_test_6350329ac171a2de1a9b7e6309865e837b163d12';
 const _kPaystackBaseUrl = 'https://api.paystack.co';
 
-// ── Paystack test MoMo numbers (Ghana sandbox) ──────────────────────────────
-// These are Paystack's official test numbers for Ghana MoMo sandbox testing.
-// In test mode, any of these numbers will simulate a successful payment
-// without real money being deducted.
 const _kTestMomoNumbers = {
-  '0551234987', // MTN — success
-  '0571234987', // Vodafone — success
-  '0201234987', // MTN — success (alternate)
-  '0261234987', // AirtelTigo — success
+  '0551234987',
+  '0571234987',
+  '0201234987',
+  '0261234987',
 };
 
-// ─── Unique reference generator ──────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 String _generateReference() {
-  final timestamp = DateTime.now().millisecondsSinceEpoch;
-  final random = Random().nextInt(99999).toString().padLeft(5, '0');
-  return 'RZF-$timestamp-$random';
+  final ts = DateTime.now().millisecondsSinceEpoch;
+  final rnd = Random().nextInt(99999).toString().padLeft(5, '0');
+  return 'RZF-$ts-$rnd';
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
 String _img(String? v, {int width = 800}) {
-  if (v == null || v.trim().isEmpty) {
+  if (v == null || v.trim().isEmpty)
     return 'https://placehold.co/600x400?text=No+Image';
-  }
   final url = v.trim();
   if (url.contains('cloudinary.com') && url.contains('/upload/')) {
     return url.replaceFirst(
@@ -87,7 +87,6 @@ String _mapSrc(String? iframe) {
   return RegExp(r'src="([^"]+)"').firstMatch(cleaned)?.group(1) ?? '';
 }
 
-// ─── Activity Log Helper ──────────────────────────────────────────────────────
 Future<void> _logActivity({
   required String action,
   required String details,
@@ -105,8 +104,7 @@ Future<void> _logActivity({
   }
 }
 
-// ─── RoomModel ───────────────────────────────────────────────────────────────
-
+// ─── RoomModel ────────────────────────────────────────────────────────────────
 class RoomModel {
   final String id;
   final String roomNumber;
@@ -161,7 +159,7 @@ class RoomModel {
       );
 }
 
-// ─── Screen ──────────────────────────────────────────────────────────────────
+// ─── Screen ───────────────────────────────────────────────────────────────────
 class HostelDetailScreen extends StatefulWidget {
   final String hostelId;
   const HostelDetailScreen({super.key, required this.hostelId});
@@ -177,7 +175,6 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
   bool _loading = true;
   String? _error;
 
-  // Keep stream subscriptions so we can cancel them on dispose
   StreamSubscription? _hostelSub;
   StreamSubscription? _roomsSub;
   StreamSubscription? _facilitiesSub;
@@ -202,7 +199,6 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
       _error = null;
     });
 
-    // ── 1. Hostel details — live
     _hostelSub = FirebaseFirestore.instance
         .collection('hostels')
         .doc(widget.hostelId)
@@ -233,7 +229,6 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
       },
     );
 
-    // ── 2. Rooms — live
     _roomsSub = FirebaseFirestore.instance
         .collection('rooms')
         .where('hostel_id', isEqualTo: widget.hostelId)
@@ -250,7 +245,6 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
       onError: (e) => debugPrint('Rooms error: $e'),
     );
 
-    // ── 3. Facilities — live
     _facilitiesSub = FirebaseFirestore.instance
         .collection('facilities')
         .where('hostel_id', isEqualTo: widget.hostelId)
@@ -287,22 +281,18 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
     }
   }
 
-  void _onBooked(String roomId, int slots) {
-    // Rooms listener handles this automatically in real-time
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(
-          body: Center(child: CircularProgressIndicator(color: _kPrimary)));
+        backgroundColor: _kBg,
+        body: Center(child: _PulseLoader()),
+      );
     }
-    if (_error != null) {
+    if (_error != null)
       return _ErrorView(message: _error!, onRetry: _startListeners);
-    }
-    if (_hostel == null) {
+    if (_hostel == null)
       return const Scaffold(body: Center(child: Text('Hostel not found')));
-    }
 
     final hostel = _hostel!;
     final w = MediaQuery.of(context).size.width;
@@ -325,10 +315,11 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
             _InfoSection(
                 hostel: hostel, isWide: isWide, heroImages: heroImages),
             _RoomsSection(
-                rooms: _rooms,
-                hostel: hostel,
-                isWide: isWide,
-                onBooked: _onBooked),
+              rooms: _rooms,
+              hostel: hostel,
+              isWide: isWide,
+              onBooked: (_, __) {},
+            ),
             if (_facilities.isNotEmpty)
               _FacilitiesSection(facilities: _facilities, isWide: isWide),
             if (mapSrc.isNotEmpty)
@@ -340,8 +331,56 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
     );
   }
 }
-// ─── 1. HERO ─────────────────────────────────────────────────────────────────
 
+// ─── Pulse Loader ─────────────────────────────────────────────────────────────
+class _PulseLoader extends StatefulWidget {
+  const _PulseLoader();
+  @override
+  State<_PulseLoader> createState() => _PulseLoaderState();
+}
+
+class _PulseLoaderState extends State<_PulseLoader>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900))
+      ..repeat(reverse: true);
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) => Container(
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: _kPrimary.withOpacity(0.1 + _anim.value * 0.2),
+          border: Border.all(
+              color: _kPrimary.withOpacity(0.4 + _anim.value * 0.6), width: 2),
+        ),
+        child: const Center(
+            child:
+                CircularProgressIndicator(color: _kPrimary, strokeWidth: 2.5)),
+      ),
+    );
+  }
+}
+
+// ─── 1. HERO ──────────────────────────────────────────────────────────────────
 class _HeroSection extends StatefulWidget {
   final String hostelName;
   final List<String> images;
@@ -356,13 +395,13 @@ class _HeroSectionState extends State<_HeroSection> {
 
   @override
   Widget build(BuildContext context) {
-    // Responsive hero height: shorter on small screens
     final screenH = MediaQuery.of(context).size.height;
-    final heroH = (screenH * 0.38).clamp(220.0, 380.0);
+    final heroH = (screenH * 0.42).clamp(240.0, 420.0);
 
     return SizedBox(
       height: heroH,
       child: Stack(fit: StackFit.expand, children: [
+        // ── Carousel ────────────────────────────────────────────────────────
         widget.images.isNotEmpty
             ? CarouselSlider(
                 options: CarouselOptions(
@@ -370,118 +409,106 @@ class _HeroSectionState extends State<_HeroSection> {
                   viewportFraction: 1.0,
                   autoPlay: widget.images.length > 1,
                   autoPlayInterval: const Duration(seconds: 5),
+                  autoPlayCurve: Curves.easeInOutCubic,
                   onPageChanged: (i, _) => setState(() => _current = i),
                 ),
                 items: widget.images
-                    .map((img) => CachedNetworkImage(
-                          imageUrl: _img(img, width: 1200),
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          fadeInDuration: const Duration(milliseconds: 200),
-                          placeholder: (_, __) =>
-                              Container(color: _kDark.withOpacity(0.6)),
-                          errorWidget: (_, __, ___) => Container(color: _kDark),
-                        ))
+                    .map(
+                      (img) => CachedNetworkImage(
+                        imageUrl: _img(img, width: 1200),
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        fadeInDuration: const Duration(milliseconds: 300),
+                        placeholder: (_, __) =>
+                            Container(color: _kDark.withOpacity(0.6)),
+                        errorWidget: (_, __, ___) => Container(color: _kDark),
+                      ),
+                    )
                     .toList(),
               )
             : Container(color: _kDark),
+
+        // ── Cinematic gradient overlay ───────────────────────────────────────
         Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [Color(0x55000000), Color(0xCC000000)],
+              colors: [Color(0x33000000), Color(0x00000000), Color(0xDD000000)],
+              stops: [0.0, 0.4, 1.0],
             ),
           ),
         ),
-        // Use LayoutBuilder so text never overflows horizontally
-        LayoutBuilder(builder: (ctx, constraints) {
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const SizedBox(height: 14),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Text(
-                  widget.hostelName,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+
+        // ── Title block ──────────────────────────────────────────────────────
+        Positioned(
+          bottom: 32,
+          left: 24,
+          right: 24,
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Hostel tag pill
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: _kAccent.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(50),
+              ),
+              child: const Text('HOSTEL / APARTMENT',
                   style: TextStyle(
-                    // Scale font slightly on very narrow screens
-                    fontSize: (constraints.maxWidth < 340) ? 26 : 32,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                    letterSpacing: 0.5,
-                    shadows: const [
-                      Shadow(blurRadius: 12, color: Colors.black87)
-                    ],
-                  ),
-                ),
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.5)),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              widget.hostelName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 30,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                letterSpacing: -0.3,
+                height: 1.15,
+                shadows: [Shadow(blurRadius: 20, color: Colors.black87)],
               ),
-              const SizedBox(height: 12),
-              // Breadcrumb — wrap so it never overflows on tiny screens
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 4,
-                  children: [
-                    _crumb('Home'),
-                    _sep(),
-                    _crumb('Hostels / Apartments', bold: true),
-                    _sep(),
-                    _crumb(widget.hostelName, dim: true),
-                  ],
-                ),
-              ),
-            ],
-          );
-        }),
+            ),
+          ]),
+        ),
+
+        // ── Dot indicators ───────────────────────────────────────────────────
         if (widget.images.length > 1)
           Positioned(
-            bottom: 14,
-            left: 0,
-            right: 0,
+            bottom: 12,
+            right: 24,
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: widget.images
                   .asMap()
                   .entries
-                  .map((e) => AnimatedContainer(
-                        duration: const Duration(milliseconds: 300),
-                        width: _current == e.key ? 20 : 6,
-                        height: 6,
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(3),
-                          color: Colors.white
-                              .withOpacity(_current == e.key ? 1 : 0.4),
-                        ),
-                      ))
+                  .map(
+                    (e) => AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      width: _current == e.key ? 18 : 5,
+                      height: 5,
+                      margin: const EdgeInsets.only(left: 4),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(3),
+                        color: Colors.white
+                            .withOpacity(_current == e.key ? 1 : 0.4),
+                      ),
+                    ),
+                  )
                   .toList(),
             ),
           ),
       ]),
     );
   }
-
-  Widget _crumb(String t, {bool bold = false, bool dim = false}) => Text(t,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        color: dim ? Colors.white54 : Colors.white,
-        fontSize: 12,
-        fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-      ));
-
-  Widget _sep() => const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 4),
-        child: Text('/', style: TextStyle(color: Colors.white38, fontSize: 12)),
-      );
 }
 
-// ─── 2. INFO ─────────────────────────────────────────────────────────────────
-
+// ─── 2. INFO ──────────────────────────────────────────────────────────────────
 class _InfoSection extends StatelessWidget {
   final Hostel hostel;
   final bool isWide;
@@ -495,21 +522,27 @@ class _InfoSection extends StatelessWidget {
     return Container(
       color: _kCard,
       child: Column(children: [
-        Container(height: 4, color: _kPrimary),
+        // Teal accent bar
+        Container(
+          height: 4,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(colors: [_kPrimary, _kAccent]),
+          ),
+        ),
         Padding(
           padding:
-              EdgeInsets.symmetric(horizontal: isWide ? 60 : 16, vertical: 32),
+              EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 36),
           child: isWide
               ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Expanded(flex: 6, child: _HeroImageBox(images: heroImages)),
-                  const SizedBox(width: 48),
+                  const SizedBox(width: 52),
                   Expanded(
                       flex: 5,
                       child: _DetailsBox(hostel: hostel, phones: phones)),
                 ])
               : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   _HeroImageBox(images: heroImages),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 28),
                   _DetailsBox(hostel: hostel, phones: phones),
                 ]),
         ),
@@ -526,45 +559,48 @@ class _HeroImageBox extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 24,
-              offset: const Offset(0, 8))
+              color: _kPrimary.withOpacity(0.12),
+              blurRadius: 32,
+              offset: const Offset(0, 12)),
+          BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 4)),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         child: AspectRatio(
           aspectRatio: 4 / 3,
           child: images.isNotEmpty
               ? CachedNetworkImage(
                   imageUrl: _img(images[0], width: 1200),
                   fit: BoxFit.cover,
-                  fadeInDuration: const Duration(milliseconds: 200),
+                  fadeInDuration: const Duration(milliseconds: 300),
                   placeholder: (_, __) => Shimmer.fromColors(
-                    baseColor: Colors.grey[300]!,
-                    highlightColor: Colors.grey[100]!,
-                    child: Container(color: Colors.grey[300]),
+                    baseColor: Colors.grey[200]!,
+                    highlightColor: Colors.grey[50]!,
+                    child: Container(color: Colors.grey[200]),
                   ),
-                  errorWidget: (_, __, ___) => Container(
-                    color: _kPrimary.withOpacity(0.08),
-                    child: const Center(
-                        child: Icon(Icons.apartment_rounded,
-                            size: 60, color: _kPrimary)),
-                  ),
+                  errorWidget: (_, __, ___) => _ImagePlaceholder(),
                 )
-              : Container(
-                  color: _kPrimary.withOpacity(0.08),
-                  child: const Center(
-                      child: Icon(Icons.apartment_rounded,
-                          size: 60, color: _kPrimary)),
-                ),
+              : _ImagePlaceholder(),
         ),
       ),
     );
   }
+}
+
+class _ImagePlaceholder extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => Container(
+        color: _kPrimary.withOpacity(0.06),
+        child: const Center(
+            child: Icon(Icons.apartment_rounded, size: 60, color: _kPrimary)),
+      );
 }
 
 class _DetailsBox extends StatelessWidget {
@@ -575,64 +611,66 @@ class _DetailsBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Hostel name — never overflows
-      Text(hostel.hostelName,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-              color: _kDark,
-              height: 1.2)),
-      const SizedBox(height: 8),
+      Text(
+        hostel.hostelName,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w900,
+            color: _kDark,
+            height: 1.2),
+      ),
+      const SizedBox(height: 10),
       Row(children: [
-        const Icon(Icons.location_on_rounded, size: 16, color: _kPrimary),
-        const SizedBox(width: 4),
-        Flexible(
-          child: Text('${hostel.town ?? ''}, Ghana',
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.black54,
-                  fontWeight: FontWeight.w500)),
+        Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+              color: _kPrimary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8)),
+          child:
+              const Icon(Icons.location_on_rounded, size: 14, color: _kPrimary),
         ),
-      ]),
-      const SizedBox(height: 14),
-      // Price badge — uses FittedBox so it never overflows on narrow screens
-      if (hostel.priceRange != null)
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                  colors: [Color(0xFF16A34A), Color(0xFF15803D)]),
-              borderRadius: BorderRadius.circular(50),
-              boxShadow: [
-                BoxShadow(
-                    color: _kGreen.withOpacity(0.3),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3))
-              ],
-            ),
-            child: Text(
-              '${hostel.priceRange!}  ·  ${hostel.durationType}',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14),
-            ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            '${hostel.town ?? ''}, Ghana',
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontSize: 14, color: _kTextMuted, fontWeight: FontWeight.w500),
           ),
         ),
-      const SizedBox(height: 14),
-      if (hostel.description?.isNotEmpty == true) ...[
-        Text(hostel.description!,
+      ]),
+      const SizedBox(height: 16),
+      if (hostel.priceRange != null)
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+                colors: [Color(0xFF16A34A), Color(0xFF15803D)]),
+            borderRadius: BorderRadius.circular(50),
+            boxShadow: [
+              BoxShadow(
+                  color: _kGreen.withOpacity(0.28),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4))
+            ],
+          ),
+          child: Text(
+            '${hostel.priceRange!}  ·  ${hostel.durationType}',
             style: const TextStyle(
-                fontSize: 14, color: Colors.black54, height: 1.65)),
-        const SizedBox(height: 14),
+                color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+        ),
+      const SizedBox(height: 16),
+      if (hostel.description?.isNotEmpty == true) ...[
+        Text(
+          hostel.description!,
+          style: const TextStyle(fontSize: 14, color: _kTextMuted, height: 1.7),
+        ),
+        const SizedBox(height: 16),
       ],
-      if (hostel.schoolName?.isNotEmpty == true)
+      if (hostel.schoolName?.isNotEmpty == true) ...[
         _InfoChip(
           icon: Icons.school_rounded,
           text: hostel.schoolShortName != null
@@ -640,22 +678,30 @@ class _DetailsBox extends StatelessWidget {
               : hostel.schoolName!,
           color: _kPrimary,
         ),
-      const SizedBox(height: 12),
-      // Phone box
+        const SizedBox(height: 14),
+      ],
+
+      // ── Phone contact block ───────────────────────────────────────────────
       Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: _kPrimary.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _kPrimary.withOpacity(0.2)),
+          color: _kSurface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _kBorder),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('For enquiries or details call:',
+          const Row(children: [
+            Icon(Icons.headset_mic_rounded, size: 15, color: _kTextMuted),
+            SizedBox(width: 6),
+            Text(
+              'For enquiries or details call:',
               style: TextStyle(
                   fontSize: 12,
-                  color: Colors.black45,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(height: 8),
+                  color: _kTextMuted,
+                  fontWeight: FontWeight.w600),
+            ),
+          ]),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -664,20 +710,21 @@ class _DetailsBox extends StatelessWidget {
                       onTap: () => launchUrl(Uri.parse('tel:$p')),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
+                            horizontal: 14, vertical: 9),
                         decoration: BoxDecoration(
-                          color: _kPrimary,
+                          gradient: const LinearGradient(
+                              colors: [_kPrimary, _kAccent]),
                           borderRadius: BorderRadius.circular(50),
                           boxShadow: [
                             BoxShadow(
                                 color: _kPrimary.withOpacity(0.3),
-                                blurRadius: 6,
-                                offset: const Offset(0, 2))
+                                blurRadius: 8,
+                                offset: const Offset(0, 3))
                           ],
                         ),
                         child: Row(mainAxisSize: MainAxisSize.min, children: [
                           const Icon(Icons.phone_rounded,
-                              size: 14, color: Colors.white),
+                              size: 13, color: Colors.white),
                           const SizedBox(width: 6),
                           Text(p,
                               style: const TextStyle(
@@ -692,25 +739,25 @@ class _DetailsBox extends StatelessWidget {
         ]),
       ),
       const SizedBox(height: 12),
-      // Note banner
+
+      // ── Warning note ──────────────────────────────────────────────────────
       Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         decoration: BoxDecoration(
           color: const Color(0xFFFFF7ED),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: const Color(0xFFFED7AA)),
         ),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Icon(Icons.info_outline_rounded,
-              size: 16, color: Color(0xFFEA580C)),
-          const SizedBox(width: 8),
-          const Expanded(
+        child:
+            const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.info_outline_rounded, size: 15, color: _kOrange),
+          SizedBox(width: 8),
+          Expanded(
             child: Text(
-                'NOTE: Any room you book will be unavailable for others',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFFEA580C))),
+              'NOTE: Any room you book will be unavailable for others',
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: _kOrange),
+            ),
           ),
         ]),
       ),
@@ -726,62 +773,56 @@ class _InfoChip extends StatelessWidget {
       {required this.icon, required this.text, required this.color});
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(50),
-        border: Border.all(color: color.withOpacity(0.25)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 14, color: color),
-        const SizedBox(width: 6),
-        Flexible(
-            child: Text(text,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    fontSize: 13, color: color, fontWeight: FontWeight.w600))),
-      ]),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(50),
+          border: Border.all(color: color.withOpacity(0.22)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
+          Flexible(
+              child: Text(
+            text,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                fontSize: 13, color: color, fontWeight: FontWeight.w600),
+          )),
+        ]),
+      );
 }
 
 // ─── 3. ROOMS ─────────────────────────────────────────────────────────────────
-
 class _RoomsSection extends StatelessWidget {
   final List<RoomModel> rooms;
   final Hostel hostel;
   final bool isWide;
   final void Function(String, int) onBooked;
-  const _RoomsSection(
-      {required this.rooms,
-      required this.hostel,
-      required this.isWide,
-      required this.onBooked});
+  const _RoomsSection({
+    required this.rooms,
+    required this.hostel,
+    required this.isWide,
+    required this.onBooked,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final screenW = MediaQuery.of(context).size.width;
-    final hPad = isWide ? 60.0 : 16.0;
-
-    // ── Dynamically compute card height based on available width ──────────
-    // On wide screens: 3 columns. On narrow: 1 column.
-    // Card width = (available width - spacing) / columns
+    final hPad = isWide ? 60.0 : 20.0;
     final cols = isWide ? 3 : 1;
-    final totalSpacing = (cols - 1) * 20.0; // gap between cards
+    final screenW = MediaQuery.of(context).size.width;
+    final totalSpacing = (cols - 1) * 20.0;
     final cardW = (screenW - hPad * 2 - totalSpacing) / cols;
-
-    // Image takes 160px, content area needs ~230px minimum
-    // Add 30px buffer so "Almost Full" badge never pushes over
-    final cardH = 160.0 + 240.0;
+    const cardH = 160.0 + 250.0;
 
     return Container(
       color: _kBg,
-      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 48),
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 52),
       child: Column(children: [
         _SectionHeading(
-            title: 'Available Rooms', subtitle: 'Choose a room that suits you'),
+            title: 'Available Rooms',
+            subtitle: 'Choose a room that suits your lifestyle'),
         const SizedBox(height: 32),
         rooms.isEmpty
             ? _EmptyBox(message: 'No rooms found for this hostel.')
@@ -792,22 +833,22 @@ class _RoomsSection extends StatelessWidget {
                   crossAxisCount: cols,
                   crossAxisSpacing: 20,
                   mainAxisSpacing: 20,
-                  // Fixed pixel height — never overflows regardless of screen
                   mainAxisExtent: cardH,
                 ),
                 itemCount: rooms.length,
                 itemBuilder: (_, i) => _RoomCard(
-                    room: rooms[i],
-                    hostel: hostel,
-                    onBooked: onBooked,
-                    cardWidth: cardW),
+                  room: rooms[i],
+                  hostel: hostel,
+                  onBooked: onBooked,
+                  cardWidth: cardW,
+                ),
               ),
       ]),
     );
   }
 }
 
-class _RoomCard extends StatelessWidget {
+class _RoomCard extends StatefulWidget {
   final RoomModel room;
   final Hostel hostel;
   final void Function(String, int) onBooked;
@@ -819,206 +860,231 @@ class _RoomCard extends StatelessWidget {
       required this.cardWidth});
 
   @override
-  Widget build(BuildContext context) {
-    final rem = room.remaining;
-    final isAvail = rem > 0;
+  State<_RoomCard> createState() => _RoomCardState();
+}
 
-    return Container(
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.07),
-              blurRadius: 16,
-              offset: const Offset(0, 6))
-        ],
-      ),
-      clipBehavior: Clip.hardEdge,
-      // Column with fixed image + flexible content
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── Image area ────────────────────────────────────────────────
-          SizedBox(
-            height: 160,
-            child: Stack(children: [
-              _RoomImageSlider(
-                images: room.images.isNotEmpty
-                    ? room.images
-                    : (room.image != null ? [room.image!] : []),
-                height: 160,
+class _RoomCardState extends State<_RoomCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _hoverCtrl;
+  late Animation<double> _elevation;
+  bool _hovered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hoverCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 200));
+    _elevation = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _hoverCtrl, curve: Curves.easeOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _hoverCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rem = widget.room.remaining;
+    final isAvail = rem > 0;
+    final isAlmostFull = rem == 1 && isAvail;
+
+    return MouseRegion(
+      onEnter: (_) {
+        setState(() => _hovered = true);
+        _hoverCtrl.forward();
+      },
+      onExit: (_) {
+        setState(() => _hovered = false);
+        _hoverCtrl.reverse();
+      },
+      child: AnimatedBuilder(
+        animation: _elevation,
+        builder: (_, child) => Transform.translate(
+          offset: Offset(0, -_elevation.value * 4),
+          child: child,
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _kCard,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: isAlmostFull
+                  ? _kRed.withOpacity(0.3)
+                  : isAvail
+                      ? _kBorder
+                      : _kBorder,
+              width: isAlmostFull ? 1.5 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(_hovered ? 0.12 : 0.06),
+                blurRadius: _hovered ? 24 : 14,
+                offset: const Offset(0, 6),
               ),
-              Positioned(
-                top: 10,
-                right: 10,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isAvail ? _kGreen : _kRed,
-                    borderRadius: BorderRadius.circular(50),
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.2), blurRadius: 4)
-                    ],
-                  ),
-                  child: Text(isAvail ? 'Available' : 'Full',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700)),
-                ),
-              ),
-            ]),
+            ],
           ),
-          // ── Content area — Expanded so it fills remaining card height ──
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // Top info block
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('${room.type} Room',
-                          textAlign: TextAlign.center,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              color: _kDark)),
-                      const SizedBox(height: 3),
-                      // Room number
-                      RichText(
+          clipBehavior: Clip.hardEdge,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // ── Image ──────────────────────────────────────────────────────
+            SizedBox(
+              height: 160,
+              child: Stack(children: [
+                _RoomImageSlider(
+                  images: widget.room.images.isNotEmpty
+                      ? widget.room.images
+                      : (widget.room.image != null ? [widget.room.image!] : []),
+                  height: 160,
+                ),
+                // Status badge
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color:
+                          isAvail ? (isAlmostFull ? _kOrange : _kGreen) : _kRed,
+                      borderRadius: BorderRadius.circular(50),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.25),
+                            blurRadius: 6)
+                      ],
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Container(
+                        width: 5,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.9),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        isAvail
+                            ? (isAlmostFull ? 'Almost Full' : 'Available')
+                            : 'Full',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700),
+                      ),
+                    ]),
+                  ),
+                ),
+                // Price tag
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          Colors.black.withOpacity(0.7),
+                          Colors.transparent
+                        ],
+                      ),
+                    ),
+                    child: Text(
+                      'GHS ${widget.room.price.toStringAsFixed(2)} / person',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        shadows: [Shadow(blurRadius: 4, color: Colors.black)],
+                      ),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+
+            // ── Content ────────────────────────────────────────────────────
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(mainAxisSize: MainAxisSize.min, children: [
+                      Text(
+                        '${widget.room.type} Room',
                         textAlign: TextAlign.center,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        text: TextSpan(
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.black54),
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: _kDark),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Room No. ${widget.room.roomNumber}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            fontSize: 12,
+                            color: _kTextDim,
+                            fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const TextSpan(text: 'Room No: '),
-                            TextSpan(
-                                text: room.roomNumber,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    color: _kDark)),
-                          ],
+                            _MiniPill(
+                                Icons.people_outline_rounded,
+                                'Cap: ${widget.room.capacity}',
+                                Colors.blueGrey),
+                            const SizedBox(width: 6),
+                            _MiniPill(
+                              Icons.door_front_door_outlined,
+                              '$rem slot${rem != 1 ? 's' : ''}',
+                              isAvail ? _kGreen : _kRed,
+                            ),
+                          ]),
+                    ]),
+
+                    // ── Action buttons ────────────────────────────────────
+                    Row(children: [
+                      Expanded(
+                        child: _OutlineBtn(
+                          label: 'Photos',
+                          icon: Icons.photo_library_outlined,
+                          onTap: (widget.room.images.isNotEmpty ||
+                                  widget.room.image != null)
+                              ? () => _showImages(context, widget.room)
+                              : null,
                         ),
                       ),
-                      const SizedBox(height: 6),
-                      // Capacity & slots pills — wrap so they never overflow
-                      Wrap(
-                        alignment: WrapAlignment.center,
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                          _StatPill(
-                              icon: Icons.people_outline_rounded,
-                              label: 'Cap: ${room.capacity}',
-                              color: Colors.blueGrey),
-                          _StatPill(
-                              icon: Icons.door_front_door_outlined,
-                              label: '$rem slot${rem != 1 ? 's' : ''}',
-                              color: isAvail ? _kGreen : _kRed),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      // Price badge — FittedBox prevents right overflow
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 5),
-                          decoration: BoxDecoration(
-                              color: _kGreen.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(50)),
-                          child: Text(
-                              'GHS ${room.price.toStringAsFixed(2)} / person',
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w800,
-                                  color: _kGreen)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _FilledBtn(
+                          label: isAvail ? 'Book Now' : 'Full',
+                          icon: isAvail
+                              ? Icons.hotel_rounded
+                              : Icons.block_rounded,
+                          onTap: isAvail
+                              ? () => _showBooking(context, widget.room)
+                              : null,
+                          color: isAvail ? _kPrimary : Colors.grey[400]!,
                         ),
                       ),
-                      // "Almost Full" badge — only shown when rem == 1
-                      if (rem == 1) ...[
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 3),
-                          decoration: BoxDecoration(
-                              color: _kRed.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(50)),
-                          child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text('🔥', style: TextStyle(fontSize: 11)),
-                                SizedBox(width: 4),
-                                Text('Almost Full!',
-                                    style: TextStyle(
-                                        fontSize: 11,
-                                        color: _kRed,
-                                        fontWeight: FontWeight.w700)),
-                              ]),
-                        ),
-                      ],
-                    ],
-                  ),
-                  // Bottom buttons
-                  Row(children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed:
-                            (room.images.isNotEmpty || room.image != null)
-                                ? () => _showImages(context, room)
-                                : null,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: _kPrimary,
-                          side: const BorderSide(color: _kPrimary),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50)),
-                          padding: const EdgeInsets.symmetric(vertical: 9),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Text('Images',
-                            style: TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w600)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed:
-                            isAvail ? () => _showBooking(context, room) : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor:
-                              isAvail ? _kPrimary : Colors.grey[400],
-                          foregroundColor: Colors.white,
-                          elevation: isAvail ? 3 : 0,
-                          shadowColor: _kPrimary.withOpacity(0.4),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(50)),
-                          padding: const EdgeInsets.symmetric(vertical: 9),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: Text(isAvail ? 'Book Now' : 'Full',
-                            style: const TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  ]),
-                ],
+                    ]),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ]),
+        ),
       ),
     );
   }
@@ -1030,25 +1096,39 @@ class _RoomCard extends StatelessWidget {
     if (imgs.isEmpty) return;
     showDialog(
       context: ctx,
+      barrierColor: Colors.black87,
       builder: (_) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
-            child: Row(children: [
-              Expanded(
-                  child: Text('${room.type} Room — ${room.roomNumber}',
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700))),
-              IconButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  icon: const Icon(Icons.close)),
-            ]),
+        backgroundColor: Colors.transparent,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 500),
+          decoration: BoxDecoration(
+            color: _kDark,
+            borderRadius: BorderRadius.circular(24),
           ),
-          _RoomImageSlider(images: imgs, height: 300),
-          const SizedBox(height: 12),
-        ]),
+          clipBehavior: Clip.hardEdge,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 8, 0),
+              child: Row(children: [
+                Expanded(
+                    child: Text(
+                  '${room.type} · Room ${room.roomNumber}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white),
+                )),
+                IconButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  icon: const Icon(Icons.close, color: Colors.white60),
+                ),
+              ]),
+            ),
+            _RoomImageSlider(images: imgs, height: 320),
+            const SizedBox(height: 16),
+          ]),
+        ),
       ),
     );
   }
@@ -1057,13 +1137,15 @@ class _RoomCard extends StatelessWidget {
     showModalBottomSheet(
       context: ctx,
       isScrollControlled: true,
+      useSafeArea: true,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.6),
       builder: (_) => _BookingSheet(
         room: room,
-        hostel: hostel,
+        hostel: widget.hostel,
         onSuccess: (bookingId, slots) {
           Navigator.pop(ctx);
-          onBooked(room.id, slots);
+          widget.onBooked(room.id, slots);
           ctx.push('/book/$bookingId');
         },
       ),
@@ -1071,33 +1153,106 @@ class _RoomCard extends StatelessWidget {
   }
 }
 
-class _StatPill extends StatelessWidget {
+class _MiniPill extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  const _StatPill(
-      {required this.icon, required this.label, required this.color});
+  const _MiniPill(this.icon, this.label, this.color);
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(50)),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 3),
-        Text(label,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-      ]),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(50)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 11, color: color),
+          const SizedBox(width: 3),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+        ]),
+      );
+}
+
+class _OutlineBtn extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback? onTap;
+  const _OutlineBtn({required this.label, required this.icon, this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color:
+                onTap != null ? _kPrimary.withOpacity(0.05) : Colors.grey[100],
+            borderRadius: BorderRadius.circular(50),
+            border: Border.all(
+                color: onTap != null
+                    ? _kPrimary.withOpacity(0.4)
+                    : Colors.grey[300]!),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(icon,
+                size: 12, color: onTap != null ? _kPrimary : Colors.grey[400]),
+            const SizedBox(width: 5),
+            Text(label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: onTap != null ? _kPrimary : Colors.grey[400],
+                )),
+          ]),
+        ),
+      );
+}
+
+class _FilledBtn extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback? onTap;
+  final Color color;
+  const _FilledBtn(
+      {required this.label,
+      required this.icon,
+      this.onTap,
+      required this.color});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(50),
+            boxShadow: onTap != null
+                ? [
+                    BoxShadow(
+                        color: color.withOpacity(0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3))
+                  ]
+                : [],
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(icon, size: 12, color: Colors.white),
+            const SizedBox(width: 5),
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white)),
+          ]),
+        ),
+      );
 }
 
 // ─── Room Image Slider ────────────────────────────────────────────────────────
-
 class _RoomImageSlider extends StatefulWidget {
   final List<String> images;
   final double height;
@@ -1180,69 +1335,64 @@ class _ArrowBtn extends StatelessWidget {
   const _ArrowBtn(this.icon, {required this.onTap});
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 26,
-        height: 26,
-        decoration: BoxDecoration(
-            color: Colors.black54, borderRadius: BorderRadius.circular(13)),
-        child: Icon(icon, color: Colors.white, size: 16),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+              color: Colors.black54, borderRadius: BorderRadius.circular(14)),
+          child: Icon(icon, color: Colors.white, size: 16),
+        ),
+      );
 }
 
 // ─── 4. FACILITIES ────────────────────────────────────────────────────────────
-
 class _FacilitiesSection extends StatelessWidget {
   final List<String> facilities;
   final bool isWide;
   const _FacilitiesSection({required this.facilities, required this.isWide});
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: _kCard,
-      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 16, vertical: 48),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _SectionHeading(
-            title: 'Facilities & Amenities',
-            subtitle: 'Everything available at this hostel'),
-        const SizedBox(height: 28),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: facilities
-              .map((f) => Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                    decoration: BoxDecoration(
-                      color: _kPrimary.withOpacity(0.06),
-                      borderRadius: BorderRadius.circular(50),
-                      border: Border.all(color: _kPrimary.withOpacity(0.2)),
-                    ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.check_circle_rounded,
-                          size: 15, color: _kGreen),
-                      const SizedBox(width: 7),
-                      Text(f,
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: _kDark)),
-                    ]),
-                  ))
-              .toList(),
-        ),
-      ]),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+        color: _kCard,
+        padding:
+            EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 52),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _SectionHeading(
+              title: 'Facilities & Amenities',
+              subtitle: 'Everything available at this hostel'),
+          const SizedBox(height: 28),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: facilities
+                .map((f) => Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 9),
+                      decoration: BoxDecoration(
+                        color: _kPrimary.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(50),
+                        border: Border.all(color: _kPrimary.withOpacity(0.18)),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.check_circle_rounded,
+                            size: 14, color: _kGreen),
+                        const SizedBox(width: 7),
+                        Text(f,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: _kDark)),
+                      ]),
+                    ))
+                .toList(),
+          ),
+        ]),
+      );
 }
 
 // ─── 5. LOCATION ─────────────────────────────────────────────────────────────
-
 const _kGeoapifyApiKey = '1f447c87da1949b48571d28867d1f6a6';
 
 class _LocationSection extends StatelessWidget {
@@ -1259,28 +1409,23 @@ class _LocationSection extends StatelessWidget {
       if (latMatch != null && lngMatch != null) {
         return {
           'lat': double.parse(latMatch.group(1)!),
-          'lng': double.parse(lngMatch.group(1)!),
+          'lng': double.parse(lngMatch.group(1)!)
         };
       }
     } catch (_) {}
     return null;
   }
 
-  String _staticMapUrl(double lat, double lng) {
-    return 'https://maps.geoapify.com/v1/staticmap'
-        '?style=osm-bright'
-        '&width=800'
-        '&height=400'
-        '&center=lonlat:$lng,$lat'
-        '&zoom=16'
-        '&marker=lonlat:$lng,$lat;color:%230f766e;size:large'
-        '&apiKey=$_kGeoapifyApiKey';
-  }
+  String _staticMapUrl(double lat, double lng) =>
+      'https://maps.geoapify.com/v1/staticmap'
+      '?style=osm-bright&width=800&height=400'
+      '&center=lonlat:$lng,$lat&zoom=16'
+      '&marker=lonlat:$lng,$lat;color:%230f766e;size:large'
+      '&apiKey=$_kGeoapifyApiKey';
 
   String _buildOpenUrl(double? lat, double? lng) {
-    if (lat != null && lng != null) {
+    if (lat != null && lng != null)
       return 'https://www.google.com/maps?q=$lat,$lng';
-    }
     try {
       if (!mapSrc.contains('/embed')) return mapSrc;
     } catch (_) {}
@@ -1298,29 +1443,28 @@ class _LocationSection extends StatelessWidget {
 
     return Container(
       color: _kBg,
-      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 16, vertical: 48),
+      padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 52),
       child: Column(children: [
         _SectionHeading(title: 'Our Location', subtitle: 'Find us on the map'),
         const SizedBox(height: 24),
         GestureDetector(
           onTap: () async {
             final uri = Uri.parse(openUrl);
-            if (await canLaunchUrl(uri)) {
+            if (await canLaunchUrl(uri))
               await launchUrl(uri, mode: LaunchMode.externalApplication);
-            }
           },
           child: Container(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
                     color: Colors.black.withOpacity(0.12),
-                    blurRadius: 20,
+                    blurRadius: 24,
                     offset: const Offset(0, 8)),
               ],
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(24),
               child: Stack(children: [
                 if (staticUrl != null)
                   CachedNetworkImage(
@@ -1339,48 +1483,49 @@ class _LocationSection extends StatelessWidget {
                   right: 0,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
+                        horizontal: 16, vertical: 14),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.bottomCenter,
                         end: Alignment.topCenter,
                         colors: [
-                          Colors.black.withOpacity(0.65),
-                          Colors.transparent,
+                          Colors.black.withOpacity(0.7),
+                          Colors.transparent
                         ],
                       ),
                     ),
                     child: Row(children: [
                       const Icon(Icons.location_on_rounded,
-                          color: Colors.white, size: 18),
-                      const SizedBox(width: 6),
+                          color: Colors.white, size: 17),
+                      const SizedBox(width: 7),
                       const Expanded(
-                        child: Text('Tap to open in Google Maps',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600)),
+                        child: Text(
+                          'Tap to open in Google Maps',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600),
+                        ),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
+                            horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(50),
                         ),
                         child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.open_in_new_rounded,
-                                size: 13, color: _kPrimary),
-                            SizedBox(width: 4),
-                            Text('Open',
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: _kPrimary)),
-                          ],
-                        ),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.open_in_new_rounded,
+                                  size: 12, color: _kPrimary),
+                              SizedBox(width: 5),
+                              Text('Open',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: _kPrimary)),
+                            ]),
                       ),
                     ]),
                   ),
@@ -1396,165 +1541,117 @@ class _LocationSection extends StatelessWidget {
 
 class _MapShimmer extends StatelessWidget {
   @override
-  Widget build(BuildContext context) {
-    return Shimmer.fromColors(
-      baseColor: Colors.grey[300]!,
-      highlightColor: Colors.grey[100]!,
-      child: Container(
-          height: 240, width: double.infinity, color: Colors.grey[300]),
-    );
-  }
+  Widget build(BuildContext context) => Shimmer.fromColors(
+        baseColor: Colors.grey[300]!,
+        highlightColor: Colors.grey[100]!,
+        child: Container(
+            height: 240, width: double.infinity, color: Colors.grey[300]),
+      );
 }
 
 class _MapFallback extends StatelessWidget {
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 240,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            _kPrimary.withOpacity(0.12),
-            _kPrimary.withOpacity(0.05),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Stack(children: [
-        CustomPaint(
-          size: const Size(double.infinity, 240),
-          painter: _MapGridPainter(),
-        ),
-        Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: _kPrimary,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                        color: _kPrimary.withOpacity(0.4),
-                        blurRadius: 20,
-                        offset: const Offset(0, 6)),
-                  ],
-                ),
-                child: const Icon(Icons.location_on_rounded,
-                    color: Colors.white, size: 30),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(50),
-                  boxShadow: [
-                    BoxShadow(
-                        color: Colors.black.withOpacity(0.1), blurRadius: 8),
-                  ],
-                ),
-                child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.touch_app_rounded, size: 13, color: _kPrimary),
-                  SizedBox(width: 5),
-                  Text('Tap to open in Google Maps',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: _kPrimary)),
-                ]),
-              ),
-            ],
+  Widget build(BuildContext context) => Container(
+        height: 240,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_kPrimary.withOpacity(0.1), _kPrimary.withOpacity(0.04)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
         ),
-      ]),
-    );
-  }
-}
-
-class _MapGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
-      ..color = const Color(0xFF0F766E).withOpacity(0.08)
-      ..strokeWidth = 1;
-    for (double y = 0; y < size.height; y += 28) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-    for (double x = 0; x < size.width; x += 40) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-    }
-    final roadPaint = Paint()
-      ..color = const Color(0xFF0F766E).withOpacity(0.18)
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(0, size.height * 0.55),
-        Offset(size.width, size.height * 0.38), roadPaint);
-    canvas.drawLine(Offset(size.width * 0.35, 0),
-        Offset(size.width * 0.55, size.height), roadPaint);
-    final blockPaint = Paint()
-      ..color = const Color(0xFF0F766E).withOpacity(0.07)
-      ..style = PaintingStyle.fill;
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.05, size.height * 0.1, 55, 36),
-        blockPaint);
-    canvas.drawRect(
-        Rect.fromLTWH(size.width * 0.65, size.height * 0.15, 48, 32),
-        blockPaint);
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.1, size.height * 0.65, 42, 28),
-        blockPaint);
-    canvas.drawRect(Rect.fromLTWH(size.width * 0.72, size.height * 0.6, 52, 34),
-        blockPaint);
-  }
-
-  @override
-  bool shouldRepaint(_) => false;
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                color: _kPrimary,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                      color: _kPrimary.withOpacity(0.4),
+                      blurRadius: 20,
+                      offset: const Offset(0, 6))
+                ],
+              ),
+              child: const Icon(Icons.location_on_rounded,
+                  color: Colors.white, size: 28),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(50),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withOpacity(0.08), blurRadius: 8)
+                ],
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.touch_app_rounded, size: 12, color: _kPrimary),
+                SizedBox(width: 5),
+                Text(
+                  'Tap to open in Google Maps',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: _kPrimary),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      );
 }
 
 // ─── Section Heading ──────────────────────────────────────────────────────────
-
 class _SectionHeading extends StatelessWidget {
   final String title;
   final String subtitle;
   const _SectionHeading({required this.title, required this.subtitle});
 
   @override
-  Widget build(BuildContext context) {
-    return Column(children: [
-      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Container(
-            width: 28,
-            height: 3,
-            decoration: BoxDecoration(
-                color: _kPrimary, borderRadius: BorderRadius.circular(2))),
-        const SizedBox(width: 10),
-        Flexible(
-          child: Text(title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 20, fontWeight: FontWeight.w900, color: _kDark)),
-        ),
-        const SizedBox(width: 10),
-        Container(
-            width: 28,
-            height: 3,
-            decoration: BoxDecoration(
-                color: _kPrimary, borderRadius: BorderRadius.circular(2))),
-      ]),
-      const SizedBox(height: 6),
-      Text(subtitle,
+  Widget build(BuildContext context) => Column(children: [
+        Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Container(
+              width: 24,
+              height: 3,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [_kPrimary, _kAccent]),
+                borderRadius: BorderRadius.circular(2),
+              )),
+          const SizedBox(width: 12),
+          Flexible(
+              child: Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 21, fontWeight: FontWeight.w900, color: _kDark),
+          )),
+          const SizedBox(width: 12),
+          Container(
+              width: 24,
+              height: 3,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [_kAccent, _kPrimary]),
+                borderRadius: BorderRadius.circular(2),
+              )),
+        ]),
+        const SizedBox(height: 6),
+        Text(
+          subtitle,
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 13, color: Colors.black45)),
-    ]);
-  }
+          style: const TextStyle(fontSize: 13, color: _kTextDim),
+        ),
+      ]);
 }
 
-// ─── Booking Sheet ────────────────────────────────────────────────────────────
-
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── BOOKING SHEET — Modern Multi-Step ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
 class _BookingSheet extends StatefulWidget {
   final RoomModel room;
   final Hostel hostel;
@@ -1566,62 +1663,81 @@ class _BookingSheet extends StatefulWidget {
   State<_BookingSheet> createState() => _BookingSheetState();
 }
 
-class _BookingSheetState extends State<_BookingSheet> {
+class _BookingSheetState extends State<_BookingSheet>
+    with TickerProviderStateMixin {
   final _key = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
-  final _momoNumber = TextEditingController();
+  final _momo = TextEditingController();
   final _school = TextEditingController();
   final _schoolId = TextEditingController();
   final _notes = TextEditingController();
+
+  late AnimationController _stepAnim;
+  late Animation<double> _fadeAnim;
+  late Animation<Offset> _slideAnim;
 
   bool _notStudent = false;
   int _slots = 1;
   String _momoProvider = 'mtn';
   bool _busy = false;
-  int _step = 0;
+  int _step =
+      0; // 0=details, 1=payment, 2=processing, 3=done(error path handled)
   String? _bookingId;
-  String _paymentReference = _generateReference();
+  String _payRef = _generateReference();
 
-  void _refreshReference() => _paymentReference = _generateReference();
-
-  // Check if the entered MoMo number is a test number
   bool get _isTestNumber =>
-      _kTestMomoNumbers.contains(_momoNumber.text.trim().replaceAll(' ', ''));
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _email.dispose();
-    _phone.dispose();
-    _momoNumber.dispose();
-    _school.dispose();
-    _schoolId.dispose();
-    _notes.dispose();
-    super.dispose();
-  }
+      _kTestMomoNumbers.contains(_momo.text.trim().replaceAll(' ', ''));
 
   double get _totalAmount => widget.room.price * _slots;
 
+  @override
+  void initState() {
+    super.initState();
+    _stepAnim = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 320));
+    _fadeAnim = CurvedAnimation(parent: _stepAnim, curve: Curves.easeOut);
+    _slideAnim = Tween<Offset>(begin: const Offset(0.06, 0), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _stepAnim, curve: Curves.easeOut));
+    _stepAnim.forward();
+  }
+
+  @override
+  void dispose() {
+    _stepAnim.dispose();
+    for (final c in [_name, _email, _phone, _momo, _school, _schoolId, _notes])
+      c.dispose();
+    super.dispose();
+  }
+
+  void _goToStep(int s) {
+    _stepAnim.reset();
+    setState(() => _step = s);
+    _stepAnim.forward();
+    HapticFeedback.selectionClick();
+  }
+
+  // ── Form → save pending booking ───────────────────────────────────────────
   Future<void> _proceedToPayment() async {
-    if (!_key.currentState!.validate()) return;
+    if (!_key.currentState!.validate()) {
+      HapticFeedback.mediumImpact();
+      return;
+    }
     setState(() => _busy = true);
     try {
-      final r = widget.room;
-      final h = widget.hostel;
       final docRef =
           await FirebaseFirestore.instance.collection('bookings').add({
-        'room_id': r.id,
-        'room_number': r.roomNumber,
-        'hostel_id': h.id,
-        'hostel_name': h.hostelName,
-        'hostel_code': h.hostelCode,
-        'hostel_phone': h.phone,
+        'room_id': widget.room.id,
+        'room_number': widget.room.roomNumber,
+        'hostel_id': widget.hostel.id,
+        'hostel_name': widget.hostel.hostelName,
+        'hostel_code': widget.hostel.hostelCode,
+        'hostel_phone': widget.hostel.phone,
         'name': _name.text.trim(),
         'email': _email.text.trim(),
         'phone': _phone.text.trim(),
-        'momo_number': _momoNumber.text.trim(),
+        'momo_number': _momo.text.trim(),
         'momo_provider': _momoProvider,
         'school': _school.text.trim(),
         'school_id': _notStudent ? '' : _schoolId.text.trim(),
@@ -1636,57 +1752,40 @@ class _BookingSheetState extends State<_BookingSheet> {
         'booked_at': FieldValue.serverTimestamp(),
       });
       _bookingId = docRef.id;
-      setState(() {
-        _step = 1;
-        _busy = false;
-      });
+      _goToStep(1);
     } catch (e) {
-      setState(() => _busy = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'), backgroundColor: _kRed));
-      }
+      _showSnack('Error saving booking: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
+  // ── Initiate Paystack payment ─────────────────────────────────────────────
   Future<void> _initiatePayment() async {
-    _refreshReference();
-    setState(() {
-      _step = 2;
-      _busy = true;
-    });
+    _payRef = _generateReference();
+    _goToStep(2);
+    setState(() => _busy = true);
 
     try {
-      // ── TEST MODE SHORTCUT ────────────────────────────────────────────────
-      // If the user entered a known Paystack sandbox test number, skip the
-      // real API call and simulate an instant success. When you switch to
-      // your live secret key (sk_live_...) this branch is never reached
-      // because real numbers won't match the test set.
       if (_isTestNumber) {
-        await Future.delayed(const Duration(seconds: 2)); // mimic network delay
-        await _onPaymentSuccess(_paymentReference);
+        await Future.delayed(const Duration(seconds: 2));
+        await _onPaymentSuccess(_payRef);
         return;
       }
 
-      // ── LIVE / NORMAL PAYSTACK FLOW ───────────────────────────────────────
       final provider = _momoProvider == 'mtn' ? 'mtn' : 'vod';
-      final amountInPesewas = (_totalAmount * 100).toInt();
-
       final chargeRes = await http.post(
         Uri.parse('$_kPaystackBaseUrl/charge'),
         headers: {
           'Authorization': 'Bearer $_kPaystackSecretKey',
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: jsonEncode({
           'email': _email.text.trim(),
-          'amount': amountInPesewas,
+          'amount': (_totalAmount * 100).toInt(),
           'currency': 'GHS',
-          'mobile_money': {
-            'phone': _momoNumber.text.trim(),
-            'provider': provider,
-          },
-          'reference': _paymentReference,
+          'mobile_money': {'phone': _momo.text.trim(), 'provider': provider},
+          'reference': _payRef,
           'metadata': {
             'booking_id': _bookingId,
             'hostel_name': widget.hostel.hostelName,
@@ -1702,21 +1801,19 @@ class _BookingSheetState extends State<_BookingSheet> {
       if (status == 'pay_offline' ||
           status == 'pending' ||
           status == 'send_otp') {
-        await _pollPaymentStatus(_paymentReference);
+        await _pollPaymentStatus(_payRef);
       } else if (status == 'success') {
-        await _onPaymentSuccess(_paymentReference);
+        await _onPaymentSuccess(_payRef);
       } else {
         throw Exception(chargeData['message'] ?? 'Payment failed. Try again.');
       }
     } catch (e) {
       if (!mounted) return;
-      _refreshReference();
-      setState(() {
-        _step = 1;
-        _busy = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Payment error: $e'), backgroundColor: _kRed));
+      _payRef = _generateReference();
+      _goToStep(1);
+      _showSnack('Payment error: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -1730,56 +1827,35 @@ class _BookingSheetState extends State<_BookingSheet> {
       );
       final data = jsonDecode(res.body);
       final status = data['data']?['status'];
-      debugPrint('🔁 Poll $i — status: $status');
       if (status == 'success') {
         await _onPaymentSuccess(reference);
         return;
-      } else if (status == 'failed') {
+      }
+      if (status == 'failed') {
         if (!mounted) return;
-        _refreshReference();
-        setState(() {
-          _step = 1;
-          _busy = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Payment declined. Please try again.'),
-            backgroundColor: _kRed));
+        _goToStep(1);
+        _showSnack('Payment declined. Please try again.', isError: true);
         return;
       }
     }
     if (!mounted) return;
-    _refreshReference();
-    setState(() {
-      _step = 1;
-      _busy = false;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content:
-          Text('Payment is taking long. Check your phone for the MoMo prompt.'),
-      backgroundColor: _kOrange,
-      duration: Duration(seconds: 5),
-    ));
+    _goToStep(1);
+    _showSnack('Payment is taking long. Check your phone for the MoMo prompt.',
+        isError: false);
   }
 
   Future<void> _onPaymentSuccess(String reference) async {
     final roomRef =
         FirebaseFirestore.instance.collection('rooms').doc(widget.room.id);
-
     try {
       await FirebaseFirestore.instance.runTransaction((txn) async {
         final snap = await txn.get(roomRef);
         final capacity = (snap.data()?['capacity'] ?? 1) as int;
         final booked = (snap.data()?['booked'] ?? 0) as int;
-        final remaining = capacity - booked;
-
-        if (remaining < _slots) {
+        if (capacity - booked < _slots)
           throw Exception('Not enough slots left');
-        }
 
-        // Decrement room atomically
         txn.update(roomRef, {'booked': FieldValue.increment(_slots)});
-
-        // Confirm the booking doc inside the same transaction
         txn.update(
           FirebaseFirestore.instance.collection('bookings').doc(_bookingId),
           {
@@ -1791,790 +1867,1198 @@ class _BookingSheetState extends State<_BookingSheet> {
         );
       });
 
-      // ── Log the booking activity ──────────────────────────────────────────
       await _logActivity(
         action: 'Booking Confirmed',
         details:
-            'User ${_email.text.trim()} booked ${_slots} slot(s) in Room ${widget.room.roomNumber} (${widget.room.type}) at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. ${_isTestNumber ? "(Test mode payment)" : "(Live payment)"}',
+            'User ${_email.text.trim()} booked $_slots slot(s) in Room ${widget.room.roomNumber} '
+            '(${widget.room.type}) at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. '
+            '${_isTestNumber ? "(Test mode)" : "(Live payment)"}',
         userEmail: _email.text.trim(),
       );
     } catch (e) {
-      // Slots were taken by someone else between form open and payment
       if (!mounted) return;
-      setState(() {
-        _step = 1;
-        _busy = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          e.toString().contains('Not enough slots')
-              ? 'Sorry, those slots were just taken. Please choose fewer slots or a different room.'
-              : 'Payment error: $e',
-        ),
-        backgroundColor: _kRed,
-        duration: const Duration(seconds: 5),
-      ));
+      _goToStep(1);
+      _showSnack(
+        e.toString().contains('Not enough slots')
+            ? 'Sorry, those slots were just taken. Choose fewer slots or a different room.'
+            : 'Confirmation error: $e',
+        isError: true,
+      );
       return;
     }
 
     await BookingStorageService.saveBookingId(_bookingId!);
     if (!mounted) return;
+    HapticFeedback.heavyImpact();
     widget.onSuccess(_bookingId!, _slots);
   }
 
+  void _showSnack(String msg, {required bool isError}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Row(children: [
+        Icon(isError ? Icons.error_outline : Icons.info_outline,
+            color: Colors.white, size: 18),
+        const SizedBox(width: 10),
+        Flexible(child: Text(msg, style: const TextStyle(fontSize: 13))),
+      ]),
+      backgroundColor: isError ? _kRed : _kOrange,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.all(16),
+    ));
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final bottomPad = mq.padding.bottom;
+    final keyboardH = mq.viewInsets.bottom;
+    // Extra scroll clearance so the CTA button is never hidden behind the nav bar
+    final scrollClearance = (bottomPad + keyboardH + 96).clamp(96.0, 240.0);
+
     return DraggableScrollableSheet(
-      initialChildSize: 0.94,
+      initialChildSize: 0.93,
       maxChildSize: 0.97,
       minChildSize: 0.5,
       builder: (_, ctrl) => Container(
         decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
         ),
         child: Column(children: [
+          // ── Drag handle ─────────────────────────────────────────────────
           Container(
             width: 40,
             height: 4,
-            margin: const EdgeInsets.symmetric(vertical: 10),
+            margin: const EdgeInsets.symmetric(vertical: 12),
             decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2)),
-          ),
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 4, 12, 16),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(colors: [_kPrimary, Color(0xFF0D9488)]),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
             ),
-            child: Row(children: [
-              const Icon(Icons.hotel_rounded, color: Colors.white, size: 22),
-              const SizedBox(width: 10),
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(
-                        'Book ${widget.room.type} Room — ${widget.room.roomNumber}',
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white)),
-                    Text('GHS ${_totalAmount.toStringAsFixed(2)} total',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.white.withOpacity(0.8))),
-                  ])),
-              IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, color: Colors.white)),
-            ]),
           ),
-          _StepIndicator(currentStep: _step),
-          Expanded(
-              child: SingleChildScrollView(
-            controller: ctrl,
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
-            child: _step == 0
-                ? _buildForm()
-                : _step == 1
-                    ? _buildPaymentStep()
-                    : _buildProcessingStep(),
-          )),
-        ]),
-      ),
-    );
-  }
 
-  Widget _buildForm() {
-    final rem = widget.room.remaining;
-    return Form(
-      key: _key,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _sectionLabel('Personal Information', Icons.person_rounded),
-        const SizedBox(height: 12),
-        _FF(
-            label: 'Full Name',
-            ctrl: _name,
-            icon: Icons.person_outline,
-            validator: (v) => v!.trim().isEmpty ? 'Required' : null),
-        _FF(
-            label: 'Email Address',
-            ctrl: _email,
-            icon: Icons.email_outlined,
-            kb: TextInputType.emailAddress,
-            validator: (v) => v!.trim().isEmpty ? 'Required' : null),
-        _FF(
-            label: 'Phone Number',
-            ctrl: _phone,
-            icon: Icons.phone_outlined,
-            kb: TextInputType.phone,
-            validator: (v) => v!.trim().isEmpty ? 'Required' : null),
-        const SizedBox(height: 8),
-        _sectionLabel('Academic Information', Icons.school_rounded),
-        const SizedBox(height: 12),
-        _FF(
-            label: 'School Name',
-            ctrl: _school,
-            icon: Icons.school_outlined,
-            validator: (v) => _notStudent
-                ? null
-                : v!.trim().isEmpty
-                    ? 'Required'
-                    : null),
-        if (!_notStudent)
-          _FF(
-              label: 'School ID (optional)',
-              ctrl: _schoolId,
-              icon: Icons.badge_outlined),
-        Row(children: [
-          Checkbox(
-              value: _notStudent,
-              onChanged: (v) => setState(() => _notStudent = v ?? false),
-              activeColor: _kPrimary),
-          const Flexible(
-            child: Text('I am not a student',
-                style: TextStyle(fontWeight: FontWeight.w600)),
-          ),
-        ]),
-        const SizedBox(height: 8),
-        _sectionLabel('Booking Details', Icons.hotel_rounded),
-        const SizedBox(height: 12),
-        const Text('Number of Slots',
-            style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-                color: Colors.black87)),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: BoxDecoration(
-              border: Border.all(color: Colors.black26),
-              borderRadius: BorderRadius.circular(12)),
-          child: DropdownButton<int>(
-            isExpanded: true,
-            underline: const SizedBox(),
-            value: _slots,
-            items: List.generate(
-                rem,
-                (i) => DropdownMenuItem(
-                      value: i + 1,
-                      child: Text(
-                          '${i + 1} slot${i + 1 > 1 ? 's' : ''} — GHS ${((i + 1) * widget.room.price).toStringAsFixed(2)}'),
-                    )),
-            onChanged: (v) => setState(() => _slots = v ?? 1),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(rem == 1 ? '🔥 Only 1 slot left!' : '$rem slots remaining',
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: rem == 1 ? _kRed : _kGreen)),
-        const SizedBox(height: 14),
-        _FF(
-            label: 'Additional Notes (optional)',
-            ctrl: _notes,
-            icon: Icons.notes_rounded,
-            lines: 3,
-            hint: 'Special requests, move-in date, questions…'),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-                colors: [Color(0xFF0F766E), Color(0xFF0D9488)]),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(children: [
-            const Icon(Icons.receipt_rounded, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(
+          // ── Header ──────────────────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 0, 12, 18),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [_kPrimary, _kAccent]),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.hotel_rounded,
+                    color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  const Text('Total Amount',
-                      style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  Text('GHS ${_totalAmount.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 20)),
-                ])),
-            Text('$_slots slot${_slots > 1 ? 's' : ''}',
-                style: TextStyle(
-                    color: Colors.white.withOpacity(0.8), fontSize: 13)),
-          ]),
-        ),
-        const SizedBox(height: 20),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _busy ? null : _proceedToPayment,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kPrimary,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              elevation: 3,
-              shadowColor: _kPrimary.withOpacity(0.4),
-            ),
-            child: _busy
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                        Text('Continue to Payment',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w800)),
-                        SizedBox(width: 8),
-                        Icon(Icons.arrow_forward_rounded),
-                      ]),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  Widget _buildPaymentStep() {
-    final momoNumber = widget.hostel.paymentMomo;
-    final cashPayment = widget.hostel.paymentCash;
-    final bankPayment = widget.hostel.paymentBank;
-    final otherPayment = widget.hostel.paymentOther;
-    final hasMomo = momoNumber.isNotEmpty;
-
-    // Show test mode indicator if the user enters a test number
-    final isTestMode = _isTestNumber;
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _sectionLabel(
-          'Landlord\'s Payment Details', Icons.account_balance_wallet_rounded),
-      const SizedBox(height: 12),
-      if (momoNumber.isNotEmpty)
-        _MomoNumberCard(
-            provider: 'MTN / Vodafone MoMo',
-            number: momoNumber,
-            color: const Color(0xFFFFCC00),
-            icon: '📱'),
-      if (cashPayment.isNotEmpty)
-        _MomoNumberCard(
-            provider: 'Cash Payment',
-            number: cashPayment,
-            color: const Color(0xFF16A34A),
-            icon: '💵'),
-      if (bankPayment.isNotEmpty)
-        _MomoNumberCard(
-            provider: 'Bank Payment',
-            number: bankPayment,
-            color: const Color(0xFF2563EB),
-            icon: '🏦'),
-      if (otherPayment.isNotEmpty)
-        _MomoNumberCard(
-            provider: 'Other Payment',
-            number: otherPayment,
-            color: const Color(0xFF7C3AED),
-            icon: '💳'),
-      if (momoNumber.isEmpty &&
-          cashPayment.isEmpty &&
-          bankPayment.isEmpty &&
-          otherPayment.isEmpty)
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.orange.withOpacity(0.3)),
-          ),
-          child: const Row(children: [
-            Icon(Icons.info_outline_rounded, color: _kOrange),
-            SizedBox(width: 8),
-            Flexible(
-                child: Text('Contact the hostel directly for payment details.',
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: _kOrange,
-                        fontWeight: FontWeight.w500))),
-          ]),
-        ),
-      const SizedBox(height: 20),
-      if (hasMomo) ...[
-        _sectionLabel('Your MoMo Details', Icons.payment_rounded),
-        const SizedBox(height: 12),
-        const Text('Select Provider',
-            style: TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-                color: Colors.black54)),
-        const SizedBox(height: 8),
-        Row(children: [
-          Expanded(
-              child: _ProviderBtn(
-                  label: 'MTN MoMo',
-                  color: const Color(0xFFFFCC00),
-                  isSelected: _momoProvider == 'mtn',
-                  onTap: () => setState(() => _momoProvider = 'mtn'))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: _ProviderBtn(
-                  label: 'Vodafone Cash',
-                  color: const Color(0xFFE60000),
-                  isSelected: _momoProvider == 'vodafone',
-                  onTap: () => setState(() => _momoProvider = 'vodafone'))),
-        ]),
-        const SizedBox(height: 16),
-        _FF(
-            label: 'Your MoMo Number',
-            ctrl: _momoNumber,
-            icon: Icons.phone_android_rounded,
-            kb: TextInputType.phone,
-            hint: '024XXXXXXX or 050XXXXXXX',
-            validator: (v) =>
-                v!.trim().length < 10 ? 'Enter a valid MoMo number' : null),
-        const SizedBox(height: 16),
-
-        // Test mode indicator
-        if (isTestMode)
-          Container(
-            padding: const EdgeInsets.all(12),
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: _kGreen.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _kGreen.withOpacity(0.3)),
-            ),
-            child: Row(children: [
-              const Icon(Icons.science_rounded, color: _kGreen),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Test Mode Detected: Your payment will be simulated. No real money will be deducted.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _kGreen,
-                    fontWeight: FontWeight.w600,
-                  ),
+                      Text(
+                        '${widget.room.type} Room · ${widget.room.roomNumber}',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: _kDark),
+                      ),
+                      Text(
+                        'GHS ${_totalAmount.toStringAsFixed(2)} total',
+                        style:
+                            const TextStyle(fontSize: 12, color: _kTextMuted),
+                      ),
+                    ]),
+              ),
+              // Close button
+              Container(
+                decoration: BoxDecoration(
+                  color: _kSurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _kBorder),
+                ),
+                child: IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded,
+                      size: 18, color: _kTextMuted),
+                  padding: const EdgeInsets.all(8),
+                  constraints: const BoxConstraints(),
                 ),
               ),
             ]),
           ),
-      ],
-      Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _kGreen.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _kGreen.withOpacity(0.3)),
-        ),
-        child: Column(children: [
-          _SummaryRow(
-              label: 'Room',
-              value: '${widget.room.type} — ${widget.room.roomNumber}'),
-          _SummaryRow(label: 'Slots', value: '$_slots'),
-          _SummaryRow(
-              label: 'Price/slot',
-              value: 'GHS ${widget.room.price.toStringAsFixed(2)}'),
-          const Divider(height: 20),
-          _SummaryRow(
-              label: 'Total',
-              value: 'GHS ${_totalAmount.toStringAsFixed(2)}',
-              bold: true),
-        ]),
-      ),
-      const SizedBox(height: 8),
-      Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-            color: const Color(0xFFFFF7ED),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFFED7AA))),
-        child: Row(children: [
-          const Icon(Icons.info_outline_rounded, size: 16, color: _kOrange),
-          const SizedBox(width: 8),
-          Flexible(
-              child: Text(
-            hasMomo
-                ? isTestMode
-                    ? 'TEST MODE: No actual payment will be processed. Your booking will be confirmed immediately.'
-                    : 'You will receive a MoMo prompt on your phone to approve the payment.'
-                : 'Please pay using one of the methods above and contact the hostel to confirm.',
-            style: const TextStyle(
-                fontSize: 12, color: _kOrange, fontWeight: FontWeight.w500),
-          )),
-        ]),
-      ),
-      const SizedBox(height: 20),
-      if (hasMomo)
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _busy ? null : _initiatePayment,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: isTestMode ? _kGreen : _kGreen,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              elevation: 3,
-              shadowColor: _kGreen.withOpacity(0.4),
-            ),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(isTestMode ? Icons.science_rounded : Icons.lock_rounded,
-                  size: 18),
-              const SizedBox(width: 8),
-              Text(isTestMode ? 'Simulate Payment' : 'Pay Now',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w800)),
-            ]),
-          ),
-        ),
-      if (!hasMomo)
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _busy
-                ? null
-                : () async {
-                    setState(() => _busy = true);
-                    await FirebaseFirestore.instance
-                        .collection('bookings')
-                        .doc(_bookingId)
-                        .update({
-                      'status': 'pending',
-                      'payment_status': 'pending',
-                    });
 
-                    // Log the booking (offline payment)
-                    await _logActivity(
-                      action: 'Booking Created (Offline Payment)',
-                      details:
-                          'User ${_email.text.trim()} created booking for ${_slots} slot(s) in Room ${widget.room.roomNumber} (${widget.room.type}) at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. Payment to be made offline.',
-                      userEmail: _email.text.trim(),
-                    );
+          // ── Step progress bar ────────────────────────────────────────────
+          _ModernStepBar(currentStep: _step),
+          const SizedBox(height: 4),
 
-                    await BookingStorageService.saveBookingId(_bookingId!);
-                    if (!mounted) return;
-                    widget.onSuccess(_bookingId!, _slots);
-                  },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kPrimary,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              elevation: 3,
-            ),
-            child: _busy
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2))
-                : const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                        Icon(Icons.check_circle_rounded, size: 18),
-                        SizedBox(width: 8),
-                        Text('Confirm Booking',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w800)),
-                      ]),
-          ),
-        ),
-      const SizedBox(height: 12),
-      SizedBox(
-        width: double.infinity,
-        child: TextButton(
-          onPressed: () => setState(() => _step = 0),
-          child: const Text('← Back to Form',
-              style: TextStyle(color: Colors.black45)),
-        ),
-      ),
-    ]);
-  }
+          // ── Divider ──────────────────────────────────────────────────────
+          Container(height: 1, color: _kBorder),
 
-  Widget _buildProcessingStep() {
-    final isTestMode = _isTestNumber;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 60),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const CircularProgressIndicator(color: _kPrimary, strokeWidth: 3),
-          const SizedBox(height: 24),
-          Text(
-            isTestMode ? 'Simulating Payment…' : 'Processing Payment…',
-            style: const TextStyle(
-                fontSize: 18, fontWeight: FontWeight.w700, color: _kDark),
-          ),
-          const SizedBox(height: 12),
-          if (!isTestMode)
-            Text(
-                'Check your ${_momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash'} phone for a payment prompt.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    fontSize: 14, color: Colors.black45, height: 1.5)),
-          if (isTestMode)
-            const Text(
-                'Test Mode: No actual payment required. Confirming your booking...',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 14, color: Colors.black45, height: 1.5)),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: _kPrimary.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _kPrimary.withOpacity(0.2)),
+          // ── Body ─────────────────────────────────────────────────────────
+          Expanded(
+            child: FadeTransition(
+              opacity: _fadeAnim,
+              child: SlideTransition(
+                position: _slideAnim,
+                child: SingleChildScrollView(
+                  controller: ctrl,
+                  physics: const BouncingScrollPhysics(),
+                  padding: EdgeInsets.fromLTRB(20, 20, 20, scrollClearance),
+                  child: _step == 0
+                      ? _buildDetailsForm()
+                      : _step == 1
+                          ? _buildPaymentStep()
+                          : _buildProcessingStep(),
+                ),
+              ),
             ),
-            child: Text('Amount: GHS ${_totalAmount.toStringAsFixed(2)}',
-                style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: _kPrimary)),
           ),
         ]),
       ),
     );
   }
 
-  Widget _sectionLabel(String label, IconData icon) {
-    return Row(children: [
-      Icon(icon, size: 18, color: _kPrimary),
-      const SizedBox(width: 8),
-      Flexible(
-        child: Text(label,
-            style: const TextStyle(
-                fontSize: 15, fontWeight: FontWeight.w800, color: _kDark)),
+  // ─── Step 0 — Details form ────────────────────────────────────────────────
+  Widget _buildDetailsForm() {
+    final rem = widget.room.remaining;
+    return Form(
+      key: _key,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Room summary card ───────────────────────────────────────────────
+        _RoomSummaryCard(room: widget.room, slots: _slots, total: _totalAmount),
+        const SizedBox(height: 24),
+
+        // ── Personal info ───────────────────────────────────────────────────
+        _FormGroupLabel('Personal Information', Icons.person_outline_rounded),
+        const SizedBox(height: 14),
+        _ModernField(
+            label: 'Full Name',
+            ctrl: _name,
+            icon: Icons.badge_outlined,
+            validator: (v) =>
+                v!.trim().isEmpty ? 'Full name is required' : null),
+        _ModernField(
+            label: 'Email Address',
+            ctrl: _email,
+            icon: Icons.alternate_email_rounded,
+            kb: TextInputType.emailAddress,
+            validator: (v) => v!.trim().isEmpty ? 'Email is required' : null),
+        _ModernField(
+            label: 'Phone Number',
+            ctrl: _phone,
+            icon: Icons.phone_outlined,
+            kb: TextInputType.phone,
+            validator: (v) =>
+                v!.trim().isEmpty ? 'Phone number is required' : null),
+
+        const SizedBox(height: 6),
+        // ── Academic info ───────────────────────────────────────────────────
+        _FormGroupLabel('Academic Information', Icons.school_outlined),
+        const SizedBox(height: 14),
+        _ModernField(
+          label: 'School / University',
+          ctrl: _school,
+          icon: Icons.account_balance_outlined,
+          validator: (v) => _notStudent
+              ? null
+              : v!.trim().isEmpty
+                  ? 'School name is required'
+                  : null,
+        ),
+        if (!_notStudent)
+          _ModernField(
+              label: 'Student ID (optional)',
+              ctrl: _schoolId,
+              icon: Icons.fingerprint_rounded),
+        // Not-student toggle
+        GestureDetector(
+          onTap: () {
+            setState(() => _notStudent = !_notStudent);
+            HapticFeedback.selectionClick();
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: _notStudent ? _kPrimary.withOpacity(0.06) : _kSurface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                  color: _notStudent ? _kPrimary.withOpacity(0.3) : _kBorder),
+            ),
+            child: Row(children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  color: _notStudent ? _kPrimary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                      color: _notStudent ? _kPrimary : Colors.grey[400]!,
+                      width: 1.5),
+                ),
+                child: _notStudent
+                    ? const Icon(Icons.check_rounded,
+                        size: 13, color: Colors.white)
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'I am not a student',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: _notStudent ? _kPrimary : _kDark),
+              ),
+            ]),
+          ),
+        ),
+
+        const SizedBox(height: 20),
+        // ── Booking details ─────────────────────────────────────────────────
+        _FormGroupLabel('Booking Details', Icons.hotel_outlined),
+        const SizedBox(height: 14),
+
+        // Slots picker
+        _SlotsPicker(
+          slots: _slots,
+          max: rem,
+          price: widget.room.price,
+          onChanged: (v) {
+            setState(() => _slots = v);
+            HapticFeedback.selectionClick();
+          },
+        ),
+        const SizedBox(height: 4),
+        Row(children: [
+          Icon(
+              rem <= 2
+                  ? Icons.warning_amber_rounded
+                  : Icons.info_outline_rounded,
+              size: 13,
+              color: rem <= 2 ? _kRed : _kTextDim),
+          const SizedBox(width: 5),
+          Text(
+            rem == 1 ? '🔥 Last slot! Book fast.' : '$rem slots remaining',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: rem <= 2 ? _kRed : _kTextDim),
+          ),
+        ]),
+        const SizedBox(height: 16),
+        _ModernField(
+          label: 'Additional Notes (optional)',
+          ctrl: _notes,
+          icon: Icons.notes_rounded,
+          lines: 3,
+          hint: 'Special requests, move-in date, preferences…',
+        ),
+
+        const SizedBox(height: 20),
+        // ── Total summary ───────────────────────────────────────────────────
+        _TotalCard(
+            slots: _slots, price: widget.room.price, total: _totalAmount),
+        const SizedBox(height: 28),
+
+        // ── CTA ─────────────────────────────────────────────────────────────
+        _GradientCTA(
+          label: 'Continue to Payment',
+          icon: Icons.arrow_forward_rounded,
+          busy: _busy,
+          onTap: _proceedToPayment,
+        ),
+      ]),
+    );
+  }
+
+  // ─── Step 1 — Payment ─────────────────────────────────────────────────────
+  Widget _buildPaymentStep() {
+    final h = widget.hostel;
+    final hasMomo = h.paymentMomo.isNotEmpty;
+    final isTest = _isTestNumber;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Order summary
+      _OrderBanner(room: widget.room, slots: _slots, total: _totalAmount),
+      const SizedBox(height: 22),
+
+      // ── Landlord payment numbers ─────────────────────────────────────────
+      _FormGroupLabel(
+          'Landlord\'s Payment Details', Icons.account_balance_wallet_outlined),
+      const SizedBox(height: 12),
+      if (h.paymentMomo.isNotEmpty)
+        _PaymentDetailCard(
+            icon: '📱',
+            provider: 'MTN / Vodafone MoMo',
+            value: h.paymentMomo,
+            color: const Color(0xFFFFCC00)),
+      if (h.paymentCash.isNotEmpty)
+        _PaymentDetailCard(
+            icon: '💵',
+            provider: 'Cash Payment',
+            value: h.paymentCash,
+            color: _kGreen),
+      if (h.paymentBank.isNotEmpty)
+        _PaymentDetailCard(
+            icon: '🏦',
+            provider: 'Bank Transfer',
+            value: h.paymentBank,
+            color: const Color(0xFF2563EB)),
+      if (h.paymentOther.isNotEmpty)
+        _PaymentDetailCard(
+            icon: '💳',
+            provider: 'Other Method',
+            value: h.paymentOther,
+            color: const Color(0xFF7C3AED)),
+      if (!hasMomo &&
+          h.paymentCash.isEmpty &&
+          h.paymentBank.isEmpty &&
+          h.paymentOther.isEmpty)
+        _InfoBanner(
+          icon: Icons.info_outline_rounded,
+          text: 'Contact the hostel directly for payment details.',
+          color: _kOrange,
+        ),
+
+      if (hasMomo) ...[
+        const SizedBox(height: 22),
+        // ── Your MoMo details ───────────────────────────────────────────────
+        _FormGroupLabel('Your Mobile Money Details', Icons.payment_rounded),
+        const SizedBox(height: 12),
+
+        // Provider selector
+        Row(children: [
+          Expanded(
+              child: _ProviderTile(
+            emoji: '🟡',
+            label: 'MTN MoMo',
+            isSelected: _momoProvider == 'mtn',
+            onTap: () => setState(() => _momoProvider = 'mtn'),
+          )),
+          const SizedBox(width: 12),
+          Expanded(
+              child: _ProviderTile(
+            emoji: '🔴',
+            label: 'Vodafone Cash',
+            isSelected: _momoProvider == 'vodafone',
+            onTap: () => setState(() => _momoProvider = 'vodafone'),
+          )),
+        ]),
+        const SizedBox(height: 14),
+        _ModernField(
+          label: 'Your MoMo Number',
+          ctrl: _momo,
+          icon: Icons.phone_android_rounded,
+          kb: TextInputType.phone,
+          hint: '024XXXXXXX or 050XXXXXXX',
+          onChanged: (_) => setState(() {}),
+          validator: (v) =>
+              v!.trim().length < 10 ? 'Enter a valid MoMo number' : null,
+        ),
+        if (isTest) ...[
+          _InfoBanner(
+            icon: Icons.science_rounded,
+            text:
+                'Test Mode: No real money will be deducted. Your booking will be confirmed instantly.',
+            color: _kGreen,
+          ),
+          const SizedBox(height: 8),
+        ] else ...[
+          _InfoBanner(
+            icon: Icons.smartphone_rounded,
+            text:
+                'You will receive a MoMo prompt on your phone. Approve the payment to confirm your booking.',
+            color: _kPrimary,
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+
+      const SizedBox(height: 28),
+
+      // ── CTA ─────────────────────────────────────────────────────────────
+      if (hasMomo)
+        _GradientCTA(
+          label: isTest
+              ? 'Simulate Payment'
+              : 'Pay GHS ${_totalAmount.toStringAsFixed(2)}',
+          icon: isTest ? Icons.science_rounded : Icons.lock_rounded,
+          busy: _busy,
+          onTap: _initiatePayment,
+        )
+      else
+        _GradientCTA(
+          label: 'Confirm Booking',
+          icon: Icons.check_circle_rounded,
+          busy: _busy,
+          onTap: () async {
+            setState(() => _busy = true);
+            await FirebaseFirestore.instance
+                .collection('bookings')
+                .doc(_bookingId)
+                .update({'status': 'pending', 'payment_status': 'pending'});
+            await _logActivity(
+              action: 'Booking Created (Offline)',
+              details:
+                  'User ${_email.text.trim()} booked $_slots slot(s) in Room ${widget.room.roomNumber} '
+                  'at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. Offline payment.',
+              userEmail: _email.text.trim(),
+            );
+            await BookingStorageService.saveBookingId(_bookingId!);
+            if (!mounted) return;
+            widget.onSuccess(_bookingId!, _slots);
+          },
+        ),
+
+      const SizedBox(height: 12),
+      // Back link
+      Center(
+        child: TextButton.icon(
+          onPressed: () => _goToStep(0),
+          icon: const Icon(Icons.arrow_back_rounded,
+              size: 15, color: _kTextMuted),
+          label: const Text('Back to details',
+              style: TextStyle(color: _kTextMuted, fontSize: 13)),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          ),
+        ),
       ),
     ]);
   }
+
+  // ─── Step 2 — Processing ──────────────────────────────────────────────────
+  Widget _buildProcessingStep() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        child: Column(children: [
+          // Animated ring
+          _ProcessingRing(),
+          const SizedBox(height: 32),
+          Text(
+            _isTestNumber ? 'Simulating Payment…' : 'Processing Payment…',
+            style: const TextStyle(
+                fontSize: 20, fontWeight: FontWeight.w800, color: _kDark),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _isTestNumber
+                ? 'Hang tight — confirming your booking in test mode.'
+                : 'Check your ${_momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash'} phone\nand approve the payment prompt.',
+            textAlign: TextAlign.center,
+            style:
+                const TextStyle(fontSize: 14, color: _kTextMuted, height: 1.6),
+          ),
+          const SizedBox(height: 28),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [
+                _kPrimary.withOpacity(0.08),
+                _kAccent.withOpacity(0.06)
+              ]),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _kPrimary.withOpacity(0.15)),
+            ),
+            child: Column(children: [
+              const Text('Amount to Pay',
+                  style: TextStyle(fontSize: 12, color: _kTextMuted)),
+              const SizedBox(height: 4),
+              Text(
+                'GHS ${_totalAmount.toStringAsFixed(2)}',
+                style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    color: _kPrimary),
+              ),
+              Text(
+                '${_slots} slot${_slots > 1 ? 's' : ''} · ${widget.room.type} Room',
+                style: const TextStyle(fontSize: 12, color: _kTextDim),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 20),
+          // Pulse dots
+          _PulseDots(),
+        ]),
+      );
 }
 
-// ─── Step Indicator ───────────────────────────────────────────────────────────
+// ─── Processing Ring ──────────────────────────────────────────────────────────
+class _ProcessingRing extends StatefulWidget {
+  @override
+  State<_ProcessingRing> createState() => _ProcessingRingState();
+}
 
-class _StepIndicator extends StatelessWidget {
+class _ProcessingRingState extends State<_ProcessingRing>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  @override
+  void initState() {
+    super.initState();
+    _ctrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 80,
+        height: 80,
+        child: Stack(alignment: Alignment.center, children: [
+          AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, __) => Transform.rotate(
+              angle: _ctrl.value * 2 * pi,
+              child: Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: SweepGradient(
+                    colors: [_kPrimary, _kAccent, Colors.transparent],
+                    stops: const [0.0, 0.5, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Container(
+            width: 64,
+            height: 64,
+            decoration: const BoxDecoration(
+                color: Colors.white, shape: BoxShape.circle),
+            child: const Center(
+                child: Icon(Icons.lock_rounded, color: _kPrimary, size: 26)),
+          ),
+        ]),
+      );
+}
+
+// ─── Pulse Dots ───────────────────────────────────────────────────────────────
+class _PulseDots extends StatefulWidget {
+  @override
+  State<_PulseDots> createState() => _PulseDotsState();
+}
+
+class _PulseDotsState extends State<_PulseDots>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _ctrl,
+        builder: (_, __) => Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(3, (i) {
+            final delay = i / 3;
+            final t = ((_ctrl.value - delay) % 1.0 + 1.0) % 1.0;
+            final scale = 0.6 + sin(t * pi) * 0.6;
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              width: 8 * scale,
+              height: 8 * scale,
+              decoration: BoxDecoration(
+                color: _kPrimary.withOpacity(0.4 + scale * 0.5),
+                shape: BoxShape.circle,
+              ),
+            );
+          }),
+        ),
+      );
+}
+
+// ─── Modern Step Bar ─────────────────────────────────────────────────────────
+class _ModernStepBar extends StatelessWidget {
   final int currentStep;
-  const _StepIndicator({required this.currentStep});
+  const _ModernStepBar({required this.currentStep});
+
+  static const _labels = ['Details', 'Payment', 'Processing'];
+  static const _icons = [
+    Icons.person_outline,
+    Icons.payment,
+    Icons.sync_rounded
+  ];
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      child: Row(children: [
-        _Step(
-            number: 1,
-            label: 'Details',
-            isActive: currentStep >= 0,
-            isDone: currentStep > 0),
-        _StepLine(isActive: currentStep > 0),
-        _Step(
-            number: 2,
-            label: 'Payment',
-            isActive: currentStep >= 1,
-            isDone: currentStep > 1),
-        _StepLine(isActive: currentStep > 1),
-        _Step(
-            number: 3,
-            label: 'Processing',
-            isActive: currentStep >= 2,
-            isDone: false),
-      ]),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(
+        children: List.generate(5, (i) {
+          if (i.isEven) {
+            final idx = i ~/ 2;
+            final done = currentStep > idx;
+            final active = currentStep == idx;
+            return _StepDot(
+              label: _labels[idx],
+              icon: _icons[idx],
+              done: done,
+              active: active,
+            );
+          } else {
+            final lineIdx = i ~/ 2;
+            return Expanded(
+              child: Container(
+                height: 2,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  gradient: currentStep > lineIdx
+                      ? const LinearGradient(colors: [_kPrimary, _kAccent])
+                      : null,
+                  color: currentStep <= lineIdx ? _kBorder : null,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            );
+          }
+        }),
+      ),
     );
   }
 }
 
-class _Step extends StatelessWidget {
-  final int number;
+class _StepDot extends StatelessWidget {
   final String label;
-  final bool isActive;
-  final bool isDone;
-  const _Step(
-      {required this.number,
-      required this.label,
-      required this.isActive,
-      required this.isDone});
+  final IconData icon;
+  final bool done;
+  final bool active;
+  const _StepDot(
+      {required this.label,
+      required this.icon,
+      required this.done,
+      required this.active});
 
   @override
   Widget build(BuildContext context) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-        width: 28,
-        height: 28,
+      AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        width: 32,
+        height: 32,
         decoration: BoxDecoration(
-            color: isActive ? _kPrimary : Colors.grey[200],
-            shape: BoxShape.circle),
+          shape: BoxShape.circle,
+          gradient: (active || done)
+              ? const LinearGradient(colors: [_kPrimary, _kAccent])
+              : null,
+          color: (active || done) ? null : _kBorder,
+          boxShadow: active
+              ? [
+                  BoxShadow(
+                      color: _kPrimary.withOpacity(0.35),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3))
+                ]
+              : [],
+        ),
         child: Center(
-          child: isDone
-              ? const Icon(Icons.check, size: 16, color: Colors.white)
-              : Text('$number',
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: isActive ? Colors.white : Colors.grey)),
+          child: done
+              ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
+              : Icon(icon, size: 15, color: active ? Colors.white : _kTextDim),
         ),
       ),
-      const SizedBox(height: 4),
-      Text(label,
-          style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              color: isActive ? _kPrimary : Colors.grey)),
+      const SizedBox(height: 5),
+      Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+          color: active
+              ? _kPrimary
+              : done
+                  ? _kPrimary
+                  : _kTextDim,
+        ),
+      ),
     ]);
   }
 }
 
-class _StepLine extends StatelessWidget {
-  final bool isActive;
-  const _StepLine({required this.isActive});
+// ─── Room Summary Card ────────────────────────────────────────────────────────
+class _RoomSummaryCard extends StatelessWidget {
+  final RoomModel room;
+  final int slots;
+  final double total;
+  const _RoomSummaryCard(
+      {required this.room, required this.slots, required this.total});
 
   @override
-  Widget build(BuildContext context) {
-    return Expanded(
-        child: Container(
-      height: 2,
-      margin: const EdgeInsets.only(bottom: 18),
-      color: isActive ? _kPrimary : Colors.grey[200],
-    ));
-  }
-}
-
-// ─── MoMo / Payment Number Card ──────────────────────────────────────────────
-
-class _MomoNumberCard extends StatelessWidget {
-  final String provider;
-  final String number;
-  final Color color;
-  final String icon;
-  const _MomoNumberCard(
-      {required this.provider,
-      required this.number,
-      required this.color,
-      required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(children: [
-        Text(icon, style: const TextStyle(fontSize: 22)),
-        const SizedBox(width: 10),
-        Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(provider,
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: color)),
-          Text(number,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w800, color: _kDark)),
-        ])),
-        GestureDetector(
-          onTap: () {
-            final isPhone = RegExp(r'^\d').hasMatch(number.trim());
-            if (isPhone) launchUrl(Uri.parse('tel:$number'));
-          },
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-                color: color, borderRadius: BorderRadius.circular(8)),
-            child:
-                const Icon(Icons.phone_rounded, color: Colors.white, size: 16),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_kPrimary.withOpacity(0.05), _kAccent.withOpacity(0.03)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _kPrimary.withOpacity(0.15)),
         ),
-      ]),
-    );
-  }
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [_kPrimary, _kAccent]),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.bed_rounded, color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(
+                  '${room.type} Room · No. ${room.roomNumber}',
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w800, color: _kDark),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'GHS ${room.price.toStringAsFixed(2)} × $slots slot${slots > 1 ? 's' : ''}',
+                  style: const TextStyle(fontSize: 12, color: _kTextMuted),
+                ),
+              ])),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            const Text('Total',
+                style: TextStyle(fontSize: 11, color: _kTextDim)),
+            Text(
+              'GHS ${total.toStringAsFixed(2)}',
+              style: const TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w900, color: _kPrimary),
+            ),
+          ]),
+        ]),
+      );
 }
 
-// ─── Provider Button ─────────────────────────────────────────────────────────
+// ─── Order Banner ─────────────────────────────────────────────────────────────
+class _OrderBanner extends StatelessWidget {
+  final RoomModel room;
+  final int slots;
+  final double total;
+  const _OrderBanner(
+      {required this.room, required this.slots, required this.total});
 
-class _ProviderBtn extends StatelessWidget {
-  final String label;
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _kDark,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(children: [
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                const Text('Order Summary',
+                    style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                        letterSpacing: 0.5)),
+                const SizedBox(height: 4),
+                Text(
+                  '${room.type} Room · ${room.roomNumber}',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  '$slots slot${slots > 1 ? 's' : ''}',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+              ])),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            const Text('Pay',
+                style: TextStyle(color: Colors.white38, fontSize: 11)),
+            Text(
+              'GHS ${total.toStringAsFixed(2)}',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900),
+            ),
+          ]),
+        ]),
+      );
+}
+
+// ─── Slots Picker ─────────────────────────────────────────────────────────────
+class _SlotsPicker extends StatelessWidget {
+  final int slots;
+  final int max;
+  final double price;
+  final void Function(int) onChanged;
+  const _SlotsPicker(
+      {required this.slots,
+      required this.max,
+      required this.price,
+      required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text(
+          'Number of Slots',
+          style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w700, color: _kDark),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: List.generate(max.clamp(0, 6), (i) {
+            final n = i + 1;
+            final selected = slots == n;
+            return Expanded(
+                child: GestureDetector(
+              onTap: () => onChanged(n),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                margin: EdgeInsets.only(right: i < max.clamp(0, 6) - 1 ? 8 : 0),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  gradient: selected
+                      ? const LinearGradient(colors: [_kPrimary, _kAccent])
+                      : null,
+                  color: selected ? null : _kSurface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: selected ? Colors.transparent : _kBorder,
+                    width: selected ? 0 : 1,
+                  ),
+                  boxShadow: selected
+                      ? [
+                          BoxShadow(
+                              color: _kPrimary.withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3))
+                        ]
+                      : [],
+                ),
+                child: Column(children: [
+                  Text('$n',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: selected ? Colors.white : _kDark,
+                      )),
+                  const SizedBox(height: 2),
+                  Text('slot${n > 1 ? 's' : ''}',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: selected ? Colors.white70 : _kTextDim,
+                      )),
+                ]),
+              ),
+            ));
+          }),
+        ),
+      ]);
+}
+
+// ─── Total Card ───────────────────────────────────────────────────────────────
+class _TotalCard extends StatelessWidget {
+  final int slots;
+  final double price;
+  final double total;
+  const _TotalCard(
+      {required this.slots, required this.price, required this.total});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient:
+              const LinearGradient(colors: [_kPrimary, Color(0xFF0D9488)]),
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+                color: _kPrimary.withOpacity(0.3),
+                blurRadius: 16,
+                offset: const Offset(0, 6))
+          ],
+        ),
+        child: Row(children: [
+          const Icon(Icons.receipt_long_rounded,
+              color: Colors.white70, size: 22),
+          const SizedBox(width: 14),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(
+                  'GHS ${price.toStringAsFixed(2)} × $slots slot${slots > 1 ? 's' : ''}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'GHS ${total.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900),
+                ),
+              ])),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(50),
+            ),
+            child: const Text('Total',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700)),
+          ),
+        ]),
+      );
+}
+
+// ─── Payment Detail Card ──────────────────────────────────────────────────────
+class _PaymentDetailCard extends StatelessWidget {
+  final String icon;
+  final String provider;
+  final String value;
   final Color color;
+  const _PaymentDetailCard(
+      {required this.icon,
+      required this.provider,
+      required this.value,
+      required this.color});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withOpacity(0.25)),
+        ),
+        child: Row(children: [
+          Text(icon, style: const TextStyle(fontSize: 22)),
+          const SizedBox(width: 12),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(provider,
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: color)),
+                Text(
+                  value,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w800, color: _kDark),
+                ),
+              ])),
+          GestureDetector(
+            onTap: () {
+              if (RegExp(r'^\d').hasMatch(value.trim()))
+                launchUrl(Uri.parse('tel:$value'));
+            },
+            child: Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                  color: color, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.phone_rounded,
+                  color: Colors.white, size: 15),
+            ),
+          ),
+        ]),
+      );
+}
+
+// ─── Provider Tile ────────────────────────────────────────────────────────────
+class _ProviderTile extends StatelessWidget {
+  final String emoji;
+  final String label;
   final bool isSelected;
   final VoidCallback onTap;
-  const _ProviderBtn(
-      {required this.label,
-      required this.color,
+  const _ProviderTile(
+      {required this.emoji,
+      required this.label,
       required this.isSelected,
       required this.onTap});
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: isSelected ? color.withOpacity(0.12) : Colors.grey[50],
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-              color: isSelected ? color : Colors.grey[300]!,
-              width: isSelected ? 2 : 1),
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 12),
+          decoration: BoxDecoration(
+            gradient: isSelected
+                ? LinearGradient(colors: [
+                    _kPrimary.withOpacity(0.08),
+                    _kAccent.withOpacity(0.06)
+                  ])
+                : null,
+            color: isSelected ? null : _kSurface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color: isSelected ? _kPrimary.withOpacity(0.5) : _kBorder,
+                width: isSelected ? 1.5 : 1),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text(emoji, style: const TextStyle(fontSize: 16)),
+            const SizedBox(width: 8),
+            Flexible(
+                child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: isSelected ? _kPrimary : _kTextMuted,
+              ),
+            )),
+          ]),
         ),
-        child: Center(
-            child: Text(label,
-                style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
-                    color:
-                        isSelected ? color.withOpacity(0.85) : Colors.grey))),
-      ),
-    );
-  }
+      );
 }
 
-// ─── Summary Row ─────────────────────────────────────────────────────────────
-
-class _SummaryRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool bold;
-  const _SummaryRow(
-      {required this.label, required this.value, this.bold = false});
+// ─── Info Banner ─────────────────────────────────────────────────────────────
+class _InfoBanner extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color color;
+  const _InfoBanner(
+      {required this.icon, required this.text, required this.color});
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(children: [
-        Expanded(
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.black54,
-                    fontWeight: bold ? FontWeight.w700 : FontWeight.w400))),
-        Flexible(
-          child: Text(value,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 13,
-                  color: bold ? _kGreen : _kDark,
-                  fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.25)),
         ),
-      ]),
-    );
-  }
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 9),
+          Expanded(
+              child: Text(
+            text,
+            style: TextStyle(
+                fontSize: 12,
+                color: color,
+                fontWeight: FontWeight.w500,
+                height: 1.5),
+          )),
+        ]),
+      );
 }
 
-// ─── Form Field helper ────────────────────────────────────────────────────────
+// ─── Gradient CTA ─────────────────────────────────────────────────────────────
+class _GradientCTA extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool busy;
+  final VoidCallback? onTap;
+  const _GradientCTA(
+      {required this.label,
+      required this.icon,
+      required this.busy,
+      this.onTap});
 
-class _FF extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: (busy || onTap == null) ? null : onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 17),
+          decoration: BoxDecoration(
+            gradient: (busy || onTap == null)
+                ? LinearGradient(colors: [Colors.grey[350]!, Colors.grey[300]!])
+                : const LinearGradient(
+                    colors: [_kPrimary, Color(0xFF0D9488), _kAccent],
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                  ),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: (busy || onTap == null)
+                ? []
+                : [
+                    BoxShadow(
+                        color: _kPrimary.withOpacity(0.38),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6))
+                  ],
+          ),
+          child: Center(
+            child: busy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2.5))
+                : Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(label,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.2,
+                        )),
+                    const SizedBox(width: 10),
+                    Icon(icon, color: Colors.white, size: 18),
+                  ]),
+          ),
+        ),
+      );
+}
+
+// ─── Form helpers ─────────────────────────────────────────────────────────────
+class _FormGroupLabel extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  const _FormGroupLabel(this.label, this.icon);
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: _kPrimary.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, size: 14, color: _kPrimary),
+        ),
+        const SizedBox(width: 10),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w800, color: _kDark)),
+      ]);
+}
+
+class _ModernField extends StatelessWidget {
   final String label;
   final TextEditingController ctrl;
   final IconData? icon;
@@ -2582,86 +3066,113 @@ class _FF extends StatelessWidget {
   final int lines;
   final String? hint;
   final String? Function(String?)? validator;
-  const _FF(
-      {required this.label,
-      required this.ctrl,
-      this.icon,
-      this.kb,
-      this.lines = 1,
-      this.hint,
-      this.validator});
+  final void Function(String)? onChanged;
+  const _ModernField({
+    required this.label,
+    required this.ctrl,
+    this.icon,
+    this.kb,
+    this.lines = 1,
+    this.hint,
+    this.validator,
+    this.onChanged,
+  });
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label,
-            style: const TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
-                color: Colors.black87)),
-        const SizedBox(height: 6),
-        TextFormField(
-          controller: ctrl,
-          keyboardType: kb,
-          maxLines: lines,
-          validator: validator,
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: const TextStyle(fontSize: 13, color: Colors.black38),
-            prefixIcon:
-                icon != null ? Icon(icon, size: 18, color: _kPrimary) : null,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            filled: true,
-            fillColor: Colors.grey[50],
-            border: OutlineInputBorder(
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: _kDark)),
+          const SizedBox(height: 7),
+          TextFormField(
+            controller: ctrl,
+            keyboardType: kb,
+            maxLines: lines,
+            validator: validator,
+            onChanged: onChanged,
+            style: const TextStyle(fontSize: 14, color: _kDark),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: const TextStyle(fontSize: 13, color: _kTextDim),
+              prefixIcon:
+                  icon != null ? Icon(icon, size: 17, color: _kPrimary) : null,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              filled: true,
+              fillColor: _kSurface,
+              border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Colors.black12)),
-            enabledBorder: OutlineInputBorder(
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Colors.black12)),
-            focusedBorder: OutlineInputBorder(
+                borderSide: const BorderSide(color: _kBorder),
+              ),
+              focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: _kPrimary, width: 1.5)),
-            errorBorder: OutlineInputBorder(
+                borderSide: const BorderSide(color: _kPrimary, width: 1.5),
+              ),
+              errorBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: _kRed)),
+                borderSide: const BorderSide(color: _kRed),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: _kRed, width: 1.5),
+              ),
+            ),
           ),
-        ),
-      ]),
-    );
-  }
+        ]),
+      );
 }
 
-// ─── Error / Empty helpers ───────────────────────────────────────────────────
-
+// ─── Error / Empty ────────────────────────────────────────────────────────────
 class _ErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
   const _ErrorView({required this.message, required this.onRetry});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
+  Widget build(BuildContext context) => Scaffold(
+        backgroundColor: _kBg,
         body: Center(
             child: Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline, size: 52, color: _kRed),
-        const SizedBox(height: 12),
-        Text(message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.black54)),
-        const SizedBox(height: 16),
-        ElevatedButton(
-            onPressed: onRetry,
-            style: ElevatedButton.styleFrom(backgroundColor: _kPrimary),
-            child: const Text('Try Again')),
-      ]),
-    )));
-  }
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: _kRed.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.error_outline_rounded,
+                  size: 44, color: _kRed),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _kTextMuted, fontSize: 14),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kPrimary,
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50)),
+              ),
+            ),
+          ]),
+        )),
+      );
 }
 
 class _EmptyBox extends StatelessWidget {
@@ -2669,15 +3180,13 @@ class _EmptyBox extends StatelessWidget {
   const _EmptyBox({required this.message});
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
-        child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 40),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.bed_rounded, size: 52, color: Colors.grey[300]),
-        const SizedBox(height: 12),
-        Text(message, style: const TextStyle(color: Colors.grey, fontSize: 14)),
-      ]),
-    ));
-  }
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.bed_rounded, size: 52, color: Colors.grey[300]),
+          const SizedBox(height: 12),
+          Text(message,
+              style: TextStyle(color: Colors.grey[400], fontSize: 14)),
+        ]),
+      );
 }

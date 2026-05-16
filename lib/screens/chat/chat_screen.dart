@@ -2,26 +2,16 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
+import '../../services/notification_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ENHANCED CHAT SCREEN — Advanced & Modern
-// Features added:
-//   • Three-dot menu: Search, Mute, Clear Chat, Report, Export Chat
-//   • In-chat message search with highlight
-//   • Reply-to-message (swipe gesture)
-//   • Long-press context menu: React, Reply, Copy, Delete
-//   • Emoji reactions on bubbles
-//   • Typing indicator (animated dots)
-//   • Read receipts (single ✓ sent, double ✓✓ read)
-//   • Haptic feedback on key interactions
-//   • Mute / unmute toggle persisted to Firestore
-//   • Message status: sending → sent → delivered → read
-//   • Smooth swipe-to-reply gesture
-//   • Date separators (Today, Yesterday, dd/mm/yyyy)
-//   • Quick prompt chips on empty state
-//   • studentTyping written to Firestore so admin sees indicator
+// New: accepts GoRouter `extra` map with optional key:
+//   {'scrollToMessageId': '<firestoreDocId>'}
+// When provided the list scrolls to that message and briefly highlights it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class ChatScreen extends StatefulWidget {
@@ -44,10 +34,20 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool _isMuted = false;
   bool _isSearching = false;
   String _searchQuery = '';
-  Map<String, dynamic>? _replyingTo; // {id, text, senderName}
+  Map<String, dynamic>? _replyingTo;
+
+  // ── Scroll-to-message ──────────────────────────────────────────────────────
+  /// Message ID passed in from the notification panel via GoRouter extra.
+  String? _scrollToMessageId;
+
+  /// After we've scrolled once we set this to true so we don't re-scroll on
+  /// every stream update.
+  bool _hasScrolledToTarget = false;
+
+  /// The doc ID we are currently highlighting (teal flash).
+  String? _highlightedMessageId;
 
   // ── Typing indicator ───────────────────────────────────────────────────────
-  // Stores uid so dispose() can clear the flag even without build context
   String _currentUid = '';
 
   // ── Animation Controllers ──────────────────────────────────────────────────
@@ -86,12 +86,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 250),
     );
-
     _replyBarController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 250),
     );
-
     _searchBarController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -103,7 +101,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         setState(() => _isTyping = typing);
         typing ? _fabController.forward() : _fabController.reverse();
       }
-      // Write studentTyping to Firestore on every keystroke
       _updateTypingStatus(_currentUid, typing);
     });
 
@@ -113,8 +110,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Read scrollToMessageId from GoRouter extra (only once).
+    if (_scrollToMessageId == null) {
+      final extra = GoRouterState.of(context).extra;
+      if (extra is Map<String, dynamic>) {
+        final id = extra['scrollToMessageId'] as String?;
+        if (id != null && id.isNotEmpty) {
+          _scrollToMessageId = id;
+        }
+      }
+    }
+  }
+
+  @override
   void dispose() {
-    // Clear typing flag when screen closes so admin indicator disappears
     _updateTypingStatus(_currentUid, false);
     _controller.dispose();
     _searchController.dispose();
@@ -134,8 +145,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     HapticFeedback.lightImpact();
     setState(() => _sending = true);
     _controller.clear();
-
-    // Clear typing flag immediately on send
     _updateTypingStatus(uid, false);
 
     final messageData = <String, dynamic>{
@@ -145,11 +154,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       'role': 'student',
       'timestamp': FieldValue.serverTimestamp(),
       'read': false,
-      'status': 'sent', // sent | delivered | read
-      'reactions': <String, String>{}, // {uid: emoji}
+      'status': 'sent',
+      'reactions': <String, String>{},
     };
 
-    // Attach reply metadata if replying
     if (_replyingTo != null) {
       messageData['replyTo'] = _replyingTo;
       _clearReply();
@@ -165,6 +173,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       'unreadByAdmin': true,
     }, SetOptions(merge: true));
 
+    await NotificationService.instance.notifyAdmin(
+      title: 'New message from $senderName',
+      body: text,
+      studentUid: uid,
+    );
+
     setState(() => _sending = false);
     _scrollToBottom();
   }
@@ -178,6 +192,33 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           curve: Curves.easeOutCubic,
         );
       }
+    });
+  }
+
+  /// Scroll to a specific message index and briefly highlight it.
+  void _scrollToMessageIndex(int index, String docId, int totalDocs) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+
+      // Estimate position: each item is ~72 px on average. This is good enough
+      // for a smooth initial jump; the list will correct if the estimate is off.
+      const estimatedItemHeight = 72.0;
+      const topPadding = 16.0;
+      final estimated = topPadding + index * estimatedItemHeight;
+      final maxExtent = _scrollController.position.maxScrollExtent;
+      final target = estimated.clamp(0.0, maxExtent);
+
+      _scrollController
+          .animateTo(target,
+              duration: const Duration(milliseconds: 500),
+              curve: Curves.easeOutCubic)
+          .then((_) {
+        // Flash-highlight the target bubble for 1.5 s then clear.
+        setState(() => _highlightedMessageId = docId);
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted) setState(() => _highlightedMessageId = null);
+        });
+      });
     });
   }
 
@@ -472,8 +513,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     final uid = userModel?.id ?? '';
     final name = userModel?.username ?? 'Student';
-
-    // Keep _currentUid in sync so dispose() and initState listener can use it
     _currentUid = uid;
 
     return Scaffold(
@@ -483,13 +522,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           ? _buildNotLoggedIn()
           : Column(
               children: [
-                // Search bar (animated)
                 SizeTransition(
                   sizeFactor: _searchBarController,
                   child: _buildSearchBar(),
                 ),
                 Expanded(child: _buildMessageList(uid)),
-                // Reply bar (animated)
                 SizeTransition(
                   sizeFactor: _replyBarController,
                   child: _replyingTo != null
@@ -585,14 +622,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     ],
                   ),
                 ),
-                // Mute indicator
                 if (_isMuted)
                   Padding(
                     padding: const EdgeInsets.only(right: 4),
                     child: Icon(Icons.notifications_off_rounded,
                         color: Colors.white.withOpacity(0.7), size: 18),
                   ),
-                // Search icon
                 IconButton(
                   icon: Icon(
                     _isSearching
@@ -606,7 +641,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   constraints: const BoxConstraints(),
                 ),
                 const SizedBox(width: 10),
-                // Three-dot menu
                 IconButton(
                   icon: const Icon(Icons.more_vert_rounded,
                       color: Colors.white, size: 22),
@@ -769,7 +803,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
         var docs = snapshot.data?.docs ?? [];
 
-        // Filter by search query
         if (_searchQuery.isNotEmpty) {
           docs = docs
               .where((d) => (d.data()['text'] as String? ?? '')
@@ -784,7 +817,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               : _buildEmptyChat();
         }
 
-        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+        // ── Scroll-to-target logic ───────────────────────────────────────────
+        if (_scrollToMessageId != null && !_hasScrolledToTarget) {
+          final targetIndex =
+              docs.indexWhere((d) => d.id == _scrollToMessageId);
+          if (targetIndex != -1) {
+            _hasScrolledToTarget = true;
+            _scrollToMessageIndex(
+                targetIndex, _scrollToMessageId!, docs.length);
+          } else {
+            // Target not found (maybe filtered out) — just scroll to bottom.
+            _hasScrolledToTarget = true;
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => _scrollToBottom());
+          }
+        } else if (_scrollToMessageId == null) {
+          // Normal behaviour: scroll to newest message.
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _scrollToBottom());
+        }
 
         return Column(
           children: [
@@ -857,6 +908,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       Map<String, String>.from(data['reactions'] ?? {});
                   final replyTo = data['replyTo'] as Map<String, dynamic>?;
                   final status = data['status'] as String? ?? 'sent';
+                  final isHighlighted = doc.id == _highlightedMessageId;
 
                   final showDate = i == 0 ||
                       _isDifferentDay(
@@ -866,6 +918,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       );
 
                   return Column(
+                    key: ValueKey(doc.id),
                     children: [
                       if (showDate && ts != null) _DateChip(date: ts.toDate()),
                       _SwipeToReply(
@@ -879,11 +932,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           isMe: isMe,
                           accent: _accent,
                           teal: _teal,
-                          animateIn: i == docs.length - 1,
+                          animateIn: i == docs.length - 1 &&
+                              _scrollToMessageId == null,
                           reactions: reactions,
                           replyTo: replyTo,
                           status: status,
                           searchQuery: _searchQuery,
+                          // Flash the bubble with a teal glow when highlighted
+                          isHighlighted: isHighlighted,
                           onReply: () => _setReply(data, doc.id),
                           onDelete: () => _deleteMessage(uid, doc.id),
                           onReact: (emoji) =>
@@ -1003,8 +1059,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Attach file button (tappable, teal)
-
           const SizedBox(width: 8),
           Expanded(
             child: Container(
@@ -1034,13 +1088,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   border: InputBorder.none,
                 ),
                 onSubmitted: (_) => _send(uid, name),
-                // Also update typing status via onChanged for reliability
                 onChanged: (val) => _updateTypingStatus(uid, val.isNotEmpty),
               ),
             ),
           ),
           const SizedBox(width: 8),
-          // Send button (always shows send arrow, no mic)
           AnimatedBuilder(
             animation: _fabController,
             builder: (context, _) {
@@ -1098,7 +1150,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPING INDICATOR DOT  (animated, staggered)
+// TYPING INDICATOR DOT
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _TypingDot extends StatefulWidget {
@@ -1269,6 +1321,7 @@ class _ChatBubble extends StatefulWidget {
     this.animateIn = false,
     this.replyTo,
     this.searchQuery = '',
+    this.isHighlighted = false,
   });
 
   final String docId;
@@ -1286,6 +1339,10 @@ class _ChatBubble extends StatefulWidget {
   final bool animateIn;
   final Map<String, dynamic>? replyTo;
   final String searchQuery;
+
+  /// When true the bubble shows a brief teal glow to indicate it was
+  /// navigated-to from the notification panel.
+  final bool isHighlighted;
 
   @override
   State<_ChatBubble> createState() => _ChatBubbleState();
@@ -1504,7 +1561,6 @@ class _ChatBubbleState extends State<_ChatBubble>
                     ? CrossAxisAlignment.end
                     : CrossAxisAlignment.start,
                 children: [
-                  // Reply preview
                   if (widget.replyTo != null)
                     Container(
                       constraints: BoxConstraints(
@@ -1544,10 +1600,11 @@ class _ChatBubbleState extends State<_ChatBubble>
                         ],
                       ),
                     ),
-                  // Main bubble
+                  // ── Main bubble — with optional highlight glow ─────────────
                   GestureDetector(
                     onLongPress: () => _showContextMenu(context),
-                    child: Container(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
                       constraints: BoxConstraints(
                           maxWidth: MediaQuery.of(context).size.width * 0.65),
                       padding: const EdgeInsets.symmetric(
@@ -1570,20 +1627,31 @@ class _ChatBubbleState extends State<_ChatBubble>
                           bottomLeft: Radius.circular(widget.isMe ? 20 : 4),
                           bottomRight: Radius.circular(widget.isMe ? 4 : 20),
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: (widget.isMe ? widget.accent : Colors.black)
-                                .withOpacity(0.12),
-                            blurRadius: 6,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
+                        // Highlight glow when navigated from notification
+                        boxShadow: widget.isHighlighted
+                            ? [
+                                BoxShadow(
+                                  color: widget.teal.withOpacity(0.55),
+                                  blurRadius: 18,
+                                  spreadRadius: 2,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ]
+                            : [
+                                BoxShadow(
+                                  color: (widget.isMe
+                                          ? widget.accent
+                                          : Colors.black)
+                                      .withOpacity(0.12),
+                                  blurRadius: 6,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                       ),
                       child: _buildHighlightedText(
                           widget.text, widget.searchQuery),
                     ),
                   ),
-                  // Reactions
                   if (reactionCounts.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
@@ -1632,7 +1700,6 @@ class _ChatBubbleState extends State<_ChatBubble>
                         }).toList(),
                       ),
                     ),
-                  // Timestamp + status
                   const SizedBox(height: 4),
                   Row(
                     mainAxisSize: MainAxisSize.min,

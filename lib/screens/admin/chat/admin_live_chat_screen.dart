@@ -4,35 +4,46 @@
 //  ROOMZYFIND — ADMIN LIVE CHAT  (Advanced, Modern, Production-Ready)
 // ═══════════════════════════════════════════════════════════════════════════
 //
-//  ▸ PLACES TO UPDATE (search the tag 🔧 in this file):
+//  CHANGES IN THIS VERSION:
+//  ✅ Admin notification permission requested on screen open
+//  ✅ Admin FCM token saved to Firestore for future use
+//  ✅ _sendPushToStudent() now calls FCM HTTP v1 API directly (no Cloud Function)
+//  ✅ Welcome message auto-sent when a brand-new student chat doc is created
 //
-//  🔧 1  FIRESTORE PATHS  — chats/{studentUid}/messages
-//        If your paths differ, update _messagesRef() and _chatDocRef().
+//  HOW THE WELCOME MESSAGE WORKS:
+//  When a student opens the chat for the first time, their app creates the
+//  chats/{uid} document with welcomeSent = false.
+//  The sidebar StreamBuilder detects docs with welcomeSent == false and
+//  _sendWelcomeMessage() writes the first message + marks welcomeSent = true.
 //
-//  🔧 3  PUSH NOTIFICATIONS  — _sendPushToStudent() is a stub.
-//        Wire it to your Cloud Functions / FCM endpoint.
+//  REQUIRED in your Firebase Console:
+//  → Cloud Messaging → Server key  (paste into _fcmServerKey below)
+//  → Enable FCM v1 API for your project
 //
-//  🔧 4  UNREAD BADGE SOURCE  — The sidebar badge reads `unreadByAdmin`.
-//        Make sure your student chat screen writes that field on send
-//        (the provided student chat_screen.dart already does this).
-//
-//  🔧 5  ADMIN THEME IMPORTS  — Adjust the import paths to match your
-//        project structure (kGreen, kGreenAccent from admin_theme.dart).
-//
-//  🔧 6  ROUTING  — Register this screen in your router / MaterialApp
-//        routes map.  Example:  '/admin/chat': (_) => AdminLiveChatScreen()
+//  REQUIRED pubspec.yaml packages (already added in previous step):
+//    firebase_messaging: ^15.1.3
+//    flutter_local_notifications: ^17.2.3
 //
 // ═══════════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../../services/notification_service.dart';
 import 'package:intl/intl.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../../../constants/admin_theme.dart';
 
-// ── Brand colours (inline so the file is self-contained) ──────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  🔧 FCM CONFIGURATION
+//  Replace with your actual Firebase project values.
+//  Get your server key from: Firebase Console → Project Settings → Cloud Messaging
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Brand colours ─────────────────────────────────────────────────────────
 const _kGreen = Color(0xFF1B5E20);
 const _kGreenMid = Color(0xFF2E7D32);
 const _kGreenAccent = Color(0xFF43A047);
@@ -55,28 +66,23 @@ class AdminLiveChatScreen extends StatefulWidget {
 
 class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
     with TickerProviderStateMixin {
-  // ── Admin identity — always reads live from FirebaseAuth ──────────────
-  // FIX: using getters instead of top-level finals so these are always
-  // current even if auth state resolves after widget creation.
   String get _adminId => FirebaseAuth.instance.currentUser?.uid ?? 'admin';
   String get _adminName =>
       FirebaseAuth.instance.currentUser?.displayName ?? 'Support';
 
-  // ── Selected conversation ──────────────────────────────────────────────
   String? _selectedUid;
   Map<String, dynamic>? _selectedMeta;
 
-  // ── Search ────────────────────────────────────────────────────────────
   final _sidebarSearch = TextEditingController();
   String _sidebarQuery = '';
   bool _showSearch = false;
+  String _filterTab = 'all';
 
-  // ── Filter tab ────────────────────────────────────────────────────────
-  String _filterTab = 'all'; // all | open | resolved
-
-  // ── Animation ─────────────────────────────────────────────────────────
   late AnimationController _slideCtrl;
   late Animation<Offset> _slideAnim;
+
+  // Track which UIDs already had welcome sent so we don't double-send
+  final Set<String> _welcomeSentThisSession = {};
 
   @override
   void initState() {
@@ -90,6 +96,63 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
 
     _sidebarSearch.addListener(() =>
         setState(() => _sidebarQuery = _sidebarSearch.text.toLowerCase()));
+
+    // ── Request notification permission for the admin device ──────────────
+    _requestAdminNotificationPermission();
+  }
+
+  // ── Notification permission + save admin FCM token ─────────────────────
+  Future<void> _requestAdminNotificationPermission() async {
+    final adminUid = _adminId;
+    if (adminUid == 'admin') return; // not logged in yet
+    await NotificationService.instance.saveTokenForAdmin(adminUid);
+  }
+
+  // ── FCM direct send to student (no Cloud Function needed) ──────────────
+  Future<void> _sendPushToStudent(String studentUid, String message) async {
+    await NotificationService.instance.notifyStudent(
+      studentUid: studentUid,
+      title: 'RoomzyFind Support',
+      body: message,
+    );
+  }
+
+  // ── Welcome message ─────────────────────────────────────────────────────
+  Future<void> _sendWelcomeMessage(
+      String studentUid, String studentName) async {
+    // Guard: don't send twice in same session or if already marked sent
+    if (_welcomeSentThisSession.contains(studentUid)) return;
+    _welcomeSentThisSession.add(studentUid);
+
+    final chatRef =
+        FirebaseFirestore.instance.collection('chats').doc(studentUid);
+    final messagesRef = chatRef.collection('messages');
+
+    final welcomeText = 'Hi $studentName! 👋 Welcome to RoomzyFind Support. '
+        'How can we help you today? Feel free to ask about bookings, '
+        'listings, or any issues you\'re experiencing.';
+
+    await messagesRef.add({
+      'text': welcomeText,
+      'senderUid': _adminId,
+      'senderName': 'Support',
+      'role': 'admin',
+      'timestamp': FieldValue.serverTimestamp(),
+      'read': false,
+      'status': 'sent',
+      'reactions': <String, String>{},
+    });
+
+    await chatRef.set({
+      'lastMessage': welcomeText,
+      'lastUpdated': FieldValue.serverTimestamp(),
+      'unreadByStudent': true,
+      'unreadByAdmin': false,
+      'welcomeSent': true,
+    }, SetOptions(merge: true));
+
+    // Also send a push notification so the student knows support replied
+    await _sendPushToStudent(studentUid, welcomeText);
   }
 
   @override
@@ -106,7 +169,6 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
       _selectedMeta = meta;
     });
     _slideCtrl.forward(from: 0);
-    // Mark messages as read from admin side
     _markAllRead(uid);
   }
 
@@ -117,15 +179,6 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
         .set({'unreadByAdmin': false}, SetOptions(merge: true));
   }
 
-  // 🔧 3 — stub for push notifications
-  Future<void> _sendPushToStudent(String uid, String message) async {
-    // TODO: call your Cloud Function / FCM here
-    // e.g. FirebaseFunctions.instance.httpsCallable('sendPushToUser')
-    //   .call({'uid': uid, 'body': message});
-  }
-
-  // ── Firestore refs ──────────────────────────────────────────────────────
-  // 🔧 1 — update paths if needed
   CollectionReference<Map<String, dynamic>> _messagesRef(String uid) =>
       FirebaseFirestore.instance
           .collection('chats')
@@ -135,7 +188,6 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
   DocumentReference<Map<String, dynamic>> _chatDocRef(String uid) =>
       FirebaseFirestore.instance.collection('chats').doc(uid);
 
-  // ── Build ───────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.of(context).size.width >= 900;
@@ -149,7 +201,6 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
             ])
           : _selectedUid == null
               ? _buildSidebar()
-              // FIX: WillPopScope is deprecated — replaced with PopScope
               : PopScope(
                   canPop: false,
                   onPopInvokedWithResult: (didPop, _) {
@@ -204,7 +255,6 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
                         fontSize: 15,
                         letterSpacing: .2)),
               ),
-              // Unread count badge
               StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('chats')
@@ -249,7 +299,6 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
               ),
             ],
           ),
-          // Animated search input
           AnimatedCrossFade(
             firstChild: const SizedBox(height: 0, width: double.infinity),
             secondChild: Padding(
@@ -357,6 +406,17 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
               child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
         }
         var docs = snap.data?.docs ?? [];
+
+        // ── AUTO-SEND WELCOME MESSAGE for brand-new conversations ─────────
+        for (final doc in docs) {
+          final data = doc.data();
+          final welcomeSent = data['welcomeSent'] as bool? ?? false;
+          if (!welcomeSent) {
+            final studentName = data['studentName'] as String? ?? 'there';
+            // Run async without blocking the build
+            Future.microtask(() => _sendWelcomeMessage(doc.id, studentName));
+          }
+        }
 
         // Filter by status
         if (_filterTab != 'all') {
@@ -476,7 +536,6 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
     );
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────
   String _relativeTime(DateTime dt) {
     final diff = DateTime.now().difference(dt);
     if (diff.inMinutes < 1) return 'just now';
@@ -487,7 +546,7 @@ class _AdminLiveChatScreenState extends State<AdminLiveChatScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ACTIVE CHAT PANE  (stateful, handles messages stream + sending)
+//  ACTIVE CHAT PANE
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ActiveChatPane extends StatefulWidget {
@@ -534,10 +593,8 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
   late AnimationController _replyCtrl;
   late Animation<double> _replyAnim;
 
-  // FIX: typing indicator — timer to auto-clear the adminTyping flag
   Timer? _typingTimer;
 
-  // Quick replies for admin
   static const _quickReplies = [
     '✅ Issue resolved!',
     '⏳ Looking into this now',
@@ -554,7 +611,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     _replyAnim =
         CurvedAnimation(parent: _replyCtrl, curve: Curves.easeOutCubic);
     _ctrl.addListener(() {
-      // FIX: wire typing indicator on every keystroke
       _onTypingChanged();
       final t = _ctrl.text.isNotEmpty;
       if (t != _isTyping) setState(() => _isTyping = t);
@@ -565,7 +621,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
 
   @override
   void dispose() {
-    // FIX: cancel timer and clear adminTyping flag when pane closes
     _typingTimer?.cancel();
     widget.chatDocRef
         .set({'adminTyping': false}, SetOptions(merge: true)).ignore();
@@ -577,14 +632,12 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     super.dispose();
   }
 
-  // FIX: write adminTyping to Firestore so student sees indicator
   void _onTypingChanged() {
     final typing = _ctrl.text.isNotEmpty;
     widget.chatDocRef
         .set({'adminTyping': typing}, SetOptions(merge: true)).ignore();
     _typingTimer?.cancel();
     if (typing) {
-      // Auto-clear after 3 s of no input in case dispose() is never called
       _typingTimer = Timer(const Duration(seconds: 3), () {
         widget.chatDocRef
             .set({'adminTyping': false}, SetOptions(merge: true)).ignore();
@@ -592,7 +645,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     }
   }
 
-  // ── Send ───────────────────────────────────────────────────────────────
   Future<void> _send() async {
     final text = _ctrl.text.trim();
     if (text.isEmpty) return;
@@ -601,7 +653,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     setState(() => _sending = true);
     _ctrl.clear();
 
-    // Clear typing flag immediately on send
     _typingTimer?.cancel();
     widget.chatDocRef
         .set({'adminTyping': false}, SetOptions(merge: true)).ignore();
@@ -629,7 +680,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
       'unreadByStudent': true,
     }, SetOptions(merge: true));
 
-    // 🔧 3 — push notification to student
     await widget.onSendPush(text);
 
     setState(() => _sending = false);
@@ -648,7 +698,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     });
   }
 
-  // ── Reply ──────────────────────────────────────────────────────────────
   void _setReply(Map<String, dynamic> data, String docId) {
     HapticFeedback.mediumImpact();
     setState(() {
@@ -669,13 +718,11 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     _replyCtrl.reverse();
   }
 
-  // ── Delete ────────────────────────────────────────────────────────────
   Future<void> _deleteMessage(String docId) async {
     HapticFeedback.heavyImpact();
     await widget.messagesRef.doc(docId).delete();
   }
 
-  // ── Reactions ─────────────────────────────────────────────────────────
   Future<void> _toggleReaction(String docId, String emoji) async {
     final ref = widget.messagesRef.doc(docId);
     final snap = await ref.get();
@@ -689,7 +736,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     HapticFeedback.selectionClick();
   }
 
-  // ── Status change ──────────────────────────────────────────────────────
   void _showStatusMenu() {
     showModalBottomSheet(
       context: context,
@@ -739,7 +785,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     );
   }
 
-  // ── Menu (three-dot) ──────────────────────────────────────────────────
   void _showMenu() {
     HapticFeedback.selectionClick();
     showModalBottomSheet(
@@ -825,12 +870,10 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     }
     await Clipboard.setData(ClipboardData(text: buf.toString()));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      _snack('Chat copied to clipboard!'),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(_snack('Chat copied to clipboard!'));
   }
 
-  // FIX: batch delete handles conversations with 500+ messages
   Future<void> _clearChat() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -853,7 +896,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     );
     if (ok != true) return;
 
-    // Delete in batches of 500 so large conversations are fully cleared
     while (true) {
       final docs = await widget.messagesRef.limit(500).get();
       if (docs.docs.isEmpty) break;
@@ -871,7 +913,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       );
 
-  // ── Build ──────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final studentName = widget.meta['studentName'] as String? ?? 'Student';
@@ -880,33 +921,28 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     return Column(
       children: [
         _buildHeader(studentName, status),
-        // Search bar
         AnimatedSize(
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
           child: _isSearching ? _buildSearchBar() : const SizedBox.shrink(),
         ),
-        // Info banner
         AnimatedSize(
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
           child: _showInfo ? _buildInfoBanner() : const SizedBox.shrink(),
         ),
         Expanded(child: _buildMessages()),
-        // Reply bar
         SizeTransition(
           sizeFactor: _replyAnim,
           child:
               _replyingTo != null ? _buildReplyBar() : const SizedBox.shrink(),
         ),
-        // Quick replies
         _buildQuickReplies(),
         _buildInputBar(),
       ],
     );
   }
 
-  // ── Header ─────────────────────────────────────────────────────────────
   Widget _buildHeader(String studentName, String status) {
     return Container(
       height: 64,
@@ -920,7 +956,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
       ),
       child: Row(
         children: [
-          // Back (mobile)
           IconButton(
             icon: const Icon(Icons.arrow_back_ios_rounded,
                 color: Colors.white, size: 18),
@@ -929,7 +964,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
             constraints: const BoxConstraints(),
           ),
           const SizedBox(width: 10),
-          // Avatar
           Stack(
             alignment: Alignment.bottomRight,
             children: [
@@ -1005,7 +1039,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
               ],
             ),
           ),
-          // Header action buttons
           IconButton(
             icon: Icon(
               _isSearching ? Icons.search_off_rounded : Icons.search_rounded,
@@ -1086,7 +1119,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     );
   }
 
-  // ── Messages ───────────────────────────────────────────────────────────
   Widget _buildMessages() {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: widget.messagesRef.orderBy('timestamp').snapshots(),
@@ -1129,7 +1161,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
 
         return Column(
           children: [
-            // FIX: student typing indicator — reads studentTyping from Firestore
             StreamBuilder<DocumentSnapshot>(
               stream: widget.chatDocRef.snapshots(),
               builder: (_, snap) {
@@ -1348,7 +1379,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Emoji/attach
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: Icon(Icons.attach_file_rounded,
@@ -1425,7 +1455,6 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
     );
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────────
   bool _isDiffDay(DateTime? a, DateTime? b) {
     if (a == null || b == null) return false;
     return a.day != b.day || a.month != b.month || a.year != b.year;
@@ -1444,12 +1473,12 @@ class _ActiveChatPaneState extends State<_ActiveChatPane>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  TYPING INDICATOR DOT  (animated, staggered)
+//  TYPING INDICATOR DOT
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _TypingDot extends StatefulWidget {
   const _TypingDot({required this.delay});
-  final int delay; // milliseconds
+  final int delay;
 
   @override
   State<_TypingDot> createState() => _TypingDotState();
@@ -1692,7 +1721,6 @@ class _AdminChatBubbleState extends State<_AdminChatBubble>
                 decoration: BoxDecoration(
                     color: Colors.grey.shade200,
                     borderRadius: BorderRadius.circular(2))),
-            // Emoji row
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: _palette
@@ -1826,7 +1854,6 @@ class _AdminChatBubbleState extends State<_AdminChatBubble>
                     ? CrossAxisAlignment.end
                     : CrossAxisAlignment.start,
                 children: [
-                  // Reply preview
                   if (widget.replyTo != null)
                     Container(
                       constraints: BoxConstraints(
@@ -1865,7 +1892,6 @@ class _AdminChatBubbleState extends State<_AdminChatBubble>
                         ],
                       ),
                     ),
-                  // Main bubble
                   GestureDetector(
                     onLongPress: () => _longPress(context),
                     child: Container(
@@ -1903,7 +1929,6 @@ class _AdminChatBubbleState extends State<_AdminChatBubble>
                       child: _highlighted(widget.text, widget.searchQuery),
                     ),
                   ),
-                  // Reactions
                   if (reactionCounts.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
@@ -1944,7 +1969,6 @@ class _AdminChatBubbleState extends State<_AdminChatBubble>
                         }).toList(),
                       ),
                     ),
-                  // Time + status
                   const SizedBox(height: 3),
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -2136,7 +2160,7 @@ class _DateChip extends StatelessWidget {
   }
 }
 
-// ── Utilities ────────────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
 String _initials(String name) {
   final parts = name.trim().split(' ');

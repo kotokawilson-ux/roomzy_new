@@ -17,8 +17,9 @@ import 'panes/schools_pane.dart';
 import 'panes/users_pane.dart';
 import 'panes/activity_log_pane.dart';
 import 'chat/admin_live_chat_screen.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
-// ADMIN DASHBOARD SCREEN — shell only, all logic lives in panes + widgets
+// ADMIN DASHBOARD SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -32,16 +33,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   AdminSection _current = AdminSection.dashboard;
   bool _sidebarCollapsed = false;
 
-  // FIX: key needed so _narrowLayout can open the drawer programmatically
-  // from the TopBar's onMenuTap callback
+  // Single ScaffoldKey — used by BOTH layouts via the same Scaffold.
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // FIX: shared navigation handler used by BOTH layouts and passed into
-  // TopBar's onNavigateToSection — was an empty lambda `(p1) {}` before,
-  // which meant "View all activity logs" and "Open Live Chat" never worked
   void _navigateTo(AdminSection section) {
     setState(() => _current = section);
-    // Close the drawer if it's open (narrow layout)
+    // Close drawer if open (narrow layout).
     if (_scaffoldKey.currentState?.isDrawerOpen == true) {
       Navigator.pop(context);
     }
@@ -50,102 +47,85 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.of(context).size.width >= 900;
+
+    // FIX: ONE Scaffold for the entire screen.
+    // Previously build() returned a bare Scaffold and _narrowLayout() also
+    // returned a Scaffold, giving two nested Scaffolds. The inner one painted
+    // a white background over everything, causing the white-screen bug.
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: kCream,
+      // Drawer is only meaningful in narrow layout; harmless on wide.
+      drawer: isWide
+          ? null
+          : Drawer(
+              child: Sidebar(
+                current: _current,
+                collapsed: false,
+                onSelect: (s) {
+                  setState(() => _current = s);
+                  Navigator.pop(context);
+                },
+                onToggleCollapse: () {},
+                onLogout: _logout,
+              ),
+            ),
       body: isWide ? _wideLayout() : _narrowLayout(),
     );
   }
 
-  // ── Wide layout: persistent sidebar + content ──────────────────────────────
-  Widget _wideLayout() => Row(
-        children: [
-          Sidebar(
-            current: _current,
-            collapsed: _sidebarCollapsed,
-            onSelect: (s) => setState(() => _current = s),
-            onToggleCollapse: () =>
-                setState(() => _sidebarCollapsed = !_sidebarCollapsed),
-            onLogout: _logout,
-          ),
-          Expanded(
-            child: Column(
-              children: [
-                TopBar(
-                  section: _current,
-                  onMenuTap: null, // ← this hides/disables the ≡ icon in TopBar
-                  onNavigateToSection: _navigateTo,
-                ),
-                Expanded(child: _body()),
-              ],
-            ),
-          ),
-        ],
-      );
-
-  // ── Narrow layout: drawer sidebar + app bar ────────────────────────────────
-  Widget _narrowLayout() => Scaffold(
-        key: _scaffoldKey, // FIX: attach key so onMenuTap can open drawer
-        backgroundColor: kCream,
-        drawer: Drawer(
-          child: Sidebar(
-            current: _current,
-            collapsed: false,
-            onSelect: (s) {
-              setState(() => _current = s);
-              Navigator.pop(context);
-            },
-            onToggleCollapse: () {},
-            onLogout: _logout,
-          ),
+  // ── Wide layout: persistent sidebar + content ─────────────────────────────
+  Widget _wideLayout() {
+    return Row(
+      children: [
+        Sidebar(
+          current: _current,
+          collapsed: _sidebarCollapsed,
+          onSelect: (s) => setState(() => _current = s),
+          onToggleCollapse: () =>
+              setState(() => _sidebarCollapsed = !_sidebarCollapsed),
+          onLogout: _logout,
         ),
-        appBar: AppBar(
-          backgroundColor: kGreen,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          title: Row(
+        Expanded(
+          child: Column(
             children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: kGreenAccent,
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: const Icon(
-                  Icons.home_work_rounded,
-                  color: Colors.white,
-                  size: 16,
-                ),
+              TopBar(
+                section: _current,
+                onMenuTap: null, // no hamburger needed on wide layout
+                onNavigateToSection: _navigateTo,
               ),
-              const SizedBox(width: 8),
-              const Text(
-                'RoomzyFind Admin',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-              ),
+              Expanded(child: _body()),
             ],
           ),
         ),
-        // FIX: wrap body in a TopBar so the notification/message/profile
-        // icons are visible and functional on narrow screens too.
-        // Previously _body() was used directly, so those icons were missing
-        // entirely on mobile — only the AppBar was shown.
-        body: Column(
-          children: [
-            TopBar(
-              section: _current,
-              onMenuTap: null,
-              onNavigateToSection: _navigateTo,
-            ),
-            Expanded(child: _body()),
-          ],
-        ),
-      );
+      ],
+    );
+  }
 
-  // ── Body: switch between panes based on current section ───────────────────
+  // ── Narrow layout: hamburger opens Scaffold drawer ────────────────────────
+  // FIX: No longer returns its own Scaffold. Uses the single Scaffold from
+  // build() above. The TopBar hamburger now calls
+  // _scaffoldKey.currentState!.openDrawer() directly.
+  Widget _narrowLayout() {
+    return Column(
+      children: [
+        // Narrow top bar: shows app branding + icon row
+        _NarrowAppBar(
+          onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        TopBar(
+          section: _current,
+          // FIX: was null — means the hamburger in TopBar was always hidden.
+          // Now wired to open the Scaffold drawer.
+          onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
+          onNavigateToSection: _navigateTo,
+        ),
+        Expanded(child: _body()),
+      ],
+    );
+  }
+
+  // ── Body: switch panes ────────────────────────────────────────────────────
   Widget _body() => switch (_current) {
         AdminSection.dashboard => const DashboardPane(),
         AdminSection.bookings => const BookingsPane(),
@@ -163,18 +143,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         AdminSection.settings => const _PlaceholderPane(label: 'Settings'),
       };
 
-  // ── Logout with confirmation dialog ───────────────────────────────────────
+  // ── Logout ────────────────────────────────────────────────────────────────
   Future<void> _logout() async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Text(
-          'Logout',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title:
+            const Text('Logout', style: TextStyle(fontWeight: FontWeight.w700)),
         content: const Text('Are you sure you want to logout?'),
         actions: [
           TextButton(
@@ -184,10 +160,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(backgroundColor: kGreen),
-            child: const Text(
-              'Logout',
-              style: TextStyle(color: Colors.white),
-            ),
+            child: const Text('Logout', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -200,7 +173,61 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PLACEHOLDER PANE — shown for sections not yet implemented
+// NARROW APP BAR  — replaces the AppBar widget (which required a Scaffold)
+// A plain Container so we don't need a second Scaffold just for the top bar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _NarrowAppBar extends StatelessWidget {
+  const _NarrowAppBar({required this.onMenuTap});
+  final VoidCallback onMenuTap;
+
+  @override
+  Widget build(BuildContext context) {
+    // Respect the status bar height so content doesn't sit under the notch.
+    final topPadding = MediaQuery.of(context).padding.top;
+    return Container(
+      color: kGreen,
+      padding: EdgeInsets.only(top: topPadding),
+      height: kToolbarHeight + topPadding,
+      child: Row(
+        children: [
+          // Hamburger
+          GestureDetector(
+            onTap: onMenuTap,
+            child: const SizedBox(
+              width: 52,
+              height: kToolbarHeight,
+              child: Icon(Icons.menu_rounded, color: Colors.white, size: 22),
+            ),
+          ),
+          // Brand icon + title
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: kGreenAccent,
+              borderRadius: BorderRadius.circular(7),
+            ),
+            child: const Icon(Icons.home_work_rounded,
+                color: Colors.white, size: 16),
+          ),
+          const SizedBox(width: 8),
+          const Text(
+            'RoomzyFind Admin',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLACEHOLDER PANE
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _PlaceholderPane extends StatelessWidget {
@@ -219,9 +246,10 @@ class _PlaceholderPane extends StatelessWidget {
           Text(
             '$label — Coming Soon',
             style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey.shade400,
-                fontWeight: FontWeight.w500),
+              fontSize: 16,
+              color: Colors.grey.shade400,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ),

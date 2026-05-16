@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
@@ -99,13 +100,18 @@ class TopBar extends StatefulWidget {
 }
 
 class _TopBarState extends State<TopBar> {
+  // We still keep LayerLinks for the profile dropdown (centered on its icon
+  // is fine since the avatar is NOT always at the far right edge).
   final _profileLink = LayerLink();
-  final _notifLink = LayerLink();
-  final _msgLink = LayerLink();
 
   OverlayEntry? _profileOverlay;
   OverlayEntry? _notifOverlay;
   OverlayEntry? _msgOverlay;
+
+  // We track the icon GlobalKeys so we can read their screen position for the
+  // notifications / messages panels and anchor them safely to the screen edge.
+  final _notifKey = GlobalKey();
+  final _msgKey = GlobalKey();
 
   // ── Unread badge streams ─────────────────────────────────────────────────
 
@@ -136,17 +142,14 @@ class _TopBarState extends State<TopBar> {
     _msgOverlay = null;
   }
 
-  // FIX: tighter edge clamp (screenW - 16) and added Offset(8, 8) so the
-  // panel never bleeds off the right edge on narrow phones.
-  OverlayEntry _buildOverlay({
-    required LayerLink link,
-    required double desiredWidth,
-    required Widget child,
-  }) {
+  // ── Profile overlay: still uses CompositedTransformFollower (avatar is
+  //    somewhat inset from edge and the dropdown is narrow).
+  OverlayEntry _buildProfileOverlay({required Widget child}) {
     return OverlayEntry(
       builder: (ctx) {
         final screenW = MediaQuery.of(ctx).size.width;
-        final safeW = desiredWidth.clamp(0.0, screenW - 16);
+        const desiredW = 290.0;
+        final safeW = desiredW.clamp(0.0, screenW - 16);
         return Stack(
           children: [
             Positioned.fill(
@@ -156,13 +159,74 @@ class _TopBarState extends State<TopBar> {
               ),
             ),
             CompositedTransformFollower(
-              link: link,
+              link: _profileLink,
               targetAnchor: Alignment.bottomRight,
               followerAnchor: Alignment.topRight,
-              offset: const Offset(8, 8), // FIX: breathing room from edge
+              offset: const Offset(8, 8),
               child: Material(
                 color: Colors.transparent,
                 child: SizedBox(width: safeW, child: child),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ── Screen-anchored overlay for notification / message panels.
+  //
+  //    Strategy: read the icon's screen Rect, then place the panel so its
+  //    RIGHT edge is flush with the icon's right edge, BUT clamp so the panel
+  //    never overflows the left or right screen boundary.
+  //    On very narrow phones the panel spans almost the full screen width.
+  OverlayEntry _buildScreenAnchoredOverlay({
+    required GlobalKey iconKey,
+    required double desiredWidth,
+    required Widget child,
+  }) {
+    return OverlayEntry(
+      builder: (ctx) {
+        final screenW = MediaQuery.of(ctx).size.width;
+        final screenH = MediaQuery.of(ctx).size.height;
+        const edgePadding = 8.0;
+        const topBarHeight = 64.0;
+
+        // Panel width: use desiredWidth but cap at screen − 2×padding.
+        final panelW = desiredWidth.clamp(0.0, screenW - edgePadding * 2);
+
+        // Read the icon's position from its RenderBox.
+        double panelRight = edgePadding; // fallback: flush right
+        final renderObj = iconKey.currentContext?.findRenderObject();
+        if (renderObj is RenderBox) {
+          final iconPos = renderObj.localToGlobal(Offset.zero);
+          final iconRight = iconPos.dx + renderObj.size.width;
+          // Panel right edge = icon right edge, clamped to screen bounds.
+          panelRight = (screenW - iconRight)
+              .clamp(edgePadding, screenW - panelW - edgePadding);
+        }
+
+        return Stack(
+          children: [
+            // Dismiss tap target covering the whole screen.
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _closeAll,
+              ),
+            ),
+            // Panel placed below the top bar, right-of-center safe.
+            Positioned(
+              top: topBarHeight + edgePadding,
+              right: panelRight,
+              width: panelW,
+              // Let the panel grow up to 80% of screen height.
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: screenH * 0.80),
+                child: Material(
+                  color: Colors.transparent,
+                  child: child,
+                ),
               ),
             ),
           ],
@@ -177,9 +241,7 @@ class _TopBarState extends State<TopBar> {
       return;
     }
     _closeAll();
-    _profileOverlay = _buildOverlay(
-      link: _profileLink,
-      desiredWidth: 290,
+    _profileOverlay = _buildProfileOverlay(
       child: _ProfileDropdown(onClose: _closeAll),
     );
     Overlay.of(ctx).insert(_profileOverlay!);
@@ -191,10 +253,10 @@ class _TopBarState extends State<TopBar> {
       return;
     }
     _closeAll();
-    final w = MediaQuery.of(ctx).size.width;
-    _notifOverlay = _buildOverlay(
-      link: _notifLink,
-      desiredWidth: w < 400 ? w - 16 : 340, // FIX: tighter clamp for phones
+    final screenW = MediaQuery.of(ctx).size.width;
+    _notifOverlay = _buildScreenAnchoredOverlay(
+      iconKey: _notifKey,
+      desiredWidth: screenW < 400 ? screenW - 16 : 340,
       child: _NotificationPanel(
         onClose: _closeAll,
         onViewAll: () {
@@ -212,10 +274,10 @@ class _TopBarState extends State<TopBar> {
       return;
     }
     _closeAll();
-    final w = MediaQuery.of(ctx).size.width;
-    _msgOverlay = _buildOverlay(
-      link: _msgLink,
-      desiredWidth: w < 400 ? w - 16 : 320, // FIX: tighter clamp for phones
+    final screenW = MediaQuery.of(ctx).size.width;
+    _msgOverlay = _buildScreenAnchoredOverlay(
+      iconKey: _msgKey,
+      desiredWidth: screenW < 400 ? screenW - 16 : 320,
       child: _MessagesPanel(
         onClose: _closeAll,
         onOpenChat: () {
@@ -256,17 +318,12 @@ class _TopBarState extends State<TopBar> {
         children: [
           // ── Hamburger (phone only) ──────────────────────────────────────
           if (phone && widget.onMenuTap != null) ...[
-            // FIX: wrapped in 44×44 tap target for mobile accessibility
             GestureDetector(
               onTap: widget.onMenuTap ?? () {},
-              child: SizedBox(
+              child: const SizedBox(
                 width: 44,
                 height: 44,
-                child: const Icon(
-                  Icons.menu_rounded,
-                  size: 22,
-                  color: kTextDark,
-                ),
+                child: Icon(Icons.menu_rounded, size: 22, color: kTextDark),
               ),
             ),
             const SizedBox(width: 4),
@@ -304,31 +361,28 @@ class _TopBarState extends State<TopBar> {
           ),
 
           // ── Messages icon ───────────────────────────────────────────────
-          CompositedTransformTarget(
-            link: _msgLink,
-            child: StreamBuilder<int>(
-              stream: _unreadMsgCount,
-              builder: (_, snap) => _TopBarIconButton(
-                icon: Icons.chat_bubble_outline_rounded,
-                badgeCount: (snap.data ?? 0) > 0 ? snap.data : null,
-                onTap: () => _toggleMsg(context),
-              ),
+          // KEY: used to read this icon's screen position for safe anchoring.
+          StreamBuilder<int>(
+            stream: _unreadMsgCount,
+            builder: (_, snap) => _TopBarIconButton(
+              key: _msgKey,
+              icon: Icons.chat_bubble_outline_rounded,
+              badgeCount: (snap.data ?? 0) > 0 ? snap.data : null,
+              onTap: () => _toggleMsg(context),
             ),
           ),
 
-          // FIX: consistent spacing on all screen sizes (was 2px on phone)
           const SizedBox(width: 6),
 
           // ── Notifications icon ──────────────────────────────────────────
-          CompositedTransformTarget(
-            link: _notifLink,
-            child: StreamBuilder<int>(
-              stream: _unreadNotifCount,
-              builder: (_, snap) => _TopBarIconButton(
-                icon: Icons.notifications_none_rounded,
-                badgeCount: (snap.data ?? 0) > 0 ? snap.data : null,
-                onTap: () => _toggleNotif(context),
-              ),
+          // KEY: used to read this icon's screen position for safe anchoring.
+          StreamBuilder<int>(
+            stream: _unreadNotifCount,
+            builder: (_, snap) => _TopBarIconButton(
+              key: _notifKey,
+              icon: Icons.notifications_none_rounded,
+              badgeCount: (snap.data ?? 0) > 0 ? snap.data : null,
+              onTap: () => _toggleNotif(context),
             ),
           ),
 
@@ -355,12 +409,11 @@ class _TopBarState extends State<TopBar> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ICON BUTTON WITH BADGE
-// FIX: increased touch target from 38×38 to 44×44 (meets iOS/Android HIG)
-//      increased icon size from 20 to 22 for better visibility on mobile
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _TopBarIconButton extends StatefulWidget {
   const _TopBarIconButton({
+    super.key,
     required this.icon,
     required this.onTap,
     this.badgeCount,
@@ -385,8 +438,8 @@ class _TopBarIconButtonState extends State<_TopBarIconButton> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          width: 44, // FIX: was 38 — too small for mobile tap targets
-          height: 44, // FIX: was 38
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
             color: _hovered ? kGreen.withOpacity(0.08) : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
@@ -396,7 +449,7 @@ class _TopBarIconButtonState extends State<_TopBarIconButton> {
             children: [
               Icon(
                 widget.icon,
-                size: 22, // FIX: was 20 — slightly larger for mobile clarity
+                size: 22,
                 color: _hovered ? kGreen : kTextMuted,
               ),
               if (widget.badgeCount != null && widget.badgeCount! > 0)
@@ -432,8 +485,6 @@ class _TopBarIconButtonState extends State<_TopBarIconButton> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN AVATAR BUTTON
-// FIX: compact horizontal padding increased from 6 to 10 so the avatar
-//      circle is not squeezed against the edge on tablet/phone
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _AdminAvatar extends StatefulWidget {
@@ -458,7 +509,6 @@ class _AdminAvatarState extends State<_AdminAvatar> {
         onTap: widget.onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          // FIX: compact horizontal padding was 6 — too tight on mobile
           padding: EdgeInsets.symmetric(
             horizontal: widget.compact ? 10 : 12,
             vertical: 6,
@@ -655,13 +705,34 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
   }
 
   Future<void> _pickAndUpload() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 80,
-      maxWidth: 400,
-    );
+    // Guard: prevent re-entry while already uploading.
+    if (_uploading) return;
+
+    XFile? picked;
+    try {
+      // pickImage can throw PlatformException on permission denial or
+      // platform-channel errors (common on web and some Android configs).
+      picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+        maxWidth: 400,
+      );
+    } on PlatformException catch (e) {
+      // Common codes: photo_access_denied, camera_access_denied.
+      final msg =
+          e.code == 'photo_access_denied' || e.code == 'camera_access_denied'
+              ? 'Photo access denied. Please allow access in Settings.'
+              : 'Could not open photo picker: ${e.message}';
+      if (mounted) _snack(msg, Colors.red);
+      return;
+    } catch (_) {
+      // Swallow any other picker error (e.g. user dismissed the picker on web).
+      return;
+    }
+
+    // User cancelled without selecting — not an error.
     if (picked == null) return;
+
     setState(() => _uploading = true);
     try {
       final bytes = await picked.readAsBytes();
@@ -679,6 +750,8 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
       } else {
         throw Exception('Upload returned null URL');
       }
+    } on PlatformException catch (e) {
+      if (mounted) _snack('Platform error: ${e.message}', Colors.red);
     } catch (e) {
       if (mounted) _snack('Upload failed: $e', Colors.red);
     } finally {
@@ -1136,7 +1209,8 @@ class _NotificationPanelState extends State<_NotificationPanel>
       child: SlideTransition(
         position: _slide,
         child: Container(
-          constraints: const BoxConstraints(maxHeight: 440),
+          // NOTE: maxHeight removed here — the ConstrainedBox in the overlay
+          // builder already caps height at 80% of screen height.
           decoration: BoxDecoration(
             color: kSurface,
             borderRadius: BorderRadius.circular(16),
@@ -1196,54 +1270,53 @@ class _NotificationPanelState extends State<_NotificationPanel>
 
               // ── List ────────────────────────────────────────────────────
               Flexible(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('activityLog')
-                      .orderBy('timestamp', descending: true)
-                      .limit(20)
-                      .snapshots(),
-                  builder: (_, snap) {
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(
-                          child: CircularProgressIndicator(color: kGreen),
-                        ),
-                      );
-                    }
-                    final docs = snap.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(
-                          child: Text(
-                            'No notifications',
-                            style: TextStyle(color: kTextMuted),
+                child: SingleChildScrollView(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('activityLog')
+                        .orderBy('timestamp', descending: true)
+                        .limit(20)
+                        .snapshots(),
+                    builder: (_, snap) {
+                      if (snap.connectionState == ConnectionState.waiting) {
+                        return const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Center(
+                            child: CircularProgressIndicator(color: kGreen),
                           ),
-                        ),
-                      );
-                    }
-                    return ListView.separated(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      itemCount: docs.length,
-                      separatorBuilder: (_, __) =>
-                          const Divider(height: 1, color: kBorder),
-                      itemBuilder: (_, i) {
-                        final d = docs[i].data() as Map<String, dynamic>;
-                        final action = d['action'] as String? ?? 'Activity';
-                        final details = d['details'] as String? ?? '';
-                        final timeStr = _formatTime(d['timestamp']);
-                        final isUnread = d['read'] == false;
-                        return _NotificationTile(
-                          action: action,
-                          details: details,
-                          time: timeStr,
-                          isUnread: isUnread,
                         );
-                      },
-                    );
-                  },
+                      }
+                      final docs = snap.data?.docs ?? [];
+                      if (docs.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Center(
+                            child: Text(
+                              'No notifications',
+                              style: TextStyle(color: kTextMuted),
+                            ),
+                          ),
+                        );
+                      }
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (int i = 0; i < docs.length; i++) ...[
+                            if (i > 0) const Divider(height: 1, color: kBorder),
+                            Builder(builder: (_) {
+                              final d = docs[i].data() as Map<String, dynamic>;
+                              return _NotificationTile(
+                                action: d['action'] as String? ?? 'Activity',
+                                details: d['details'] as String? ?? '',
+                                time: _formatTime(d['timestamp']),
+                                isUnread: d['read'] == false,
+                              );
+                            }),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
 
@@ -1395,7 +1468,7 @@ class _MessagesPanelState extends State<_MessagesPanel>
       child: SlideTransition(
         position: _slide,
         child: Container(
-          constraints: const BoxConstraints(maxHeight: 420),
+          // NOTE: maxHeight removed — overlay builder caps at 80% screen height.
           decoration: BoxDecoration(
             color: kSurface,
             borderRadius: BorderRadius.circular(16),
@@ -1443,71 +1516,72 @@ class _MessagesPanelState extends State<_MessagesPanel>
 
               // ── List ────────────────────────────────────────────────────
               Flexible(
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('chats')
-                      .orderBy('lastUpdated', descending: true)
-                      .limit(20)
-                      .snapshots(),
-                  builder: (_, snap) {
-                    if (snap.connectionState == ConnectionState.waiting) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(
-                          child: CircularProgressIndicator(color: kGreen),
-                        ),
-                      );
-                    }
-                    final docs = snap.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.chat_bubble_outline_rounded,
-                                size: 32,
-                                color: kTextMuted,
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                'No messages yet',
-                                style: TextStyle(color: kTextMuted),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-                    return ListView.separated(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      itemCount: docs.length,
-                      separatorBuilder: (_, __) =>
-                          const Divider(height: 1, color: kBorder),
-                      itemBuilder: (_, i) {
-                        final d = docs[i].data() as Map<String, dynamic>;
-                        final sender = d['studentName'] as String? ?? 'User';
-                        final text = d['lastMessage'] as String? ?? '';
-                        final unread = d['unreadByAdmin'] == true;
-                        final timeStr = _formatTime(d['lastUpdated']);
-                        final initials =
-                            sender.isNotEmpty ? sender[0].toUpperCase() : 'U';
-                        return GestureDetector(
-                          onTap: widget.onOpenChat,
-                          child: _MessageTile(
-                            sender: sender,
-                            text: text,
-                            time: timeStr,
-                            unread: unread,
-                            initials: initials,
+                child: SingleChildScrollView(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('chats')
+                        .orderBy('lastUpdated', descending: true)
+                        .limit(20)
+                        .snapshots(),
+                    builder: (_, snap) {
+                      if (snap.connectionState == ConnectionState.waiting) {
+                        return const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Center(
+                            child: CircularProgressIndicator(color: kGreen),
                           ),
                         );
-                      },
-                    );
-                  },
+                      }
+                      final docs = snap.data?.docs ?? [];
+                      if (docs.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.chat_bubble_outline_rounded,
+                                  size: 32,
+                                  color: kTextMuted,
+                                ),
+                                SizedBox(height: 8),
+                                Text(
+                                  'No messages yet',
+                                  style: TextStyle(color: kTextMuted),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (int i = 0; i < docs.length; i++) ...[
+                            if (i > 0) const Divider(height: 1, color: kBorder),
+                            Builder(builder: (_) {
+                              final d = docs[i].data() as Map<String, dynamic>;
+                              final sender =
+                                  d['studentName'] as String? ?? 'User';
+                              return GestureDetector(
+                                onTap: widget.onOpenChat,
+                                child: _MessageTile(
+                                  sender: sender,
+                                  text: d['lastMessage'] as String? ?? '',
+                                  time: _formatTime(d['lastUpdated']),
+                                  unread: d['unreadByAdmin'] == true,
+                                  initials: sender.isNotEmpty
+                                      ? sender[0].toUpperCase()
+                                      : 'U',
+                                ),
+                              );
+                            }),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
 

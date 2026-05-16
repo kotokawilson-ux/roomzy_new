@@ -9,32 +9,60 @@ import 'firebase_options.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'services/auth_service.dart';
+import 'services/notification_service.dart'; // ← new
+
+// ── Global navigator key — shared with NotificationService so it can
+//    call go_router navigation when the user taps a notification.
+final _navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
   final authService = AuthService();
-  // Router is created ONCE here — never recreated on rebuilds
+
+  // Router created ONCE — never recreated on rebuilds
   final router = AppRouter.router(authService);
+
+  // Boot notifications: requests OS permission on first launch,
+  // wires foreground / background / terminated tap handlers.
+  await NotificationService.instance.init(
+    navKey: _navigatorKey,
+    router: router, // lets the service use go_router for navigation
+  );
+
+  // Whenever auth state changes to a real user, persist the FCM token
+  authService.addListener(() {
+    final uid = authService.currentUser?.id ?? '';
+    if (uid.isNotEmpty) {
+      NotificationService.instance.saveTokenForUser(uid);
+    }
+  });
 
   runApp(
     ChangeNotifierProvider<AuthService>.value(
       value: authService,
-      child: RoomzyFindApp(router: router),
+      child: RoomzyFindApp(router: router, navigatorKey: _navigatorKey),
     ),
   );
 }
 
 class RoomzyFindApp extends StatelessWidget {
-  const RoomzyFindApp({super.key, required this.router});
+  const RoomzyFindApp({
+    super.key,
+    required this.router,
+    required this.navigatorKey,
+  });
+
   final dynamic router;
+  final GlobalKey<NavigatorState> navigatorKey;
 
   @override
   Widget build(BuildContext context) {
-    // Use context.read — NOT context.watch — so rebuilds don't affect the router
+    // context.read — NOT context.watch — so rebuilds don't affect the router
     return MaterialApp.router(
       title: 'RoomzyFind',
       debugShowCheckedModeBanner: false,
