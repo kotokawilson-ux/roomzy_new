@@ -178,7 +178,12 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     final notes = b['notes'] ?? '';
     final hostelId = b['hostel_id'] ?? '';
     final hostelPhone = b['hostel_phone'] ?? '';
-
+    final amountPaid = (b['amount_paid'] ?? 0.0).toDouble();
+    final balance = (b['balance'] ?? 0.0).toDouble();
+    final depositAmount = (b['deposit_amount'] ?? 0.0).toDouble();
+    final isFullyPaid =
+        paymentStatus == 'fully_paid' || (isPaid && balance == 0);
+    final isDepositPaid = paymentStatus == 'deposit_paid';
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(children: [
@@ -194,11 +199,15 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
               padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: isConfirmed && isPaid
+                  colors: isConfirmed && isFullyPaid
                       ? [_kGreen, const Color(0xFF15803D)]
-                      : status == 'cancelled'
-                          ? [_kRed, const Color(0xFFB91C1C)]
-                          : [_kOrange, const Color(0xFFD97706)],
+                      : isConfirmed && isDepositPaid
+                          ? [_kPrimary, const Color(0xFF0D9488)]
+                          : status == 'cancelled'
+                              ? [_kRed, const Color(0xFFB91C1C)]
+                              : isDepositPaid
+                                  ? [_kOrange, const Color(0xFFD97706)]
+                                  : [_kOrange, const Color(0xFFD97706)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -220,22 +229,30 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                       color: Colors.white.withOpacity(0.2),
                       shape: BoxShape.circle),
                   child: Icon(
-                    isConfirmed && isPaid
+                    isConfirmed && isFullyPaid
                         ? Icons.check_circle_rounded
-                        : status == 'cancelled'
-                            ? Icons.cancel_rounded
-                            : Icons.pending_rounded,
+                        : isConfirmed && isDepositPaid
+                            ? Icons.verified_rounded
+                            : status == 'cancelled'
+                                ? Icons.cancel_rounded
+                                : isDepositPaid
+                                    ? Icons.lock_open_rounded
+                                    : Icons.pending_rounded,
                     size: 52,
                     color: Colors.white,
                   ),
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  isConfirmed && isPaid
+                  isConfirmed && isFullyPaid
                       ? 'Booking Confirmed & Paid!'
-                      : status == 'cancelled'
-                          ? 'Booking Cancelled'
-                          : 'Booking Pending Payment',
+                      : isConfirmed && isDepositPaid
+                          ? 'Confirmed — Deposit Paid'
+                          : status == 'cancelled'
+                              ? 'Booking Cancelled'
+                              : isDepositPaid
+                                  ? 'Deposit Paid — Awaiting Confirmation'
+                                  : 'Booking Pending Payment',
                   style: const TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w900,
@@ -244,11 +261,15 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  isConfirmed && isPaid
-                      ? 'Your room is secured. See you soon!'
-                      : status == 'cancelled'
-                          ? 'This booking has been cancelled'
-                          : 'Complete your MoMo payment to confirm',
+                  isConfirmed && isFullyPaid
+                      ? 'Your room is fully secured. See you soon!'
+                      : isConfirmed && isDepositPaid
+                          ? 'Balance of GHS ${balance.toStringAsFixed(2)} due on arrival.'
+                          : status == 'cancelled'
+                              ? 'This booking has been cancelled'
+                              : isDepositPaid
+                                  ? 'Deposit received. Awaiting landlord confirmation.'
+                                  : 'Complete your MoMo payment to confirm',
                   style: TextStyle(
                       fontSize: 13, color: Colors.white.withOpacity(0.85)),
                   textAlign: TextAlign.center,
@@ -322,7 +343,18 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
           _DetailRow(label: 'Payment Method', value: momoType),
           _DetailRow(label: 'MoMo Number', value: momoNumber),
           _DetailRow(
-              label: 'Amount Paid', value: 'GHS ${amount.toStringAsFixed(2)}'),
+              label: 'Total Amount', value: 'GHS ${amount.toStringAsFixed(2)}'),
+          _DetailRow(
+              label: 'Amount Paid',
+              value: 'GHS ${amountPaid.toStringAsFixed(2)}'),
+          if (balance > 0)
+            _DetailRow(
+                label: 'Balance Due',
+                value: 'GHS ${balance.toStringAsFixed(2)}'),
+          if (depositAmount > 0)
+            _DetailRow(
+                label: 'Deposit',
+                value: 'GHS ${depositAmount.toStringAsFixed(2)}'),
           if (payRef != '—') _DetailRow(label: 'Paystack Ref', value: payRef),
         ])),
 

@@ -401,7 +401,9 @@ class _BookingCard extends StatelessWidget {
     final hostelId = booking['hostel_id'] ?? '';
     final hostelPhone = booking['hostel_phone'] ?? '';
     final canCancel = status == 'pending';
-
+    final amountPaid = (booking['amount_paid'] ?? 0.0).toDouble();
+    final balance = (booking['balance'] ?? 0.0).toDouble();
+    final depositAmount = (booking['deposit_amount'] ?? 0.0).toDouble();
     final statusColor = _statusColor(status);
     final payColor = _payColor(paymentStatus);
 
@@ -462,7 +464,13 @@ class _BookingCard extends StatelessWidget {
               _StatusBadge(label: status.toUpperCase(), color: statusColor),
               const SizedBox(height: 4),
               _StatusBadge(
-                  label: paymentStatus == 'paid' ? '✓ PAID' : 'UNPAID',
+                  label: paymentStatus == 'fully_paid'
+                      ? '✓ FULLY PAID'
+                      : paymentStatus == 'deposit_paid'
+                          ? '⬤ DEPOSIT PAID'
+                          : paymentStatus == 'paid'
+                              ? '✓ PAID'
+                              : 'UNPAID',
                   color: payColor),
             ]),
           ]),
@@ -485,13 +493,27 @@ class _BookingCard extends StatelessWidget {
             Row(children: [
               _InfoTile(
                   icon: Icons.payments_rounded,
-                  label: 'Amount',
+                  label: 'Total',
                   value: 'GHS ${amount.toStringAsFixed(2)}'),
               const SizedBox(width: 12),
               _InfoTile(
                   icon: Icons.phone_android_rounded,
                   label: 'Payment',
                   value: momoType),
+            ]),
+            const SizedBox(height: 12),
+            Row(children: [
+              _InfoTile(
+                  icon: Icons.check_rounded,
+                  label: 'Paid',
+                  value:
+                      'GHS ${(booking['amount_paid'] ?? 0.0).toStringAsFixed(2)}'),
+              const SizedBox(width: 12),
+              _InfoTile(
+                  icon: Icons.pending_rounded,
+                  label: 'Balance',
+                  value:
+                      'GHS ${(booking['balance'] ?? 0.0).toStringAsFixed(2)}'),
             ]),
           ]),
         ),
@@ -576,10 +598,13 @@ class _BookingCard extends StatelessWidget {
 
   Color _payColor(String status) {
     switch (status) {
+      case 'fully_paid':
       case 'paid':
         return _kGreen;
-      default:
+      case 'deposit_paid':
         return _kOrange;
+      default:
+        return _kRed;
     }
   }
 }
