@@ -19,7 +19,7 @@ jobs:
       
       - run: flutter build windows --release
       
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: roomzy-windows
           path: build/windows/x64/runner/Release/
