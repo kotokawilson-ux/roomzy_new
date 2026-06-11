@@ -21,5 +21,8 @@ samples, guidance on mobile development, and a full API reference.
 
 
 
-github input...
-git add . && git commit -m "your message" && git push
+
+
+
+git remote set-url origin https://github.com/kotokawilson-ux/roomzy_new.git
+git push
