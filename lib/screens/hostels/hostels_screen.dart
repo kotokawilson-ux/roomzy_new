@@ -14,10 +14,14 @@ class HostelsScreen extends StatefulWidget {
 
 class _HostelsScreenState extends State<HostelsScreen> {
   String _searchQuery = '';
+  double? _budgetFilter;
+  String _durationFilter = 'Per month';
 
-  void _onSearchChanged(String query) {
+  void _onSearchChanged(String query, double? maxPrice, String duration) {
     setState(() {
       _searchQuery = query;
+      _budgetFilter = maxPrice;
+      _durationFilter = duration;
     });
   }
 
@@ -46,6 +50,8 @@ class _HostelsScreenState extends State<HostelsScreen> {
             /// HOSTELS LIST
             HostelsList(
               searchQuery: _searchQuery,
+              budgetFilter: _budgetFilter,
+              durationFilter: _durationFilter,
             ),
 
             const SizedBox(height: 60),

@@ -262,12 +262,10 @@ class _TopBar extends StatelessWidget {
               int declined = docs
                   .where((d) => (d.data() as Map)['status'] == 'declined')
                   .length;
-              double revenue = docs
-                  .where((d) => (d.data() as Map)['status'] == 'confirmed')
-                  .fold(
-                      0.0,
-                      (sum, d) =>
-                          sum + ((d.data() as Map)['amount'] ?? 0).toDouble());
+              double revenue = docs.fold(
+                  0.0,
+                  (sum, d) =>
+                      sum + ((d.data() as Map)['amount_paid'] ?? 0).toDouble());
               return SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
@@ -299,12 +297,6 @@ class _TopBar extends StatelessWidget {
                       color: _kRed,
                       bg: _kRedBg),
                   const SizedBox(width: 10),
-                  _StatChip(
-                      label: 'Revenue',
-                      value: 'GHS ${NumberFormat('#,##0.00').format(revenue)}',
-                      icon: Icons.payments_rounded,
-                      color: _kPrimary,
-                      bg: _kPrimary.withOpacity(0.08)),
                 ]),
               );
             },
@@ -600,15 +592,32 @@ class _TableRowState extends State<_TableRow>
             // Amount
             Expanded(
               flex: 2,
-              child: Text(
-                amount > 0
-                    ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
-                    : '—',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: amount > 0 ? _kGreen : _kTextLight),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    amount > 0
+                        ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
+                        : '—',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: amount > 0 ? _kGreen : _kTextLight),
+                  ),
+                  if ((d['amount_paid'] ?? 0) > 0) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'Paid: GHS ${NumberFormat('#,##0.00').format((d['amount_paid'] ?? 0).toDouble())}',
+                      style: const TextStyle(fontSize: 10, color: _kGreen),
+                    ),
+                    if ((d['balance'] ?? 0) > 0)
+                      Text(
+                        'Bal: GHS ${NumberFormat('#,##0.00').format((d['balance'] ?? 0).toDouble())}',
+                        style: const TextStyle(fontSize: 10, color: _kOrange),
+                      ),
+                  ],
+                ],
               ),
             ),
             // Status
@@ -1245,6 +1254,30 @@ class _DetailSheet extends StatelessWidget {
                           copyable: true),
                       _DetailTile(Icons.paid_rounded, 'Payment Status',
                           d['payment_status'] ?? '—'),
+                      _DetailTile(
+                          Icons.savings_rounded,
+                          'Total Amount',
+                          d['amount'] != null
+                              ? 'GHS ${NumberFormat('#,##0.00').format((d['amount'] as num).toDouble())}'
+                              : '—'),
+                      _DetailTile(
+                          Icons.check_rounded,
+                          'Amount Paid',
+                          d['amount_paid'] != null
+                              ? 'GHS ${NumberFormat('#,##0.00').format((d['amount_paid'] as num).toDouble())}'
+                              : 'GHS 0.00'),
+                      _DetailTile(
+                          Icons.pending_rounded,
+                          'Balance Remaining',
+                          d['balance'] != null
+                              ? 'GHS ${NumberFormat('#,##0.00').format((d['balance'] as num).toDouble())}'
+                              : '—'),
+                      _DetailTile(
+                          Icons.account_balance_wallet_rounded,
+                          'Deposit Amount',
+                          d['deposit_amount'] != null
+                              ? 'GHS ${NumberFormat('#,##0.00').format((d['deposit_amount'] as num).toDouble())}'
+                              : '—'),
                     ]),
                     const SizedBox(height: 16),
                     _DetailSection(title: 'Booking Info', children: [
@@ -1256,7 +1289,11 @@ class _DetailSheet extends StatelessWidget {
                           Icons.fingerprint_rounded, 'Booking ID', docId,
                           copyable: true, small: true),
                     ]),
+
+                    const SizedBox(height: 16),
+                    _PaymentHistorySection(docId: docId),
                     const SizedBox(height: 24),
+
                     // Quick action buttons — now with proper room slot management
                     Row(children: [
                       if (status != 'confirmed')
@@ -1948,6 +1985,111 @@ class _ErrorBox extends StatelessWidget {
               style: const TextStyle(color: _kTextMid, fontSize: 13)),
         ]),
       ),
+    );
+  }
+}
+
+class _PaymentHistorySection extends StatelessWidget {
+  final String docId;
+  const _PaymentHistorySection({required this.docId});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _db
+          .collection('bookings')
+          .doc(docId)
+          .collection('payments')
+          .orderBy('paid_at', descending: true)
+          .snapshots(),
+      builder: (ctx, snap) {
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) return const SizedBox.shrink();
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+                width: 3,
+                height: 14,
+                decoration: BoxDecoration(
+                    color: _kPrimary, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 8),
+            const Text('Payment History',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: _kTextDark)),
+          ]),
+          const SizedBox(height: 10),
+          ...docs.map((doc) {
+            final p = doc.data() as Map<String, dynamic>;
+            final ts = p['paid_at'];
+            final date = ts is Timestamp ? _fmtShort(ts.toDate()) : '—';
+            final amt = (p['amount'] ?? 0).toDouble();
+            final method = (p['method'] ?? '').toString().toUpperCase();
+            final note = p['note'] ?? '';
+            final status = p['status'] ?? '';
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _kSurface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _kBorder),
+              ),
+              child: Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _kGreen.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.payments_rounded,
+                      size: 16, color: _kGreen),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(note.isNotEmpty ? note : 'Payment',
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: _kTextDark)),
+                        const SizedBox(height: 2),
+                        Text('$method · $date',
+                            style: const TextStyle(
+                                fontSize: 11, color: _kTextLight)),
+                        if (status.isNotEmpty)
+                          Container(
+                            margin: const EdgeInsets.only(top: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: status == 'paid' ? _kGreenBg : _kOrangeBg,
+                              borderRadius: BorderRadius.circular(50),
+                            ),
+                            child: Text(status,
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color:
+                                        status == 'paid' ? _kGreen : _kOrange)),
+                          ),
+                      ]),
+                ),
+                Text(
+                  'GHS ${NumberFormat('#,##0.00').format(amt)}',
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                      color: _kGreen),
+                ),
+              ]),
+            );
+          }),
+        ]);
+      },
     );
   }
 }

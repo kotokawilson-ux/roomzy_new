@@ -1101,6 +1101,9 @@ class _HostelDialogState extends State<_HostelDialog> {
   String? _landlordId, _landlordName, _landlordCode;
   String? _schoolId, _schoolName, _schoolShortName;
   String _durationType = 'per year';
+  String _depositType = 'none';
+  final _depositValue = TextEditingController();
+
   bool _saving = false;
   String? _validationError;
 
@@ -1140,10 +1143,15 @@ class _HostelDialogState extends State<_HostelDialog> {
       _schoolName = d['school_name'] as String?;
       _schoolShortName = d['short_name'] as String?;
       _durationType = d['duration_type'] ?? 'per year';
+      _depositType = d['deposit_type']?.toString() ?? 'none';
+      final dv = (d['deposit_value'] as num?)?.toDouble() ?? 0.0;
+      _depositValue.text =
+          dv > 0 ? dv.toStringAsFixed(_depositType == 'percent' ? 0 : 2) : '';
     } else {
       _roomsAvail.text = '0';
     }
     _name.addListener(_genCode);
+    _depositValue.addListener(() => setState(() {}));
   }
 
   void _genCode() {
@@ -1347,6 +1355,48 @@ class _HostelDialogState extends State<_HostelDialog> {
                         controller: _roomsAvail,
                         keyboard: TextInputType.number),
                     const SizedBox(height: 16),
+                    _section('Deposit Policy'),
+                    Row(children: [
+                      _DepositChip(
+                        label: 'None',
+                        icon: Icons.block_rounded,
+                        selected: _depositType == 'none',
+                        onTap: () => setState(() {
+                          _depositType = 'none';
+                          _depositValue.clear();
+                        }),
+                      ),
+                      const SizedBox(width: 8),
+                      _DepositChip(
+                        label: 'Percentage',
+                        icon: Icons.percent_rounded,
+                        selected: _depositType == 'percent',
+                        onTap: () => setState(() => _depositType = 'percent'),
+                      ),
+                      const SizedBox(width: 8),
+                      _DepositChip(
+                        label: 'Fixed (GHS)',
+                        icon: Icons.attach_money_rounded,
+                        selected: _depositType == 'fixed',
+                        onTap: () => setState(() => _depositType = 'fixed'),
+                      ),
+                    ]),
+                    if (_depositType != 'none') ...[
+                      const SizedBox(height: 12),
+                      AdminFormField(
+                        label: _depositType == 'percent'
+                            ? 'Deposit Percentage (%)'
+                            : 'Deposit Amount (GHS per slot)',
+                        controller: _depositValue,
+                        keyboard: TextInputType.number,
+                      ),
+                      const SizedBox(height: 6),
+                      _DepositPreviewNote(
+                        type: _depositType,
+                        rawValue: _depositValue.text,
+                      ),
+                    ],
+                    const SizedBox(height: 16),
                     _section('Payment Details'),
                     AdminFormField(
                         label: 'Mobile Money (MoMo)', controller: _momo),
@@ -1396,6 +1446,7 @@ class _HostelDialogState extends State<_HostelDialog> {
   @override
   void dispose() {
     _name.removeListener(_genCode);
+    _depositValue.dispose();
     for (final c in [
       _name,
       _code,
@@ -1506,7 +1557,7 @@ class _RoomDialogState extends State<_RoomDialog> {
 
     try {
       if (_isEdit) {
-        await db.collection('rooms').doc(widget.doc!.id).update(data);
+        await db.collection('hostels').doc(widget.doc!.id).update(data);
         // ✅ LOG ROOM UPDATE
         await ActivityLogger.log(
           action: 'Updated Room',
@@ -1699,6 +1750,101 @@ void _showSuccessToast(BuildContext context, String message) {
   );
 
   overlay.insert(entry);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPOSIT CHIP  (admin)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DepositChip extends StatelessWidget {
+  const _DepositChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+            decoration: BoxDecoration(
+              color: selected ? kGreen : kSurfaceAlt,
+              borderRadius: BorderRadius.circular(8),
+              border:
+                  Border.all(color: selected ? kGreen : kBorder, width: 1.5),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon,
+                    size: 16, color: selected ? Colors.white : kTextLight),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : kTextLight,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPOSIT PREVIEW NOTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DepositPreviewNote extends StatelessWidget {
+  const _DepositPreviewNote({required this.type, required this.rawValue});
+  final String type;
+  final String rawValue;
+
+  @override
+  Widget build(BuildContext context) {
+    final val = double.tryParse(rawValue.trim()) ?? 0.0;
+    if (val <= 0) return const SizedBox.shrink();
+
+    final String preview;
+    if (type == 'percent') {
+      final dep = 1000.0 * val / 100;
+      preview =
+          'e.g. ${val.toStringAsFixed(0)}% of GHS 1000 room = GHS ${dep.toStringAsFixed(2)} deposit';
+    } else {
+      preview = 'Student pays GHS ${val.toStringAsFixed(2)} deposit per slot';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: kGreen.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kGreen.withOpacity(0.20)),
+      ),
+      child: Row(children: [
+        Icon(Icons.calculate_outlined, size: 13, color: kGreen),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            preview,
+            style: TextStyle(
+                fontSize: 11, color: kGreen, fontWeight: FontWeight.w500),
+          ),
+        ),
+      ]),
+    );
+  }
 }
 
 class _SuccessToast extends StatefulWidget {

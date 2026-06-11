@@ -7,7 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:url_launcher/url_launcher.dart';
-
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/booking_storage_service.dart';
 import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
@@ -56,10 +56,8 @@ class _BookingsScreenState extends State<BookingsScreen> {
       _error = null;
     });
     try {
-      // ── Only load booking IDs saved on THIS device ──────────────────────
-      final myIds = await BookingStorageService.getBookingIds();
-
-      if (myIds.isEmpty) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
         setState(() {
           _bookings = [];
           _filtered = [];
@@ -68,32 +66,14 @@ class _BookingsScreenState extends State<BookingsScreen> {
         return;
       }
 
-      // Firestore 'whereIn' supports max 10 items per query
-      // Split into chunks of 10 if needed
-      final allBookings = <Map<String, dynamic>>[];
-      final chunks = <List<String>>[];
-      for (int i = 0; i < myIds.length; i += 10) {
-        chunks.add(
-            myIds.sublist(i, i + 10 > myIds.length ? myIds.length : i + 10));
-      }
+      final snap = await FirebaseFirestore.instance
+          .collection('bookings')
+          .where('email', isEqualTo: user.email)
+          .orderBy('booked_at', descending: true)
+          .get();
 
-      for (final chunk in chunks) {
-        final snap = await FirebaseFirestore.instance
-            .collection('bookings')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-        for (final doc in snap.docs) {
-          allBookings.add({'id': doc.id, ...doc.data()});
-        }
-      }
-
-      // Sort by booked_at descending (newest first)
-      allBookings.sort((a, b) {
-        final aTime = a['booked_at'];
-        final bTime = b['booked_at'];
-        if (aTime == null || bTime == null) return 0;
-        return bTime.compareTo(aTime);
-      });
+      final allBookings =
+          snap.docs.map((doc) => {'id': doc.id, ...doc.data()}).toList();
 
       if (!mounted) return;
       setState(() {
@@ -523,7 +503,7 @@ class _BookingCard extends StatelessWidget {
             // View receipt
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: () => context.go('/book/$id'),
+                onPressed: () => context.push('/bookings/$id'),
                 icon: const Icon(Icons.receipt_long_rounded, size: 16),
                 label: const Text('Receipt'),
                 style: ElevatedButton.styleFrom(

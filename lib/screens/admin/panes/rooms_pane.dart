@@ -462,6 +462,7 @@ class _RoomsPaneState extends State<RoomsPane> {
                     );
                     confirmDelete(context, 'rooms', docs[i].id);
                   },
+                  onToggle: () => _toggleAvailability(docs[i]),
                 ),
               );
             },
@@ -481,6 +482,18 @@ class _RoomsPaneState extends State<RoomsPane> {
         context: context,
         builder: (_) => _RoomDialog(doc: doc, parentContext: context),
       );
+
+  Future<void> _toggleAvailability(QueryDocumentSnapshot doc) async {
+    final d = doc.data() as Map<String, dynamic>;
+    final current = d['available'] == true || d['available'].toString() == '1';
+    await db.collection('rooms').doc(doc.id).update({'available': !current});
+    if (!mounted) return;
+    final roomNum = d['room_number']?.toString() ?? 'Unknown';
+    await ActivityLogger.log(
+      action: !current ? 'Enabled Room' : 'Disabled Room',
+      details: 'Room $roomNum in ${d['hostel_name'] ?? ''}',
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -608,11 +621,12 @@ class _RoomCard extends StatelessWidget {
     required this.doc,
     required this.onEdit,
     required this.onDelete,
+    required this.onToggle,
   });
   final QueryDocumentSnapshot doc;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
-
+  final VoidCallback onToggle;
   @override
   Widget build(BuildContext context) {
     final d = doc.data() as Map<String, dynamic>;
@@ -700,8 +714,18 @@ class _RoomCard extends StatelessWidget {
                 // ── Booking status badge ──────────────────────────────────
                 _BadgeRow(
                   label: 'Booking',
-                  badgeLabel: available ? 'Not Booked' : 'Booked',
-                  color: available ? Colors.blue : Colors.orange,
+                  badgeLabel: !available
+                      ? 'Unavailable'
+                      : ((d['booked'] ?? 0) as num) >=
+                              ((d['capacity'] ?? 1) as num)
+                          ? 'Fully Booked'
+                          : 'Has Space',
+                  color: !available
+                      ? Colors.red
+                      : ((d['booked'] ?? 0) as num) >=
+                              ((d['capacity'] ?? 1) as num)
+                          ? Colors.orange
+                          : Colors.blue,
                 ),
 
                 const SizedBox(height: 12),
@@ -712,6 +736,16 @@ class _RoomCard extends StatelessWidget {
                   runSpacing: 4,
                   alignment: WrapAlignment.end,
                   children: [
+                    _CardBtn(
+                      icon: available
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      label: available ? 'Disable' : 'Enable',
+                      color: available
+                          ? Colors.amber.shade700
+                          : const Color(0xFF2D6A4F),
+                      onTap: onToggle,
+                    ),
                     _CardBtn(
                       icon: Icons.edit_outlined,
                       label: 'Edit',
@@ -767,11 +801,17 @@ class _RoomDialogState extends State<_RoomDialog> {
 
   static const _types = [
     'Single',
+    'Single Ensuite',
     'Double',
+    'Double Ensuite',
     'Triple',
+    'Triple Ensuite',
     'Quad',
     'Suite',
     'Studio',
+    'Dormitory'
+        'Chamber and Hall',
+    'Other',
   ];
 
   @override
@@ -787,7 +827,8 @@ class _RoomDialogState extends State<_RoomDialog> {
       _hostelId = d['hostel_id'] as String?;
       _hostelName = d['hostel_name'] as String?;
       _hostelCode = d['hostel_code'] as String?;
-      _type = d['type']?.toString() ?? 'Single';
+      final rawType = d['type']?.toString() ?? 'Single';
+      _type = _types.contains(rawType) ? rawType : 'Other';
       _available = d['available'] == true || d['available'].toString() == '1';
     } else {
       _capacity.text = '1';

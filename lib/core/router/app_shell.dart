@@ -15,6 +15,10 @@ import '../../services/auth_service.dart';
 //   • FAB sits 16px above the floating pill nav  (nav = 68 + 10 margin + safe)
 //   • Speed-dial grows upward from the FAB via an Overlay so it can never
 //     push the FAB down or overlap the send button in chat screens
+//
+//  Context bar:
+//   • Slides in above the bottom nav when user is on a hostel detail page
+//   • Shows breadcrumb: Hostels › Hostel Name with back button + Viewing pill
 // ─────────────────────────────────────────────────────────────────────────────
 
 class AppShell extends StatefulWidget {
@@ -56,6 +60,11 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
   bool _speedDialOpen = false;
   late AnimationController _speedDialCtrl;
 
+  // ── Context bar animation ──────────────────────────────────────────────────
+  late AnimationController _contextBarCtrl;
+  late Animation<double> _contextBarFade;
+  bool _wasOnDetail = false;
+
   // ── FAB GlobalKey so we can position the speed-dial overlay above it ───────
   final _fabKey = GlobalKey();
 
@@ -77,6 +86,14 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 280),
     );
 
+    _contextBarCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    _contextBarFade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _contextBarCtrl, curve: Curves.easeOut),
+    );
+
     _chatFabCtrl.forward();
   }
 
@@ -85,6 +102,7 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
     _removeSpeedDial();
     _chatFabCtrl.dispose();
     _speedDialCtrl.dispose();
+    _contextBarCtrl.dispose();
     super.dispose();
   }
 
@@ -95,7 +113,26 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
     return 0;
   }
 
-  // ── Speed-dial via Overlay (never interferes with page content) ────────────
+  bool _isHostelDetail(String location) {
+    return RegExp(r'^/hostels/[^/]+$').hasMatch(location);
+  }
+
+  String _hostelIdFromRoute(String location) {
+    final match = RegExp(r'^/hostels/([^/]+)$').firstMatch(location);
+    return match?.group(1) ?? '';
+  }
+
+  void _handleContextBarAnimation(bool isDetail) {
+    if (isDetail == _wasOnDetail) return;
+    _wasOnDetail = isDetail;
+    if (isDetail) {
+      _contextBarCtrl.forward();
+    } else {
+      _contextBarCtrl.reverse();
+    }
+  }
+
+  // ── Speed-dial via Overlay ─────────────────────────────────────────────────
   void _showSpeedDial(BuildContext context, String uid) {
     _removeSpeedDial();
     final box = _fabKey.currentContext?.findRenderObject() as RenderBox?;
@@ -154,32 +191,70 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final location = GoRouterState.of(context).uri.toString();
     _currentIndex = _indexFromRoute(location);
+    final isDetail = _isHostelDetail(location);
+    final hostelId = _hostelIdFromRoute(location);
+
+    // Trigger animation whenever detail state changes
+    _handleContextBarAnimation(isDetail);
 
     final auth = context.watch<AuthService>();
     final uid = auth.currentUser?.id ?? '';
 
     // ── Bottom-nav height so FAB clears it exactly ─────────────────────────
-    // Pill nav: 68px height + 10px bottom margin + system bottom inset
     final bottomInset = MediaQuery.of(context).padding.bottom;
-    final navClearance = 68.0 + 10.0 + bottomInset + 16.0; // +16 gap above nav
+    // When context bar is visible add its height (~52px + 6px margin) to clearance
+    final contextBarExtra = isDetail ? 58.0 : 0.0;
+    final navClearance = 68.0 + 10.0 + bottomInset + 16.0 + contextBarExtra;
 
     return Scaffold(
       body: widget.child,
       extendBody: true,
-      bottomNavigationBar: _GlassBottomNav(
-        currentIndex: _currentIndex,
-        routes: _routes,
-        icons: _icons,
-        activeIcons: _activeIcons,
-        labels: _labels,
-        teal: _teal,
-        onTap: (i) => context.go(_routes[i]),
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Hostel context bar ───────────────────────────────────────────
+          AnimatedSize(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+            child: isDetail
+                ? AnimatedBuilder(
+                    animation: _contextBarCtrl,
+                    builder: (_, child) => FadeTransition(
+                      opacity: _contextBarFade,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, 0.5),
+                          end: Offset.zero,
+                        ).animate(CurvedAnimation(
+                          parent: _contextBarCtrl,
+                          curve: Curves.easeOutCubic,
+                        )),
+                        child: child,
+                      ),
+                    ),
+                    child: _HostelContextBar(
+                      hostelId: hostelId,
+                      onBack: () => context.go('/hostels'),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+
+          // ── Glass bottom nav ─────────────────────────────────────────────
+          _GlassBottomNav(
+            currentIndex: _currentIndex,
+            routes: _routes,
+            icons: _icons,
+            activeIcons: _activeIcons,
+            labels: _labels,
+            teal: _teal,
+            isOnDetail: isDetail,
+            onTap: (i) => context.go(_routes[i]),
+          ),
+        ],
       ),
-      // ── FAB: endFloat so Flutter places it freely; we offset it upward ────
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: Padding(
-        // Push FAB up so it clears the floating pill nav and has breathing room.
-        // The extra right padding aligns with the pill nav's edge.
         padding: EdgeInsets.only(bottom: navClearance, right: 4),
         child: ScaleTransition(
           scale: _chatFabScale,
@@ -206,6 +281,135 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HOSTEL CONTEXT BAR
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _HostelContextBar extends StatelessWidget {
+  const _HostelContextBar({
+    required this.hostelId,
+    required this.onBack,
+  });
+
+  final String hostelId;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('hostels')
+          .doc(hostelId)
+          .snapshots(),
+      builder: (_, snap) {
+        final name =
+            snap.data?.data()?['hostel_name'] as String? ?? 'Hostel Detail';
+
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF00897B), Color(0xFF00695C)],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF00897B).withOpacity(0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(children: [
+            // ── Back button ─────────────────────────────────────────────────
+            GestureDetector(
+              onTap: onBack,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white.withOpacity(0.25)),
+                ),
+                child: const Icon(
+                  Icons.arrow_back_rounded,
+                  color: Colors.white,
+                  size: 15,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+
+            // ── Breadcrumb ───────────────────────────────────────────────────
+            const Icon(
+              Icons.apartment_rounded,
+              color: Colors.white60,
+              size: 13,
+            ),
+            const SizedBox(width: 5),
+            const Text(
+              'Hostels',
+              style: TextStyle(
+                color: Colors.white60,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: Colors.white38,
+              size: 14,
+            ),
+            const SizedBox(width: 4),
+
+            // ── Hostel name ──────────────────────────────────────────────────
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
+            // ── "Viewing" pill ───────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(50),
+                border: Border.all(color: Colors.white.withOpacity(0.3)),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.visibility_rounded, color: Colors.white, size: 11),
+                SizedBox(width: 4),
+                Text(
+                  'Viewing',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        );
+      },
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -282,7 +486,7 @@ class _ChatFab extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SPEED-DIAL OVERLAY  —  renders above everything, anchored to FAB position
+//  SPEED-DIAL OVERLAY
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SpeedDialOverlay extends StatelessWidget {
@@ -312,14 +516,12 @@ class _SpeedDialOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Tap outside to close
         GestureDetector(
           onTap: onClose,
           child: Container(color: Colors.transparent),
         ),
-        // Speed-dial items anchored just above the FAB
         Positioned(
-          bottom: fabBottom + 8, // 8px gap above FAB top
+          bottom: fabBottom + 8,
           right: fabRight,
           child: AnimatedBuilder(
             animation: controller,
@@ -372,6 +574,9 @@ class _SpeedDialOverlay extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLASSMORPHIC BOTTOM NAV
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  GLASSMORPHIC BOTTOM NAV
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _GlassBottomNav extends StatelessWidget {
   const _GlassBottomNav({
@@ -381,6 +586,7 @@ class _GlassBottomNav extends StatelessWidget {
     required this.activeIcons,
     required this.labels,
     required this.teal,
+    required this.isOnDetail,
     required this.onTap,
   });
 
@@ -390,50 +596,58 @@ class _GlassBottomNav extends StatelessWidget {
   final List<IconData> activeIcons;
   final List<String> labels;
   final Color teal;
+  final bool isOnDetail;
   final ValueChanged<int> onTap;
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Container(
-        height: 68,
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(36),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 24,
-              offset: const Offset(0, 8),
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+
+    return Container(
+      // ── Fixed content height (68px) + bottom safe-area padding inside ──
+      height: 68 + bottomInset,
+      margin: EdgeInsets.fromLTRB(16, 0, 16, 10 + bottomInset),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(36),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(36),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.92),
+              borderRadius: BorderRadius.circular(36),
+              border: Border.all(
+                color: isOnDetail
+                    ? teal.withOpacity(0.4)
+                    : Colors.white.withOpacity(0.6),
+                width: isOnDetail ? 1.5 : 1.2,
+              ),
             ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(36),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.88),
-                borderRadius: BorderRadius.circular(36),
-                border: Border.all(
-                  color: Colors.white.withOpacity(0.6),
-                  width: 1.2,
-                ),
-              ),
-              child: Row(
-                children: List.generate(labels.length, (i) {
-                  return _GlassNavItem(
-                    icon: icons[i],
-                    activeIcon: activeIcons[i],
-                    label: labels[i],
-                    isActive: currentIndex == i,
-                    teal: teal,
-                    onTap: () => onTap(i),
-                  );
-                }),
-              ),
+            // ── Padding pushes items up out of the safe-area zone ──────────
+            padding: EdgeInsets.only(bottom: bottomInset),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: List.generate(labels.length, (i) {
+                final isActive = isOnDetail ? false : currentIndex == i;
+                return _GlassNavItem(
+                  icon: icons[i],
+                  activeIcon: activeIcons[i],
+                  label: labels[i],
+                  isActive: isActive,
+                  teal: teal,
+                  showDetailDot: false,
+                  onTap: () => onTap(i),
+                );
+              }),
             ),
           ),
         ),
@@ -449,6 +663,7 @@ class _GlassNavItem extends StatefulWidget {
     required this.label,
     required this.isActive,
     required this.teal,
+    required this.showDetailDot,
     required this.onTap,
   });
 
@@ -457,6 +672,7 @@ class _GlassNavItem extends StatefulWidget {
   final String label;
   final bool isActive;
   final Color teal;
+  final bool showDetailDot;
   final VoidCallback onTap;
 
   @override
@@ -505,45 +721,79 @@ class _GlassNavItemState extends State<_GlassNavItem>
         child: AnimatedBuilder(
           animation: _ctrl,
           builder: (_, __) {
-            return Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            return Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center, // ← centers the Stack
               children: [
-                ScaleTransition(
-                  scale: _scale,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOutCubic,
-                    padding: EdgeInsets.symmetric(
-                      horizontal: widget.isActive ? 14 : 10,
-                      vertical: 6,
+                // ── Icon + Label centred in the 68px content area ──────────
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center, // ← KEY fix
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    ScaleTransition(
+                      scale: _scale,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeOutCubic,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: widget.isActive ? 14 : 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: widget.isActive
+                              ? widget.teal.withOpacity(0.12)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Icon(
+                          widget.isActive ? widget.activeIcon : widget.icon,
+                          color: widget.isActive
+                              ? widget.teal
+                              : const Color(0xFF90A4AE), // slightly darker
+                          size: 23,
+                        ),
+                      ),
                     ),
-                    decoration: BoxDecoration(
-                      color: widget.isActive
-                          ? widget.teal.withOpacity(0.12)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(20),
+                    const SizedBox(height: 4),
+                    AnimatedDefaultTextStyle(
+                      duration: const Duration(milliseconds: 200),
+                      style: TextStyle(
+                        fontSize: 11, // ↑ slightly bigger
+                        letterSpacing: 0.1,
+                        fontWeight: widget.isActive
+                            ? FontWeight.w800 // ← bolder active
+                            : FontWeight.w600, // ← bolder inactive
+                        color: widget.isActive
+                            ? widget.teal
+                            : const Color(0xFF90A4AE),
+                      ),
+                      child: Text(widget.label),
                     ),
-                    child: Icon(
-                      widget.isActive ? widget.activeIcon : widget.icon,
-                      color: widget.isActive
-                          ? widget.teal
-                          : const Color(0xFFB0BEC5),
-                      size: 22,
+                  ],
+                ),
+
+                // ── Detail indicator dot on Hostels tab ──────────────────
+                if (widget.showDetailDot)
+                  Positioned(
+                    top: 8,
+                    right: 10,
+                    child: Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: widget.teal,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: widget.teal.withOpacity(0.5),
+                            blurRadius: 4,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 3),
-                AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 200),
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    fontWeight:
-                        widget.isActive ? FontWeight.w700 : FontWeight.w400,
-                    color:
-                        widget.isActive ? widget.teal : const Color(0xFFB0BEC5),
-                  ),
-                  child: Text(widget.label),
-                ),
               ],
             );
           },
@@ -552,7 +802,6 @@ class _GlassNavItemState extends State<_GlassNavItem>
     );
   }
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  CHAT FAB UNREAD BADGE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -625,7 +874,6 @@ class _SpeedDialItem extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Label pill
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
@@ -649,7 +897,6 @@ class _SpeedDialItem extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            // Icon circle
             GestureDetector(
               onTap: onTap,
               child: Container(

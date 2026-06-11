@@ -59,7 +59,7 @@ class _UsersPaneState extends State<UsersPane>
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 2, vsync: this);
+    _tab = TabController(length: 3, vsync: this); // was 2
     _tab.addListener(() => setState(() {}));
   }
 
@@ -89,7 +89,9 @@ class _UsersPaneState extends State<UsersPane>
               controller: _searchCtrl,
               hint: _tab.index == 0
                   ? 'Search admins by name or email…'
-                  : 'Search students by name, email or phone…',
+                  : _tab.index == 1
+                      ? 'Search landlords by name, email or phone…'
+                      : 'Search students by name, email or phone…',
               onChanged: (v) => setState(() => _search = v.toLowerCase()),
             ),
           ),
@@ -98,79 +100,111 @@ class _UsersPaneState extends State<UsersPane>
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: db.collection('users').orderBy('username').snapshots(),
-              builder: (_, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                      child: CircularProgressIndicator(color: kGreen));
-                }
-                if (snap.hasError) {
-                  return Center(child: Text('Error: ${snap.error}'));
-                }
+              builder: (_, usersSnap) {
+                return StreamBuilder<QuerySnapshot>(
+                  stream: db.collection('landlords').snapshots(),
+                  builder: (_, landlordsSnap) {
+                    if (usersSnap.connectionState == ConnectionState.waiting ||
+                        landlordsSnap.connectionState ==
+                            ConnectionState.waiting) {
+                      return const Center(
+                          child: CircularProgressIndicator(color: kGreen));
+                    }
+                    if (usersSnap.hasError) {
+                      return Center(
+                          child: Text('Users Error: ${usersSnap.error}'));
+                    }
+                    if (landlordsSnap.hasError) {
+                      return Center(
+                          child:
+                              Text('Landlords Error: ${landlordsSnap.error}'));
+                    }
 
-                final allDocs = snap.data?.docs ?? [];
+                    final allDocs = usersSnap.data?.docs ?? [];
+                    final landlordDocs = landlordsSnap.data?.docs ?? [];
+                    print('🏠 landlordDocs count: ${landlordDocs.length}');
+                    print(
+                        '🏠 landlordsSnap state: ${landlordsSnap.connectionState}');
+                    print('🏠 landlordsSnap error: ${landlordsSnap.error}');
+                    // Split users by role
+                    var admins = allDocs
+                        .where((d) =>
+                            ((d.data() as Map)['role'] ?? '')
+                                .toString()
+                                .toLowerCase() ==
+                            'admin')
+                        .toList();
 
-                // Split by role
-                var admins = allDocs
-                    .where((d) =>
-                        ((d.data() as Map)['role'] ?? '')
-                            .toString()
-                            .toLowerCase() ==
-                        'admin')
-                    .toList();
-                var students = allDocs.where((d) {
-                  final r = ((d.data() as Map)['role'] ?? 'student')
-                      .toString()
-                      .toLowerCase();
-                  return r == 'student';
-                }).toList();
+                    var students = allDocs.where((d) {
+                      final r = ((d.data() as Map)['role'] ?? 'student')
+                          .toString()
+                          .toLowerCase();
+                      return r == 'student';
+                    }).toList();
 
-                // Apply search
-                if (_search.isNotEmpty) {
-                  admins = admins.where((d) {
-                    final data = d.data() as Map<String, dynamic>;
-                    return ['username', 'email'].any((k) =>
-                        (data[k]?.toString() ?? '')
-                            .toLowerCase()
-                            .contains(_search));
-                  }).toList();
-                  students = students.where((d) {
-                    final data = d.data() as Map<String, dynamic>;
-                    return ['username', 'email', 'phone'].any((k) =>
-                        (data[k]?.toString() ?? '')
-                            .toLowerCase()
-                            .contains(_search));
-                  }).toList();
-                }
+                    // Landlords come from their own collection
+                    var landlords = landlordDocs.toList();
 
-                return TabBarView(
-                  controller: _tab,
-                  children: [
-                    // ── ADMINS TAB ─────────────────────────────────────────
-                    _AdminsTab(
-                      docs: admins,
-                      totalAdmins: allDocs
-                          .where((d) =>
-                              ((d.data() as Map)['role'] ?? '')
-                                  .toString()
-                                  .toLowerCase() ==
-                              'admin')
-                          .length,
-                      onEdit: (doc) => _showAdminDialog(context, doc),
-                      onDelete: (doc) => _confirmDelete(context, doc),
-                    ),
+                    // Apply search
+                    if (_search.isNotEmpty) {
+                      admins = admins.where((d) {
+                        final data = d.data() as Map<String, dynamic>;
+                        return ['username', 'email'].any((k) =>
+                            (data[k]?.toString() ?? '')
+                                .toLowerCase()
+                                .contains(_search));
+                      }).toList();
 
-                    // ── STUDENTS TAB ───────────────────────────────────────
-                    _StudentsTab(
-                      docs: students,
-                      totalStudents: allDocs.where((d) {
-                        final r = ((d.data() as Map)['role'] ?? 'student')
-                            .toString()
-                            .toLowerCase();
-                        return r == 'student';
-                      }).length,
-                      onDelete: (doc) => _confirmDelete(context, doc),
-                    ),
-                  ],
+                      students = students.where((d) {
+                        final data = d.data() as Map<String, dynamic>;
+                        return ['username', 'email', 'phone'].any((k) =>
+                            (data[k]?.toString() ?? '')
+                                .toLowerCase()
+                                .contains(_search));
+                      }).toList();
+
+                      landlords = landlords.where((d) {
+                        final data = d.data() as Map<String, dynamic>;
+                        return ['full_name', 'email', 'phone'].any((k) =>
+                            (data[k]?.toString() ?? '')
+                                .toLowerCase()
+                                .contains(_search));
+                      }).toList();
+                    }
+
+                    return TabBarView(
+                      controller: _tab,
+                      children: [
+                        _AdminsTab(
+                          docs: admins,
+                          totalAdmins: allDocs
+                              .where((d) =>
+                                  ((d.data() as Map)['role'] ?? '')
+                                      .toString()
+                                      .toLowerCase() ==
+                                  'admin')
+                              .length,
+                          onEdit: (doc) => _showAdminDialog(context, doc),
+                          onDelete: (doc) => _confirmDelete(context, doc),
+                        ),
+                        _LandlordsTab(
+                          docs: landlords,
+                          totalLandlords: landlordDocs.length,
+                          onDelete: (doc) => _confirmDelete(context, doc),
+                        ),
+                        _StudentsTab(
+                          docs: students,
+                          totalStudents: allDocs.where((d) {
+                            final r = ((d.data() as Map)['role'] ?? 'student')
+                                .toString()
+                                .toLowerCase();
+                            return r == 'student';
+                          }).length,
+                          onDelete: (doc) => _confirmDelete(context, doc),
+                        ),
+                      ],
+                    );
+                  },
                 );
               },
             ),
@@ -228,7 +262,10 @@ class _UsersPaneState extends State<UsersPane>
   // ── Delete confirm ────────────────────────────────────────────────────────
   void _confirmDelete(BuildContext ctx, QueryDocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
-    final username = data['username'] ?? 'this user';
+    // Landlords use full_name, users use username
+    final username = data['full_name'] ?? data['username'] ?? 'this user';
+    // Detect which collection based on fields
+    final isLandlord = data.containsKey('landlord_code');
 
     showDialog(
       context: ctx,
@@ -237,7 +274,8 @@ class _UsersPaneState extends State<UsersPane>
         username: username,
         onConfirm: () async {
           Navigator.pop(ctx);
-          await db.collection('users').doc(doc.id).delete();
+          final collection = isLandlord ? 'landlords' : 'users';
+          await db.collection(collection).doc(doc.id).delete();
           if (ctx.mounted) {
             _showSnack(ctx, '$username deleted.', Colors.red.shade600);
           }
@@ -327,6 +365,7 @@ class _UsersHeader extends StatelessWidget {
           // Tab bar
           TabBar(
             controller: tab,
+            tabAlignment: TabAlignment.fill,
             indicatorColor: Colors.white,
             indicatorWeight: 3,
             labelColor: Colors.white,
@@ -343,6 +382,17 @@ class _UsersHeader extends StatelessWidget {
                     Icon(Icons.shield_rounded, size: 15),
                     SizedBox(width: 6),
                     Text('Admins'),
+                  ],
+                ),
+              ),
+              Tab(
+                // NEW
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.home_work_rounded, size: 15),
+                    SizedBox(width: 6),
+                    Text('Landlords'),
                   ],
                 ),
               ),
@@ -415,7 +465,306 @@ class _SearchBar extends StatelessWidget {
     );
   }
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// LANDLORDS TAB
+// ─────────────────────────────────────────────────────────────────────────────
 
+class _LandlordsTab extends StatelessWidget {
+  const _LandlordsTab({
+    required this.docs,
+    required this.totalLandlords,
+    required this.onDelete,
+  });
+  final List<QueryDocumentSnapshot> docs;
+  final int totalLandlords;
+  final void Function(QueryDocumentSnapshot) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        const SizedBox(height: 14),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _LandlordStatBanner(total: totalLandlords),
+        ),
+        const SizedBox(height: 14),
+        Expanded(
+          child: docs.isEmpty
+              ? _EmptyState(
+                  icon: Icons.home_work_outlined,
+                  title: 'No landlords found (${docs.length})',
+                  subtitle: 'totalLandlords: $totalLandlords',
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  itemCount: docs.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (_, i) => _LandlordCard(
+                    index: i,
+                    doc: docs[i],
+                    onDelete: onDelete,
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LandlordStatBanner extends StatelessWidget {
+  const _LandlordStatBanner({required this.total});
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF6A1B9A), Color(0xFF8E24AA)],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF6A1B9A).withOpacity(0.25),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.home_work_rounded,
+                color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$total',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    height: 1),
+              ),
+              const Text('Registered Landlords',
+                  style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500)),
+            ],
+          ),
+          const Spacer(),
+          const Icon(Icons.home_work_rounded, color: Colors.white24, size: 40),
+        ],
+      ),
+    );
+  }
+}
+
+class _LandlordCard extends StatelessWidget {
+  const _LandlordCard({
+    required this.index,
+    required this.doc,
+    required this.onDelete,
+  });
+  final int index;
+  final QueryDocumentSnapshot doc;
+  final void Function(QueryDocumentSnapshot) onDelete;
+
+  static const _avatarColors = [
+    Color(0xFF6A1B9A),
+    Color(0xFF00838F),
+    Color(0xFFAD1457),
+    Color(0xFF558B2F),
+    Color(0xFF4527A0),
+    Color(0xFF00695C),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final d = doc.data() as Map<String, dynamic>;
+    final username = d['full_name'] ?? d['username'] ?? d['fullName'] ?? '—';
+    final email = d['email'] ?? '—';
+    final phone = d['phone'] ?? '—';
+    final joined = _fmtDate(d['createdAt']);
+    final avatarColor = _avatarColors[index % _avatarColors.length];
+
+    // Extra landlord-specific fields
+    final hostelCount = d['hostelCount']?.toString() ?? '—';
+    final verified = d['verified'] == true;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE5E7EB), width: 0.8),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.03),
+              blurRadius: 6,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            // Avatar
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: avatarColor.withOpacity(0.12),
+                shape: BoxShape.circle,
+                border:
+                    Border.all(color: avatarColor.withOpacity(0.3), width: 1.5),
+              ),
+              child: Center(
+                child: Text(
+                  _initials(username),
+                  style: TextStyle(
+                      color: avatarColor,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+
+            // Info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          username,
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF111827)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Landlord badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3E5F5),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                              color: const Color(0xFFCE93D8), width: 0.8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.home_work_rounded,
+                                size: 9, color: Colors.purple.shade700),
+                            const SizedBox(width: 3),
+                            Text('landlord',
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.purple.shade700)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      // Verified badge
+                      if (verified)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD8F3DC),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: const Color(0xFF1B4332).withOpacity(0.4),
+                                width: 0.8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.verified_rounded,
+                                  size: 9, color: Color(0xFF1B4332)),
+                              SizedBox(width: 3),
+                              Text('verified',
+                                  style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF1B4332))),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      const Icon(Icons.email_outlined,
+                          size: 11, color: Color(0xFF9CA3AF)),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          email,
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF6B7280)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      const Icon(Icons.phone_outlined,
+                          size: 11, color: Color(0xFF9CA3AF)),
+                      const SizedBox(width: 4),
+                      Text(phone,
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF6B7280))),
+                      const Spacer(),
+                      const Icon(Icons.calendar_today_outlined,
+                          size: 10, color: Color(0xFF9CA3AF)),
+                      const SizedBox(width: 3),
+                      Text(joined,
+                          style: const TextStyle(
+                              fontSize: 10, color: Color(0xFF9CA3AF))),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+
+            // Delete button
+            _ActionIconBtn(
+              icon: Icons.person_remove_outlined,
+              color: Colors.red.shade600,
+              bgColor: Colors.red.shade50,
+              onTap: () => onDelete(doc),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMINS TAB
 // ─────────────────────────────────────────────────────────────────────────────

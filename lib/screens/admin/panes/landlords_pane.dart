@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-
+import 'package:provider/provider.dart';
 import '../../../../constants/admin_theme.dart';
 import '../../../../utils/admin_helpers.dart';
 import '../widgets/dialog_widgets.dart';
@@ -14,6 +14,7 @@ import '../widgets/form_widgets.dart';
 import '../widgets/shared_widgets.dart';
 import '../../../../services/activity_log_service.dart';
 import '../../../../utils/activity_logger.dart';
+import '../../../services/auth_service.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // RESPONSIVE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -670,17 +671,22 @@ class _LandlordDialogState extends State<_LandlordDialog>
   final _address = TextEditingController();
   final _code = TextEditingController();
   final _profileImage = TextEditingController();
+  final _password = TextEditingController();
 
   late final TabController _tabs;
   bool _saving = false;
+  bool _obscurePassword = true;
   String? _validationError;
-
+// Add this state variable at the top of _LandlordDialogState
+  bool _creatingAuth = false;
+  String? _authSuccess;
   bool get _isEdit => widget.doc != null;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    // 3 tabs: Personal · Photo · Credentials
+    _tabs = TabController(length: 3, vsync: this);
     if (_isEdit) {
       final d = widget.doc!.data();
       _name.text = d['full_name']?.toString() ?? '';
@@ -693,6 +699,8 @@ class _LandlordDialogState extends State<_LandlordDialog>
     _name.addListener(_genCode);
     _phone.addListener(_genCode);
     _name.addListener(() => setState(() {}));
+    // Keep Credentials tab email preview in sync
+    _email.addListener(() => setState(() {}));
   }
 
   void _genCode() {
@@ -710,10 +718,16 @@ class _LandlordDialogState extends State<_LandlordDialog>
   }
 
   Future<void> _save() async {
+    // Build validation errors
     final missing = <String>[
       if (_name.text.trim().isEmpty) 'Full Name',
       if (_email.text.trim().isEmpty) 'Email',
       if (_phone.text.trim().isEmpty) 'Phone',
+      if (!_isEdit && _password.text.trim().isEmpty) 'Password',
+      if (!_isEdit &&
+          _password.text.trim().isNotEmpty &&
+          _password.text.trim().length < 6)
+        'Password (min 6 characters)',
     ];
 
     if (missing.isNotEmpty) {
@@ -738,26 +752,51 @@ class _LandlordDialogState extends State<_LandlordDialog>
 
     try {
       if (_isEdit) {
+        // ── EDIT: update Firestore only ──────────────────────────────
         await db.collection('landlords').doc(widget.doc!.id).update(data);
-        // ✅ ADD THIS
         await ActivityLogger.log(
           action: 'Updated Landlord',
           details: 'Name: ${_name.text.trim()}, Email: ${_email.text.trim()}',
         );
       } else {
+        // ── ADD: Firestore doc first, then Firebase Auth account ─────
         data['registered_at'] = FieldValue.serverTimestamp();
-        await db.collection('landlords').add(data);
-        // ✅ ADD THIS
+        final docRef = await db.collection('landlords').add(data);
+
+        // Create the Firebase Auth account via AuthService secondary app
+        // ✅ Use the Provider instance
+        final result = await context.read<AuthService>().createLandlordAccount(
+              landlordDocId: docRef.id,
+              fullName: _name.text.trim(),
+              email: _email.text.trim(),
+              phone: _phone.text.trim(),
+              password: _password.text.trim(),
+              landlordCode: _code.text.trim(),
+            );
+
+        if (!result.success) {
+          // Auth failed — roll back the Firestore doc so no orphan is left
+          await docRef.delete();
+          if (!mounted) return;
+          setState(() {
+            _saving = false;
+            _validationError =
+                result.error ?? 'Failed to create login account.';
+          });
+          return;
+        }
+
         await ActivityLogger.log(
           action: 'Created Landlord',
           details: 'Name: ${_name.text.trim()}, Email: ${_email.text.trim()}',
         );
       }
+
       if (!mounted) return;
       final parentCtx = widget.parentContext;
       final message = _isEdit
           ? 'Landlord Updated Successfully!'
-          : 'Landlord Added Successfully!';
+          : 'Landlord Account Created Successfully!';
       Navigator.of(context).pop();
       _showSuccessToast(parentCtx, message);
     } catch (e) {
@@ -798,11 +837,17 @@ class _LandlordDialogState extends State<_LandlordDialog>
               controller: _tabs,
               tabs: const [
                 Tab(
-                    icon: Icon(Icons.person_rounded, size: 16),
-                    text: 'Personal'),
+                  icon: Icon(Icons.person_rounded, size: 16),
+                  text: 'Personal',
+                ),
                 Tab(
-                    icon: Icon(Icons.photo_camera_outlined, size: 16),
-                    text: 'Photo'),
+                  icon: Icon(Icons.photo_camera_outlined, size: 16),
+                  text: 'Photo',
+                ),
+                Tab(
+                  icon: Icon(Icons.lock_outline_rounded, size: 16),
+                  text: 'Credentials',
+                ),
               ],
             ),
             if (_validationError != null)
@@ -814,7 +859,7 @@ class _LandlordDialogState extends State<_LandlordDialog>
               child: TabBarView(
                 controller: _tabs,
                 children: [
-                  // ── Tab 1: Personal Info ──
+                  // ── Tab 1: Personal Info ─────────────────────────────
                   SingleChildScrollView(
                     padding: EdgeInsets.all(_isPhone(context) ? 16 : 20),
                     child: Column(
@@ -872,7 +917,7 @@ class _LandlordDialogState extends State<_LandlordDialog>
                     ),
                   ),
 
-                  // ── Tab 2: Photo ──
+                  // ── Tab 2: Photo ─────────────────────────────────────
                   SingleChildScrollView(
                     padding: EdgeInsets.all(_isPhone(context) ? 16 : 20),
                     child: Column(
@@ -895,6 +940,309 @@ class _LandlordDialogState extends State<_LandlordDialog>
                       ],
                     ),
                   ),
+
+                  // ── Tab 3: Credentials ───────────────────────────────
+                  SingleChildScrollView(
+                    padding: EdgeInsets.all(_isPhone(context) ? 16 : 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SectionLabel(
+                          icon: Icons.lock_outline_rounded,
+                          label: 'Login credentials',
+                        ),
+
+                        // Read-only email mirror from tab 1
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Login email',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: kTextLight,
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: kSurfaceAlt,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: kBorder),
+                              ),
+                              child: Row(children: [
+                                Icon(Icons.email_outlined,
+                                    size: 14, color: kTextLight),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _email.text.trim().isEmpty
+                                        ? 'Fill in Email on Personal tab first'
+                                        : _email.text.trim(),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: _email.text.trim().isEmpty
+                                          ? kTextLight
+                                          : kTextDark,
+                                      fontStyle: _email.text.trim().isEmpty
+                                          ? FontStyle.italic
+                                          : FontStyle.normal,
+                                    ),
+                                  ),
+                                ),
+                              ]),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        // Password field
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              Text(
+                                _isEdit ? 'New password' : 'Password',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: kTextLight,
+                                ),
+                              ),
+                              if (!_isEdit) ...[
+                                const SizedBox(width: 3),
+                                const Text('*',
+                                    style: TextStyle(
+                                        color: Colors.red, fontSize: 12)),
+                              ],
+                              if (_isEdit) ...[
+                                const SizedBox(width: 6),
+                                Text(
+                                  '(leave blank to keep current)',
+                                  style: TextStyle(
+                                      fontSize: 10, color: kTextLight),
+                                ),
+                              ],
+                            ]),
+                            const SizedBox(height: 5),
+                            TextFormField(
+                              controller: _password,
+                              obscureText: _obscurePassword,
+                              style: const TextStyle(
+                                  fontSize: 13, color: kTextDark),
+                              decoration: InputDecoration(
+                                hintText: _isEdit
+                                    ? 'Enter new password (optional)'
+                                    : 'Min. 6 characters',
+                                hintStyle:
+                                    TextStyle(fontSize: 12, color: kTextLight),
+                                prefixIcon: Icon(Icons.lock_outline,
+                                    size: 16, color: kTextLight),
+                                suffixIcon: IconButton(
+                                  icon: Icon(
+                                    _obscurePassword
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                    size: 16,
+                                    color: kTextLight,
+                                  ),
+                                  onPressed: () => setState(() =>
+                                      _obscurePassword = !_obscurePassword),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: BorderSide(color: kBorder)),
+                                enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: BorderSide(color: kBorder)),
+                                focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide:
+                                        BorderSide(color: kGreen, width: 1.5)),
+                                filled: true,
+                                fillColor: kSurface,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        _InfoNote(
+                          icon: Icons.info_outline_rounded,
+                          text: _isEdit
+                              ? 'Leave the password blank to keep the landlord\'s existing password unchanged.'
+                              : 'The landlord will use this email and password to log into the app.',
+                        ),
+                        if (_isEdit) ...[
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _creatingAuth
+                                  ? null
+                                  : () async {
+                                      if (_email.text.trim().isEmpty ||
+                                          _password.text.trim().isEmpty) {
+                                        setState(() => _validationError =
+                                            'Email and password are required.');
+                                        return;
+                                      }
+                                      if (_password.text.trim().length < 6) {
+                                        setState(() => _validationError =
+                                            'Password must be at least 6 characters.');
+                                        return;
+                                      }
+                                      setState(() {
+                                        _creatingAuth = true;
+                                        _validationError = null;
+                                        _authSuccess = null;
+                                      });
+                                      final result = await context
+                                          .read<AuthService>()
+                                          .createLandlordAccount(
+                                            landlordDocId: widget.doc!.id,
+                                            fullName: _name.text.trim(),
+                                            email: _email.text.trim(),
+                                            phone: _phone.text.trim(),
+                                            password: _password.text.trim(),
+                                            landlordCode: _code.text.trim(),
+                                          );
+                                      if (!mounted) return;
+                                      setState(() {
+                                        _creatingAuth = false;
+                                        if (result.success) {
+                                          _authSuccess =
+                                              'Login account created successfully!';
+                                        } else {
+                                          _validationError = result.error ??
+                                              'Failed to create account.';
+                                        }
+                                      });
+                                    },
+                              icon: _creatingAuth
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.person_add_outlined,
+                                      size: 16, color: Colors.white),
+                              label: Text(
+                                _creatingAuth
+                                    ? 'Creating…'
+                                    : 'Create Login Account',
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: kGreen,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                elevation: 0,
+                              ),
+                            ),
+                          ),
+                          if (_authSuccess != null) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 9),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade50,
+                                borderRadius: BorderRadius.circular(10),
+                                border:
+                                    Border.all(color: Colors.green.shade200),
+                              ),
+                              child: Row(children: [
+                                Icon(Icons.check_circle_outline,
+                                    color: Colors.green.shade600, size: 16),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                    child: Text(_authSuccess!,
+                                        style: TextStyle(
+                                            color: Colors.green.shade700,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500))),
+                              ]),
+                            ),
+                          ],
+                        ],
+                        if (!_isEdit) ...[
+                          const SizedBox(height: 12),
+                          // Summary preview card
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: kGreen.withOpacity(0.04),
+                              borderRadius: BorderRadius.circular(10),
+                              border:
+                                  Border.all(color: kGreen.withOpacity(0.20)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Icon(Icons.checklist_rounded,
+                                      size: 13, color: kGreen),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'ACCOUNT SUMMARY',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.8,
+                                      color: kGreen,
+                                    ),
+                                  ),
+                                ]),
+                                const SizedBox(height: 10),
+                                _SummaryRow(
+                                  icon: Icons.person_outline,
+                                  label: 'Name',
+                                  value: _name.text.trim().isEmpty
+                                      ? '—'
+                                      : _name.text.trim(),
+                                ),
+                                _SummaryRow(
+                                  icon: Icons.email_outlined,
+                                  label: 'Email',
+                                  value: _email.text.trim().isEmpty
+                                      ? '—'
+                                      : _email.text.trim(),
+                                ),
+                                _SummaryRow(
+                                  icon: Icons.tag_rounded,
+                                  label: 'Code',
+                                  value: _code.text.trim().isEmpty
+                                      ? '—'
+                                      : _code.text.trim(),
+                                ),
+                                _SummaryRow(
+                                  icon: Icons.lock_outline,
+                                  label: 'Password',
+                                  value: _password.text.isEmpty
+                                      ? '—'
+                                      : '●' * _password.text.length.clamp(0, 8),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -914,13 +1262,64 @@ class _LandlordDialogState extends State<_LandlordDialog>
     _tabs.dispose();
     _name.removeListener(_genCode);
     _phone.removeListener(_genCode);
-    for (final c in [_name, _email, _phone, _address, _code, _profileImage]) {
+    for (final c in [
+      _name,
+      _email,
+      _phone,
+      _address,
+      _code,
+      _profileImage,
+      _password,
+    ]) {
       c.dispose();
     }
     super.dispose();
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUMMARY ROW  (used inside Credentials tab preview card)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SummaryRow extends StatelessWidget {
+  const _SummaryRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(children: [
+          Icon(icon, size: 13, color: kTextLight),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 60,
+            child: Text(
+              '$label:',
+              style: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600, color: kTextLight),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 11,
+                color: value == '—' ? kTextLight : kTextDark,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ]),
+      );
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // LANDLORD HOSTELS SHEET
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1219,6 +1618,8 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
 
   late final TabController _tabs;
   String _durationType = 'per year';
+  String _depositType = 'none'; // 'none' | 'percent' | 'fixed'
+  late final TextEditingController _depositValue;
   bool _saving = false;
   String? _validationError;
 
@@ -1253,6 +1654,11 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
     _images = TextEditingController(text: d['images']?.toString() ?? '');
     _googleMap = TextEditingController(text: d['google_map']?.toString() ?? '');
     _durationType = d['duration_type']?.toString() ?? 'per year';
+    _depositType = d['deposit_type']?.toString() ?? 'none';
+    final dv = (d['deposit_value'] as num?)?.toDouble() ?? 0.0;
+    _depositValue = TextEditingController(
+      text: dv > 0 ? dv.toStringAsFixed(_depositType == 'percent' ? 0 : 2) : '',
+    );
   }
 
   Future<void> _save() async {
@@ -1266,6 +1672,11 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
     });
 
     try {
+      double parsedDeposit = 0.0;
+      if (_depositType != 'none') {
+        parsedDeposit = double.tryParse(_depositValue.text.trim()) ?? 0.0;
+      }
+      _depositValue.addListener(() => setState(() {}));
       await db.collection('hostels').doc(widget.doc.id).update({
         'hostel_name': _name.text.trim(),
         'town': _town.text.trim(),
@@ -1273,6 +1684,8 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
         'phone': _phone.text.trim(),
         'description': _desc.text.trim(),
         'duration_type': _durationType,
+        'deposit_type': _depositType,
+        'deposit_value': parsedDeposit,
         'price_range': _priceRange.text.trim(),
         'rooms_available': int.tryParse(_roomsAvail.text.trim()) ?? 0,
         'payment_momo': _momo.text.trim(),
@@ -1434,6 +1847,55 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
                           label: 'Rooms available',
                           controller: _roomsAvail,
                         ),
+                        const SizedBox(height: 20),
+                        _SectionLabel(
+                            icon: Icons.price_check_rounded,
+                            label: 'Deposit policy'),
+                        Row(children: [
+                          _DepositChip(
+                            label: 'None',
+                            icon: Icons.block_rounded,
+                            selected: _depositType == 'none',
+                            onTap: () => setState(() {
+                              _depositType = 'none';
+                              _depositValue.clear();
+                            }),
+                          ),
+                          const SizedBox(width: 8),
+                          _DepositChip(
+                            label: 'Percentage',
+                            icon: Icons.percent_rounded,
+                            selected: _depositType == 'percent',
+                            onTap: () =>
+                                setState(() => _depositType = 'percent'),
+                          ),
+                          const SizedBox(width: 8),
+                          _DepositChip(
+                            label: 'Fixed (GHS)',
+                            icon: Icons.attach_money_rounded,
+                            selected: _depositType == 'fixed',
+                            onTap: () => setState(() => _depositType = 'fixed'),
+                          ),
+                        ]),
+                        if (_depositType != 'none') ...[
+                          const SizedBox(height: 12),
+                          _FormField(
+                            label: _depositType == 'percent'
+                                ? 'Deposit % *'
+                                : 'Deposit Amount (GHS) *',
+                            controller: _depositValue,
+                            icon: _depositType == 'percent'
+                                ? Icons.percent_rounded
+                                : Icons.attach_money_rounded,
+                            keyboard: const TextInputType.numberWithOptions(
+                                decimal: true),
+                          ),
+                          const SizedBox(height: 6),
+                          _DepositPreviewNote(
+                            type: _depositType,
+                            rawValue: _depositValue.text,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1529,6 +1991,7 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
   @override
   void dispose() {
     _tabs.dispose();
+    _depositValue.dispose();
     for (final c in [
       _name,
       _code,
@@ -3055,6 +3518,101 @@ void _showSuccessToast(BuildContext context, String message) {
         _SuccessToast(message: message, onDone: () => entry.remove()),
   );
   overlay.insert(entry);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPOSIT CHIP  (admin)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DepositChip extends StatelessWidget {
+  const _DepositChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+            decoration: BoxDecoration(
+              color: selected ? kGreen : kSurfaceAlt,
+              borderRadius: BorderRadius.circular(8),
+              border:
+                  Border.all(color: selected ? kGreen : kBorder, width: 1.5),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon,
+                    size: 16, color: selected ? Colors.white : kTextLight),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : kTextLight,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEPOSIT PREVIEW NOTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DepositPreviewNote extends StatelessWidget {
+  const _DepositPreviewNote({required this.type, required this.rawValue});
+  final String type;
+  final String rawValue;
+
+  @override
+  Widget build(BuildContext context) {
+    final val = double.tryParse(rawValue.trim()) ?? 0.0;
+    if (val <= 0) return const SizedBox.shrink();
+
+    final String preview;
+    if (type == 'percent') {
+      final dep = 1000.0 * val / 100;
+      preview =
+          'e.g. ${val.toStringAsFixed(0)}% of GHS 1000 room = GHS ${dep.toStringAsFixed(2)} deposit';
+    } else {
+      preview = 'Student pays GHS ${val.toStringAsFixed(2)} deposit per slot';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: kGreen.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kGreen.withOpacity(0.20)),
+      ),
+      child: Row(children: [
+        Icon(Icons.calculate_outlined, size: 13, color: kGreen),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            preview,
+            style: TextStyle(
+                fontSize: 11, color: kGreen, fontWeight: FontWeight.w500),
+          ),
+        ),
+      ]),
+    );
+  }
 }
 
 class _SuccessToast extends StatefulWidget {

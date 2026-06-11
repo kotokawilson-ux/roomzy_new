@@ -15,13 +15,15 @@ import '../../screens/bookings/booking_confirm_screen.dart';
 import '../../screens/profile/profile_screen.dart';
 import '../../screens/about/about_screen.dart';
 import '../../screens/contact/contact_screen.dart';
-import '../../screens/landlord/landlord_dashboard_screen.dart';
+import '../../screens/landlord/landlord_portal.dart';
 import '../../screens/admin/admin_dashboard_screen.dart';
 import '../../screens/chat/chat_screen.dart'; // ← NEW
 import 'auth_gate.dart';
 import 'app_shell.dart';
 // Add this import at the top
 import '../../screens/admin/chat/admin_live_chat_screen.dart';
+import '../../screens/landlord/dashboard/landlord_dashboard.dart';
+import '../../services/landlord_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  BACK HANDLER  –  unchanged
@@ -146,7 +148,7 @@ class AppRouter {
         // ── Role-specific dashboards (NO shell, NO bottom nav) ────────────
         GoRoute(
           path: '/landlord',
-          builder: (context, state) => _wrap(const LandlordDashboardScreen()),
+          builder: (context, state) => _wrap(const LandlordPortal()),
         ),
         GoRoute(
           path: '/admin',

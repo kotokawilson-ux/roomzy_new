@@ -12,7 +12,7 @@ import 'package:shimmer/shimmer.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/booking_storage_service.dart';
 import '../../models/models.dart';
 import '../../widgets/navbar.dart';
@@ -153,7 +153,7 @@ class RoomModel {
         capacity: capacity,
         price: price,
         booked: booked,
-        available: (capacity - booked) > 0,
+        available: available && (capacity - booked) > 0,
         image: image,
         images: images,
       );
@@ -232,6 +232,7 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
     _roomsSub = FirebaseFirestore.instance
         .collection('rooms')
         .where('hostel_id', isEqualTo: widget.hostelId)
+        .where('available', isEqualTo: true) // ← add this line
         .snapshots()
         .listen(
       (snap) {
@@ -662,6 +663,25 @@ class _DetailsBox extends StatelessWidget {
                 color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
           ),
         ),
+      const SizedBox(height: 10),
+      if (hostel.depositType != 'none') ...[
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7ED),
+            borderRadius: BorderRadius.circular(50),
+            border: Border.all(color: const Color(0xFFFED7AA)),
+          ),
+          child: Text(
+            hostel.depositType == 'percent'
+                ? 'Deposit: ${hostel.depositValue.toStringAsFixed(0)}% of room price'
+                : 'Deposit: GHS ${hostel.depositValue.toStringAsFixed(2)} (fixed)',
+            style: const TextStyle(
+                color: _kOrange, fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+        ),
+        const SizedBox(height: 6),
+      ],
       const SizedBox(height: 16),
       if (hostel.description?.isNotEmpty == true) ...[
         Text(
@@ -888,7 +908,7 @@ class _RoomCardState extends State<_RoomCard>
   @override
   Widget build(BuildContext context) {
     final rem = widget.room.remaining;
-    final isAvail = rem > 0;
+    final isAvail = widget.room.available && rem > 0;
     final isAlmostFull = rem == 1 && isAvail;
 
     return MouseRegion(
@@ -1097,7 +1117,7 @@ class _RoomCardState extends State<_RoomCard>
     showDialog(
       context: ctx,
       barrierColor: Colors.black87,
-      builder: (_) => Dialog(
+      builder: (dialogCtx) => Dialog(
         backgroundColor: Colors.transparent,
         child: Container(
           constraints: const BoxConstraints(maxWidth: 500),
@@ -1120,7 +1140,7 @@ class _RoomCardState extends State<_RoomCard>
                       color: Colors.white),
                 )),
                 IconButton(
-                  onPressed: () => Navigator.pop(ctx),
+                  onPressed: () => Navigator.pop(dialogCtx),
                   icon: const Icon(Icons.close, color: Colors.white60),
                 ),
               ]),
@@ -1140,13 +1160,14 @@ class _RoomCardState extends State<_RoomCard>
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.6),
-      builder: (_) => _BookingSheet(
+      builder: (sheetCtx) => _BookingSheet(
+        // ← sheetCtx, not _
         room: room,
         hostel: widget.hostel,
         onSuccess: (bookingId, slots) {
-          Navigator.pop(ctx);
+          Navigator.pop(sheetCtx); // ← close sheet with sheetCtx
           widget.onBooked(room.id, slots);
-          ctx.push('/book/$bookingId');
+          ctx.push('/bookings/$bookingId'); // ← navigate with original ctx
         },
       ),
     );
@@ -1691,10 +1712,49 @@ class _BookingSheetState extends State<_BookingSheet>
       _kTestMomoNumbers.contains(_momo.text.trim().replaceAll(' ', ''));
 
   double get _totalAmount => widget.room.price * _slots;
+  double get _depositAmount =>
+      widget.hostel.depositAmountFor(widget.room.price) * _slots;
+  double get _minPayable => _depositAmount > 0 ? _depositAmount : _totalAmount;
+
+  // payment amount state
+  int _payMode = 0; // 0=deposit, 1=custom, 2=full
+  double _customAmount = 0;
+  final _customAmountCtrl = TextEditingController();
+  String _paymentMethod = 'momo'; // 'momo' | 'manual'
+
+  double get _amountToPay {
+    if (_depositAmount == 0)
+      return _totalAmount; // no deposit configured → always full
+    switch (_payMode) {
+      case 0:
+        return _depositAmount;
+      case 1:
+        return _customAmount.clamp(_minPayable, _totalAmount);
+      case 2:
+        return _totalAmount;
+      default:
+        return _totalAmount;
+    }
+  }
+
+  double get _balance => _totalAmount - _amountToPay;
+
+  String get _paymentStatusLabel {
+    if (_amountToPay >= _totalAmount) return 'fully_paid';
+    if (_amountToPay >= _depositAmount) return 'deposit_paid';
+    return 'pending';
+  }
 
   @override
   void initState() {
     super.initState();
+
+    // Auto-fill email from logged-in user
+    final user = FirebaseAuth.instance.currentUser;
+    if (user?.email != null) {
+      _email.text = user!.email!;
+    }
+
     _stepAnim = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 320));
     _fadeAnim = CurvedAnimation(parent: _stepAnim, curve: Curves.easeOut);
@@ -1706,8 +1766,16 @@ class _BookingSheetState extends State<_BookingSheet>
   @override
   void dispose() {
     _stepAnim.dispose();
-    for (final c in [_name, _email, _phone, _momo, _school, _schoolId, _notes])
-      c.dispose();
+    for (final c in [
+      _name,
+      _email,
+      _phone,
+      _momo,
+      _school,
+      _schoolId,
+      _notes,
+      _customAmountCtrl
+    ]) c.dispose();
     super.dispose();
   }
 
@@ -1747,6 +1815,9 @@ class _BookingSheetState extends State<_BookingSheet>
         'momo_type': _momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash',
         'slots_booked': _slots,
         'amount': _totalAmount,
+        'deposit_amount': _depositAmount,
+        'amount_paid': 0.0,
+        'balance': _totalAmount,
         'status': 'pending',
         'payment_status': 'pending',
         'booked_at': FieldValue.serverTimestamp(),
@@ -1782,7 +1853,7 @@ class _BookingSheetState extends State<_BookingSheet>
         },
         body: jsonEncode({
           'email': _email.text.trim(),
-          'amount': (_totalAmount * 100).toInt(),
+          'amount': (_amountToPay * 100).toInt(),
           'currency': 'GHS',
           'mobile_money': {'phone': _momo.text.trim(), 'provider': provider},
           'reference': _payRef,
@@ -1859,14 +1930,33 @@ class _BookingSheetState extends State<_BookingSheet>
         txn.update(
           FirebaseFirestore.instance.collection('bookings').doc(_bookingId),
           {
-            'payment_status': 'paid',
-            'status': 'confirmed',
+            'payment_status': _paymentStatusLabel,
+            'status': _amountToPay >= _totalAmount ? 'confirmed' : 'pending',
             'payment_reference': reference,
+            'amount_paid': _amountToPay,
+            'balance': (_totalAmount - _amountToPay).clamp(0, _totalAmount),
             'paid_at': FieldValue.serverTimestamp(),
           },
         );
       });
-
+// Record this transaction in the payments subcollection
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(_bookingId)
+          .collection('payments')
+          .add({
+        'amount': _amountToPay,
+        'method': 'momo',
+        'provider': _momoProvider,
+        'reference': reference,
+        'status': 'paid',
+        'note': _payMode == 0
+            ? 'Deposit payment'
+            : _payMode == 1
+                ? 'Partial payment'
+                : 'Full payment',
+        'paid_at': FieldValue.serverTimestamp(),
+      });
       await _logActivity(
         action: 'Booking Confirmed',
         details:
@@ -1891,6 +1981,60 @@ class _BookingSheetState extends State<_BookingSheet>
     if (!mounted) return;
     HapticFeedback.heavyImpact();
     widget.onSuccess(_bookingId!, _slots);
+  }
+
+  Future<void> _confirmManualPayment() async {
+    setState(() => _busy = true);
+    try {
+      final ref = _generateReference();
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(_bookingId)
+          .update({
+        'payment_status': _paymentStatusLabel,
+        'status': _amountToPay >= _totalAmount ? 'confirmed' : 'pending',
+        'payment_method': 'Manual',
+        'amount_paid': _amountToPay,
+        'balance': (_totalAmount - _amountToPay).clamp(0, _totalAmount),
+        'payment_reference': ref,
+        'paid_at': FieldValue.serverTimestamp(),
+      });
+
+      // Record in payments subcollection
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(_bookingId!)
+          .collection('payments')
+          .add({
+        'amount': _amountToPay,
+        'method': 'manual',
+        'reference': ref,
+        'status': 'pending_verification',
+        'note': _payMode == 0
+            ? 'Deposit payment (manual)'
+            : _payMode == 1
+                ? 'Partial payment (manual)'
+                : 'Full payment (manual)',
+        'paid_at': FieldValue.serverTimestamp(),
+      });
+
+      await _logActivity(
+        action: 'Manual Booking Payment',
+        details:
+            'User ${_email.text.trim()} submitted manual payment of GHS ${_amountToPay.toStringAsFixed(2)} '
+            'for Room ${widget.room.roomNumber} at ${widget.hostel.hostelName}.',
+        userEmail: _email.text.trim(),
+      );
+
+      await BookingStorageService.saveBookingId(_bookingId!);
+      if (!mounted) return;
+      HapticFeedback.heavyImpact();
+      widget.onSuccess(_bookingId!, _slots);
+    } catch (e) {
+      _showSnack('Error recording payment: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _showSnack(String msg, {required bool isError}) {
@@ -2045,6 +2189,7 @@ class _BookingSheetState extends State<_BookingSheet>
             ctrl: _email,
             icon: Icons.alternate_email_rounded,
             kb: TextInputType.emailAddress,
+            readOnly: FirebaseAuth.instance.currentUser?.email != null,
             validator: (v) => v!.trim().isEmpty ? 'Email is required' : null),
         _ModernField(
             label: 'Phone Number',
@@ -2160,8 +2305,12 @@ class _BookingSheetState extends State<_BookingSheet>
         const SizedBox(height: 20),
         // ── Total summary ───────────────────────────────────────────────────
         _TotalCard(
-            slots: _slots, price: widget.room.price, total: _totalAmount),
-        const SizedBox(height: 28),
+          slots: _slots,
+          price: widget.room.price,
+          total: _totalAmount,
+          deposit: widget.hostel.depositAmountFor(widget.room.price) * _slots,
+        ),
+        const SizedBox(height: 20),
 
         // ── CTA ─────────────────────────────────────────────────────────────
         _GradientCTA(
@@ -2175,61 +2324,100 @@ class _BookingSheetState extends State<_BookingSheet>
   }
 
   // ─── Step 1 — Payment ─────────────────────────────────────────────────────
+  // ─── Step 1 — Payment ─────────────────────────────────────────────────────
   Widget _buildPaymentStep() {
     final h = widget.hostel;
     final hasMomo = h.paymentMomo.isNotEmpty;
+    final hasDeposit = _depositAmount > 0;
     final isTest = _isTestNumber;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      // Order summary
+      // ── Order summary ────────────────────────────────────────────────────
       _OrderBanner(room: widget.room, slots: _slots, total: _totalAmount),
       const SizedBox(height: 22),
 
-      // ── Landlord payment numbers ─────────────────────────────────────────
-      _FormGroupLabel(
-          'Landlord\'s Payment Details', Icons.account_balance_wallet_outlined),
-      const SizedBox(height: 12),
-      if (h.paymentMomo.isNotEmpty)
-        _PaymentDetailCard(
-            icon: '📱',
-            provider: 'MTN / Vodafone MoMo',
-            value: h.paymentMomo,
-            color: const Color(0xFFFFCC00)),
-      if (h.paymentCash.isNotEmpty)
-        _PaymentDetailCard(
-            icon: '💵',
-            provider: 'Cash Payment',
-            value: h.paymentCash,
-            color: _kGreen),
-      if (h.paymentBank.isNotEmpty)
-        _PaymentDetailCard(
-            icon: '🏦',
-            provider: 'Bank Transfer',
-            value: h.paymentBank,
-            color: const Color(0xFF2563EB)),
-      if (h.paymentOther.isNotEmpty)
-        _PaymentDetailCard(
-            icon: '💳',
-            provider: 'Other Method',
-            value: h.paymentOther,
-            color: const Color(0xFF7C3AED)),
-      if (!hasMomo &&
-          h.paymentCash.isEmpty &&
-          h.paymentBank.isEmpty &&
-          h.paymentOther.isEmpty)
-        _InfoBanner(
-          icon: Icons.info_outline_rounded,
-          text: 'Contact the hostel directly for payment details.',
-          color: _kOrange,
+      // ── How much do you want to pay? ─────────────────────────────────────
+      if (hasDeposit) ...[
+        _FormGroupLabel(
+            'How much would you like to pay?', Icons.payments_outlined),
+        const SizedBox(height: 14),
+        _PayModeSelector(
+          depositAmount: _depositAmount,
+          totalAmount: _totalAmount,
+          selected: _payMode,
+          onChanged: (v) {
+            setState(() {
+              _payMode = v;
+              if (v != 1) _customAmountCtrl.clear();
+            });
+            HapticFeedback.selectionClick();
+          },
         ),
-
-      if (hasMomo) ...[
+        if (_payMode == 1) ...[
+          const SizedBox(height: 14),
+          _ModernField(
+            label: 'Enter Amount (GHS)',
+            ctrl: _customAmountCtrl,
+            icon: Icons.edit_rounded,
+            kb: const TextInputType.numberWithOptions(decimal: true),
+            hint:
+                'Min: GHS ${_depositAmount.toStringAsFixed(2)}  ·  Max: GHS ${_totalAmount.toStringAsFixed(2)}',
+            onChanged: (v) {
+              setState(() => _customAmount = double.tryParse(v) ?? 0);
+            },
+            validator: (v) {
+              final val = double.tryParse(v ?? '') ?? 0;
+              if (val < _minPayable)
+                return 'Minimum is GHS ${_minPayable.toStringAsFixed(2)}';
+              if (val > _totalAmount)
+                return 'Cannot exceed GHS ${_totalAmount.toStringAsFixed(2)}';
+              return null;
+            },
+          ),
+        ],
+        const SizedBox(height: 6),
+        // Payment summary pill
+        _PaymentSummaryStrip(
+          amountToPay: _amountToPay,
+          balance: _balance,
+          total: _totalAmount,
+        ),
         const SizedBox(height: 22),
-        // ── Your MoMo details ───────────────────────────────────────────────
-        _FormGroupLabel('Your Mobile Money Details', Icons.payment_rounded),
-        const SizedBox(height: 12),
+      ],
 
-        // Provider selector
+      // ── Payment method ───────────────────────────────────────────────────
+      _FormGroupLabel('Payment Method', Icons.account_balance_wallet_outlined),
+      const SizedBox(height: 14),
+      Row(children: [
+        if (hasMomo)
+          Expanded(
+            child: _MethodTile(
+              icon: Icons.phone_android_rounded,
+              label: 'Mobile Money',
+              sublabel: 'Pay instantly',
+              isSelected: _paymentMethod == 'momo',
+              onTap: () => setState(() => _paymentMethod = 'momo'),
+              color: _kPrimary,
+            ),
+          ),
+        if (hasMomo) const SizedBox(width: 12),
+        Expanded(
+          child: _MethodTile(
+            icon: Icons.handshake_outlined,
+            label: 'Manual',
+            sublabel: 'Cash / Bank',
+            isSelected: _paymentMethod == 'manual',
+            onTap: () => setState(() => _paymentMethod = 'manual'),
+            color: _kOrange,
+          ),
+        ),
+      ]),
+      const SizedBox(height: 20),
+
+      // ── MoMo details (only when momo selected) ───────────────────────────
+      if (_paymentMethod == 'momo' && hasMomo) ...[
+        _FormGroupLabel('Your Mobile Money Number', Icons.payment_rounded),
+        const SizedBox(height: 12),
         Row(children: [
           Expanded(
               child: _ProviderTile(
@@ -2258,63 +2446,91 @@ class _BookingSheetState extends State<_BookingSheet>
           validator: (v) =>
               v!.trim().length < 10 ? 'Enter a valid MoMo number' : null,
         ),
-        if (isTest) ...[
+        if (isTest)
           _InfoBanner(
             icon: Icons.science_rounded,
             text:
-                'Test Mode: No real money will be deducted. Your booking will be confirmed instantly.',
+                'Test Mode: No real money deducted. Booking confirmed instantly.',
             color: _kGreen,
-          ),
-          const SizedBox(height: 8),
-        ] else ...[
+          )
+        else
           _InfoBanner(
             icon: Icons.smartphone_rounded,
             text:
-                'You will receive a MoMo prompt on your phone. Approve the payment to confirm your booking.',
+                'You\'ll receive a MoMo prompt on your phone. Approve to confirm.',
             color: _kPrimary,
           ),
-          const SizedBox(height: 8),
-        ],
+        const SizedBox(height: 8),
+      ],
+
+      // ── Manual payment details ────────────────────────────────────────────
+      if (_paymentMethod == 'manual') ...[
+        if (h.paymentMomo.isNotEmpty)
+          _PaymentDetailCard(
+              icon: '📱',
+              provider: 'MTN / Vodafone MoMo',
+              value: h.paymentMomo,
+              color: const Color(0xFFFFCC00)),
+        if (h.paymentCash.isNotEmpty)
+          _PaymentDetailCard(
+              icon: '💵',
+              provider: 'Cash Payment',
+              value: h.paymentCash,
+              color: _kGreen),
+        if (h.paymentBank.isNotEmpty)
+          _PaymentDetailCard(
+              icon: '🏦',
+              provider: 'Bank Transfer',
+              value: h.paymentBank,
+              color: const Color(0xFF2563EB)),
+        if (h.paymentOther.isNotEmpty)
+          _PaymentDetailCard(
+              icon: '💳',
+              provider: 'Other Method',
+              value: h.paymentOther,
+              color: const Color(0xFF7C3AED)),
+        _InfoBanner(
+          icon: Icons.info_outline_rounded,
+          text:
+              'Pay the landlord directly using the details above, then tap "Confirm" below to record your booking.',
+          color: _kOrange,
+        ),
+        const SizedBox(height: 8),
       ],
 
       const SizedBox(height: 28),
 
-      // ── CTA ─────────────────────────────────────────────────────────────
-      if (hasMomo)
-        _GradientCTA(
-          label: isTest
-              ? 'Simulate Payment'
-              : 'Pay GHS ${_totalAmount.toStringAsFixed(2)}',
-          icon: isTest ? Icons.science_rounded : Icons.lock_rounded,
-          busy: _busy,
-          onTap: _initiatePayment,
-        )
-      else
-        _GradientCTA(
-          label: 'Confirm Booking',
-          icon: Icons.check_circle_rounded,
-          busy: _busy,
-          onTap: () async {
-            setState(() => _busy = true);
-            await FirebaseFirestore.instance
-                .collection('bookings')
-                .doc(_bookingId)
-                .update({'status': 'pending', 'payment_status': 'pending'});
-            await _logActivity(
-              action: 'Booking Created (Offline)',
-              details:
-                  'User ${_email.text.trim()} booked $_slots slot(s) in Room ${widget.room.roomNumber} '
-                  'at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. Offline payment.',
-              userEmail: _email.text.trim(),
-            );
-            await BookingStorageService.saveBookingId(_bookingId!);
-            if (!mounted) return;
-            widget.onSuccess(_bookingId!, _slots);
-          },
-        ),
+      // ── CTA ──────────────────────────────────────────────────────────────
+      _GradientCTA(
+        label: _paymentMethod == 'manual'
+            ? 'Confirm Manual Payment'
+            : isTest
+                ? 'Simulate Payment'
+                : 'Pay GHS ${_amountToPay.toStringAsFixed(2)}',
+        icon: _paymentMethod == 'manual'
+            ? Icons.check_circle_rounded
+            : isTest
+                ? Icons.science_rounded
+                : Icons.lock_rounded,
+        busy: _busy,
+        color: _paymentMethod == 'manual' ? _kOrange : _kPrimary,
+        onTap: () {
+          if (_payMode == 1) {
+            final val = double.tryParse(_customAmountCtrl.text) ?? 0;
+            if (val < _minPayable) {
+              _showSnack(
+                  'Amount must be at least GHS ${_minPayable.toStringAsFixed(2)}',
+                  isError: true);
+              return;
+            }
+          }
+          _paymentMethod == 'manual'
+              ? _confirmManualPayment()
+              : _initiatePayment();
+        },
+      ),
 
       const SizedBox(height: 12),
-      // Back link
       Center(
         child: TextButton.icon(
           onPressed: () => _goToStep(0),
@@ -2323,8 +2539,8 @@ class _BookingSheetState extends State<_BookingSheet>
           label: const Text('Back to details',
               style: TextStyle(color: _kTextMuted, fontSize: 13)),
           style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          ),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
         ),
       ),
     ]);
@@ -2783,8 +2999,12 @@ class _TotalCard extends StatelessWidget {
   final int slots;
   final double price;
   final double total;
+  final double deposit;
   const _TotalCard(
-      {required this.slots, required this.price, required this.total});
+      {required this.slots,
+      required this.price,
+      required this.total,
+      required this.deposit});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -2812,7 +3032,14 @@ class _TotalCard extends StatelessWidget {
                   'GHS ${price.toStringAsFixed(2)} × $slots slot${slots > 1 ? 's' : ''}',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
-                const SizedBox(height: 2),
+                if (deposit > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Deposit required: GHS ${deposit.toStringAsFixed(2)}',
+                    style: const TextStyle(color: Colors.white60, fontSize: 11),
+                  ),
+                ],
+                const SizedBox(height: 4),
                 Text(
                   'GHS ${total.toStringAsFixed(2)}',
                   style: const TextStyle(
@@ -2981,12 +3208,13 @@ class _GradientCTA extends StatelessWidget {
   final IconData icon;
   final bool busy;
   final VoidCallback? onTap;
+  final Color color;
   const _GradientCTA(
       {required this.label,
       required this.icon,
       required this.busy,
-      this.onTap});
-
+      this.onTap,
+      this.color = _kPrimary});
   @override
   Widget build(BuildContext context) => GestureDetector(
         onTap: (busy || onTap == null) ? null : onTap,
@@ -2997,8 +3225,8 @@ class _GradientCTA extends StatelessWidget {
           decoration: BoxDecoration(
             gradient: (busy || onTap == null)
                 ? LinearGradient(colors: [Colors.grey[350]!, Colors.grey[300]!])
-                : const LinearGradient(
-                    colors: [_kPrimary, Color(0xFF0D9488), _kAccent],
+                : LinearGradient(
+                    colors: [color, color.withOpacity(0.85), _kAccent],
                     begin: Alignment.centerLeft,
                     end: Alignment.centerRight,
                   ),
@@ -3007,7 +3235,7 @@ class _GradientCTA extends StatelessWidget {
                 ? []
                 : [
                     BoxShadow(
-                        color: _kPrimary.withOpacity(0.38),
+                        color: color.withOpacity(0.38),
                         blurRadius: 18,
                         offset: const Offset(0, 6))
                   ],
@@ -3067,6 +3295,7 @@ class _ModernField extends StatelessWidget {
   final String? hint;
   final String? Function(String?)? validator;
   final void Function(String)? onChanged;
+  final bool readOnly;
   const _ModernField({
     required this.label,
     required this.ctrl,
@@ -3076,6 +3305,7 @@ class _ModernField extends StatelessWidget {
     this.hint,
     this.validator,
     this.onChanged,
+    this.readOnly = false,
   });
 
   @override
@@ -3090,6 +3320,7 @@ class _ModernField extends StatelessWidget {
             controller: ctrl,
             keyboardType: kb,
             maxLines: lines,
+            readOnly: readOnly,
             validator: validator,
             onChanged: onChanged,
             style: const TextStyle(fontSize: 14, color: _kDark),
@@ -3101,7 +3332,7 @@ class _ModernField extends StatelessWidget {
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               filled: true,
-              fillColor: _kSurface,
+              fillColor: readOnly ? const Color(0xFFEEF2F6) : _kSurface,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: const BorderSide(color: _kBorder),
@@ -3125,6 +3356,289 @@ class _ModernField extends StatelessWidget {
             ),
           ),
         ]),
+      );
+}
+
+// ─── Pay Mode Selector ────────────────────────────────────────────────────────
+class _PayModeSelector extends StatelessWidget {
+  final double depositAmount;
+  final double totalAmount;
+  final int selected;
+  final void Function(int) onChanged;
+  const _PayModeSelector({
+    required this.depositAmount,
+    required this.totalAmount,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final options = [
+      _PayModeOption(
+        icon: Icons.lock_open_rounded,
+        title: 'Pay Deposit',
+        subtitle: 'GHS ${depositAmount.toStringAsFixed(2)}',
+        tag: 'Minimum',
+        tagColor: _kOrange,
+        index: 0,
+      ),
+      _PayModeOption(
+        icon: Icons.tune_rounded,
+        title: 'Custom Amount',
+        subtitle: '≥ GHS ${depositAmount.toStringAsFixed(2)}',
+        tag: 'Flexible',
+        tagColor: _kPrimary,
+        index: 1,
+      ),
+      _PayModeOption(
+        icon: Icons.check_circle_rounded,
+        title: 'Pay in Full',
+        subtitle: 'GHS ${totalAmount.toStringAsFixed(2)}',
+        tag: 'Clears Balance',
+        tagColor: _kGreen,
+        index: 2,
+      ),
+    ];
+    return Column(
+      children: options
+          .map((o) => _PayModeOptionTile(
+                option: o,
+                isSelected: selected == o.index,
+                onTap: () => onChanged(o.index),
+              ))
+          .toList(),
+    );
+  }
+}
+
+class _PayModeOption {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String tag;
+  final Color tagColor;
+  final int index;
+  const _PayModeOption({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.tag,
+    required this.tagColor,
+    required this.index,
+  });
+}
+
+class _PayModeOptionTile extends StatelessWidget {
+  final _PayModeOption option;
+  final bool isSelected;
+  final VoidCallback onTap;
+  const _PayModeOptionTile(
+      {required this.option, required this.isSelected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: isSelected ? option.tagColor.withOpacity(0.06) : _kSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected ? option.tagColor.withOpacity(0.5) : _kBorder,
+              width: isSelected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? option.tagColor.withOpacity(0.12)
+                    : Colors.grey.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(option.icon,
+                  size: 18, color: isSelected ? option.tagColor : _kTextDim),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(option.title,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: isSelected ? option.tagColor : _kDark)),
+                  const SizedBox(height: 2),
+                  Text(option.subtitle,
+                      style: const TextStyle(fontSize: 12, color: _kTextMuted)),
+                ])),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: option.tagColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(50),
+              ),
+              child: Text(option.tag,
+                  style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: option.tagColor)),
+            ),
+            const SizedBox(width: 10),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isSelected ? option.tagColor : Colors.transparent,
+                border: Border.all(
+                    color: isSelected ? option.tagColor : Colors.grey[350]!,
+                    width: 2),
+              ),
+              child: isSelected
+                  ? const Icon(Icons.check_rounded,
+                      size: 12, color: Colors.white)
+                  : null,
+            ),
+          ]),
+        ),
+      );
+}
+
+// ─── Payment Summary Strip ────────────────────────────────────────────────────
+class _PaymentSummaryStrip extends StatelessWidget {
+  final double amountToPay;
+  final double balance;
+  final double total;
+  const _PaymentSummaryStrip({
+    required this.amountToPay,
+    required this.balance,
+    required this.total,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = (amountToPay / total).clamp(0.0, 1.0);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _kDark,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Paying now',
+                style: TextStyle(color: Colors.white54, fontSize: 11)),
+            Text('GHS ${amountToPay.toStringAsFixed(2)}',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900)),
+          ]),
+          if (balance > 0)
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              const Text('Remaining balance',
+                  style: TextStyle(color: Colors.white38, fontSize: 11)),
+              Text('GHS ${balance.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700)),
+            ])
+          else
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: _kGreen.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(50),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.check_circle_rounded, size: 13, color: _kGreen),
+                SizedBox(width: 5),
+                Text('Fully Paid',
+                    style: TextStyle(
+                        color: _kGreen,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+              ]),
+            ),
+        ]),
+        const SizedBox(height: 12),
+        // Progress bar
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: progress,
+            minHeight: 6,
+            backgroundColor: Colors.white12,
+            valueColor: AlwaysStoppedAnimation<Color>(
+                balance == 0 ? _kGreen : _kAccent),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('${(progress * 100).toStringAsFixed(0)}% of total',
+              style: const TextStyle(color: Colors.white38, fontSize: 10)),
+          Text('Total: GHS ${total.toStringAsFixed(2)}',
+              style: const TextStyle(color: Colors.white38, fontSize: 10)),
+        ]),
+      ]),
+    );
+  }
+}
+
+// ─── Method Tile ──────────────────────────────────────────────────────────────
+class _MethodTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String sublabel;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final Color color;
+  const _MethodTile({
+    required this.icon,
+    required this.label,
+    required this.sublabel,
+    required this.isSelected,
+    required this.onTap,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+          decoration: BoxDecoration(
+            color: isSelected ? color.withOpacity(0.07) : _kSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected ? color.withOpacity(0.5) : _kBorder,
+              width: isSelected ? 1.5 : 1,
+            ),
+          ),
+          child: Column(children: [
+            Icon(icon, size: 26, color: isSelected ? color : _kTextDim),
+            const SizedBox(height: 8),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: isSelected ? color : _kDark)),
+            const SizedBox(height: 2),
+            Text(sublabel,
+                style: const TextStyle(fontSize: 11, color: _kTextMuted)),
+          ]),
+        ),
       );
 }
 

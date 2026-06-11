@@ -46,7 +46,7 @@ class AboutSection extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: Image.network(
-        'https://i.ibb.co/C3nLbnrn/student.jpg',
+        'https://i.ibb.co/fYBrypcy/Screenshot-20260514-084851.jpg',
         fit: BoxFit.cover,
         height: 350,
         width: double.infinity,
