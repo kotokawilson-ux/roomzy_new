@@ -163,7 +163,9 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     final bookingRef = (b['id'] as String).toUpperCase().substring(0, 8);
     final status = b['status'] ?? 'pending';
     final paymentStatus = b['payment_status'] ?? 'pending';
-    final isPaid = paymentStatus == 'paid';
+    final isPaid = paymentStatus == 'paid' ||
+        paymentStatus == 'fully_paid' ||
+        paymentStatus == 'deposit_paid';
     final isConfirmed = status == 'confirmed';
     final name = b['name'] ?? '—';
     final email = b['email'] ?? '—';
@@ -203,7 +205,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                       ? [_kGreen, const Color(0xFF15803D)]
                       : isConfirmed && isDepositPaid
                           ? [_kPrimary, const Color(0xFF0D9488)]
-                          : status == 'cancelled'
+                          : status == 'cancelled' || status == 'declined'
                               ? [_kRed, const Color(0xFFB91C1C)]
                               : isDepositPaid
                                   ? [_kOrange, const Color(0xFFD97706)]
@@ -233,7 +235,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                         ? Icons.check_circle_rounded
                         : isConfirmed && isDepositPaid
                             ? Icons.verified_rounded
-                            : status == 'cancelled'
+                            : status == 'cancelled' || status == 'declined'
                                 ? Icons.cancel_rounded
                                 : isDepositPaid
                                     ? Icons.lock_open_rounded
@@ -248,7 +250,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                       ? 'Booking Confirmed & Paid!'
                       : isConfirmed && isDepositPaid
                           ? 'Confirmed — Deposit Paid'
-                          : status == 'cancelled'
+                          : status == 'cancelled' || status == 'declined'
                               ? 'Booking Cancelled'
                               : isDepositPaid
                                   ? 'Deposit Paid — Awaiting Confirmation'
@@ -265,7 +267,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                       ? 'Your room is fully secured. See you soon!'
                       : isConfirmed && isDepositPaid
                           ? 'Balance of GHS ${balance.toStringAsFixed(2)} due on arrival.'
-                          : status == 'cancelled'
+                          : status == 'cancelled' || status == 'declined'
                               ? 'This booking has been cancelled'
                               : isDepositPaid
                                   ? 'Deposit received. Awaiting landlord confirmation.'
@@ -335,8 +337,18 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
             Expanded(
                 child: _PayStatusBox(
               label: 'Payment Status',
-              value: isPaid ? '✓ PAID' : 'PENDING',
-              color: isPaid ? _kGreen : _kOrange,
+              value: paymentStatus == 'fully_paid'
+                  ? '✓ FULLY PAID'
+                  : paymentStatus == 'deposit_paid'
+                      ? '⬤ DEPOSIT PAID'
+                      : paymentStatus == 'paid'
+                          ? '✓ PAID'
+                          : 'PENDING',
+              color: paymentStatus == 'fully_paid' || paymentStatus == 'paid'
+                  ? _kGreen
+                  : paymentStatus == 'deposit_paid'
+                      ? _kOrange
+                      : _kRed,
             )),
           ]),
           const SizedBox(height: 16),

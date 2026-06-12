@@ -101,8 +101,10 @@ class _BookingsScreenState extends State<BookingsScreen> {
 
         final matchFilter = _filter == _Filter.all ||
             (_filter == _Filter.confirmed && b['status'] == 'confirmed') ||
-            (_filter == _Filter.pending && b['status'] == 'pending') ||
-            (_filter == _Filter.cancelled && b['status'] == 'cancelled');
+            (_filter == _Filter.pending &&
+                (b['status'] == 'pending' || b['status'] == 'booked')) ||
+            (_filter == _Filter.cancelled &&
+                (b['status'] == 'cancelled' || b['status'] == 'declined'));
 
         return matchSearch && matchFilter;
       }).toList();
@@ -237,14 +239,18 @@ class _BookingsScreenState extends State<BookingsScreen> {
                 const SizedBox(width: 10),
                 _StatChip(
                     label: 'Pending',
-                    count:
-                        _bookings.where((b) => b['status'] == 'pending').length,
+                    count: _bookings
+                        .where((b) =>
+                            b['status'] == 'pending' || b['status'] == 'booked')
+                        .length,
                     color: _kOrange),
                 const SizedBox(width: 10),
                 _StatChip(
                     label: 'Cancelled',
                     count: _bookings
-                        .where((b) => b['status'] == 'cancelled')
+                        .where((b) =>
+                            b['status'] == 'cancelled' ||
+                            b['status'] == 'declined')
                         .length,
                     color: _kRed),
               ]),
@@ -391,6 +397,7 @@ class _BookingCard extends StatelessWidget {
     final id = booking['id'] as String;
     final shortRef = id.toUpperCase().substring(0, 8);
     final status = booking['status'] ?? 'pending';
+    final statusDisplay = (status == 'booked') ? 'pending' : status;
     final paymentStatus = booking['payment_status'] ?? 'pending';
     final hostelName = booking['hostel_name'] ?? '—';
     final roomNumber = booking['room_number'] ?? '—';
@@ -400,7 +407,7 @@ class _BookingCard extends StatelessWidget {
     final momoType = booking['momo_type'] ?? 'Mobile Money';
     final hostelId = booking['hostel_id'] ?? '';
     final hostelPhone = booking['hostel_phone'] ?? '';
-    final canCancel = status == 'pending';
+    final canCancel = status == 'pending' || status == 'booked';
     final amountPaid = (booking['amount_paid'] ?? 0.0).toDouble();
     final balance = (booking['balance'] ?? 0.0).toDouble();
     final depositAmount = (booking['deposit_amount'] ?? 0.0).toDouble();
@@ -461,7 +468,8 @@ class _BookingCard extends StatelessWidget {
                   ),
                 ])),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              _StatusBadge(label: status.toUpperCase(), color: statusColor),
+              _StatusBadge(
+                  label: statusDisplay.toUpperCase(), color: statusColor),
               const SizedBox(height: 4),
               _StatusBadge(
                   label: paymentStatus == 'fully_paid'
@@ -590,6 +598,7 @@ class _BookingCard extends StatelessWidget {
       case 'confirmed':
         return _kGreen;
       case 'cancelled':
+      case 'declined':
         return _kRed;
       default:
         return _kOrange;

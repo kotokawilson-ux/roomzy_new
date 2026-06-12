@@ -907,18 +907,21 @@ class _ActionBtn extends StatelessWidget {
         confirmColor: _kRed,
       ),
     );
-    if (confirm != true || !ctx.mounted) return;
+    if (confirm != true) return;
+    if (!ctx.mounted) return;
 
     try {
       final roomId = (data['room_id'] ?? data['roomId'])?.toString();
       final slots = (data['slots_booked'] ?? 1) as int;
       final status = (data['status'] ?? 'booked') as String;
 
-      // Only free the slot if it was actually locked (confirmed)
+      // ✅ Step 1: free the room slot FIRST and wait for it to fully complete
       if (roomId != null && roomId.isNotEmpty && status == 'confirmed') {
         await _decrementRoomSlots(roomId, slots);
       }
 
+      // ✅ Step 2: only delete AFTER the transaction has fully resolved
+      if (!ctx.mounted) return;
       await _db.collection('bookings').doc(docId).delete();
 
       if (ctx.mounted) _showSnack(ctx, 'Booking deleted', _kRed);

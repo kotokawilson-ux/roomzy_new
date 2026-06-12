@@ -938,8 +938,8 @@ class _ActionBtn extends StatelessWidget {
         if (status != 'confirmed')
           _mi('confirmed', Icons.check_circle_rounded, 'Confirm Booking',
               _C.green),
-        if (status != 'cancelled')
-          _mi('cancelled', Icons.cancel_rounded, 'Cancel Booking', _C.red),
+        if (status != 'cancelled' && status != 'declined')
+          _mi('declined', Icons.cancel_rounded, 'Cancel Booking', _C.red),
         if (status != 'booked')
           _mi('booked', Icons.refresh_rounded, 'Reset to Pending', _C.amber),
         const PopupMenuDivider(),
@@ -1011,7 +1011,7 @@ class _DetailSheet extends StatelessWidget {
       final oldStatus = (snap.data()?['status'] ?? 'booked') as String;
 
       await _db.collection('bookings').doc(booking.id).update(
-          {'status': 'cancelled', 'updated_at': FieldValue.serverTimestamp()});
+          {'status': 'declined', 'updated_at': FieldValue.serverTimestamp()});
 
       if (booking.roomId.isNotEmpty && oldStatus == 'confirmed') {
         await _decrementRoomSlots(booking.roomId, booking.slotsBooked);

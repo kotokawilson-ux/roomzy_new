@@ -1931,7 +1931,10 @@ class _BookingSheetState extends State<_BookingSheet>
           FirebaseFirestore.instance.collection('bookings').doc(_bookingId),
           {
             'payment_status': _paymentStatusLabel,
-            'status': _amountToPay >= _totalAmount ? 'confirmed' : 'pending',
+            'status': (_depositAmount > 0 && _amountToPay >= _depositAmount) ||
+                    _amountToPay >= _totalAmount
+                ? 'confirmed'
+                : 'pending',
             'payment_reference': reference,
             'amount_paid': _amountToPay,
             'balance': (_totalAmount - _amountToPay).clamp(0, _totalAmount),
@@ -2583,7 +2586,7 @@ class _BookingSheetState extends State<_BookingSheet>
                   style: TextStyle(fontSize: 12, color: _kTextMuted)),
               const SizedBox(height: 4),
               Text(
-                'GHS ${_totalAmount.toStringAsFixed(2)}',
+                'GHS ${_amountToPay.toStringAsFixed(2)}',
                 style: const TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.w900,
