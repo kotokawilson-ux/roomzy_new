@@ -681,12 +681,27 @@ class _LandlordDialogState extends State<_LandlordDialog>
   bool _creatingAuth = false;
   String? _authSuccess;
   bool get _isEdit => widget.doc != null;
+// Payout fields
+  final _payoutName = TextEditingController();
+  final _payoutNumber = TextEditingController();
+  String _payoutProvider = 'MTN';
+  bool _payoutSaving = false;
+  bool _payoutHasAccount = false;
+  String? _payoutSubaccount;
 
+  static const _kBackendUrl = 'https://roomzy-backend-eight.vercel.app/api';
+  static const _payoutProviders = ['MTN', 'Vodafone', 'AirtelTigo'];
+
+  String get _bankCode => switch (_payoutProvider) {
+        'MTN' => 'MTN',
+        'Vodafone' => 'VOD',
+        _ => 'ATL',
+      };
   @override
   void initState() {
     super.initState();
     // 3 tabs: Personal · Photo · Credentials
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     if (_isEdit) {
       final d = widget.doc!.data();
       _name.text = d['full_name']?.toString() ?? '';
@@ -701,6 +716,19 @@ class _LandlordDialogState extends State<_LandlordDialog>
     _name.addListener(() => setState(() {}));
     // Keep Credentials tab email preview in sync
     _email.addListener(() => setState(() {}));
+    if (_isEdit) {
+      final d = widget.doc!.data();
+      _payoutName.text = d['payout_business_name']?.toString() ?? '';
+      _payoutNumber.text = d['payout_account_number']?.toString() ?? '';
+      _payoutSubaccount = d['paystack_subaccount']?.toString();
+      _payoutHasAccount = _payoutSubaccount?.isNotEmpty == true;
+      final code = d['payout_bank_code']?.toString() ?? 'MTN';
+      _payoutProvider = code == 'VOD'
+          ? 'Vodafone'
+          : code == 'ATL'
+              ? 'AirtelTigo'
+              : 'MTN';
+    }
   }
 
   void _genCode() {
@@ -715,6 +743,71 @@ class _LandlordDialogState extends State<_LandlordDialog>
       _code.text = '';
     }
     setState(() {});
+  }
+
+  Future<void> _savePayout(String landlordId) async {
+    if (_payoutName.text.trim().isEmpty || _payoutNumber.text.trim().isEmpty) {
+      setState(() =>
+          _validationError = 'Business name and MoMo number are required.');
+      return;
+    }
+    setState(() => _payoutSaving = true);
+    try {
+      // ── Read the landlord's commission rate ──────────────────────────────
+      double commissionRate = 5.0; // fallback
+      try {
+        final landlordDoc = await FirebaseFirestore.instance
+            .collection('landlords')
+            .doc(landlordId)
+            .get();
+        final landlordCustomRate =
+            (landlordDoc.data()?['commission_percent'] as num?)?.toDouble();
+
+        if (landlordCustomRate != null) {
+          commissionRate = landlordCustomRate;
+        } else {
+          final settingsDoc = await FirebaseFirestore.instance
+              .collection('settings')
+              .doc('platform')
+              .get();
+          commissionRate =
+              (settingsDoc.data()?['commission_percent'] as num?)?.toDouble() ??
+                  5.0;
+        }
+      } catch (_) {
+        // fallback to 5 if fetch fails
+      }
+
+      final res = await http.post(
+        Uri.parse('$_kBackendUrl/create-subaccount'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'landlordId': landlordId,
+          'businessName': _payoutName.text.trim(),
+          'bankCode': _bankCode,
+          'accountNumber': _payoutNumber.text.trim(),
+          'percentageCharge': commissionRate, // ← dynamic now
+        }),
+      );
+      final data = jsonDecode(res.body);
+      if (data['error'] != null) throw Exception(data['error']);
+      if (mounted) {
+        setState(() {
+          _payoutHasAccount = true;
+          _payoutSubaccount = data['subaccountCode'];
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Payout account saved'),
+          backgroundColor: Colors.green,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _validationError = 'Payout error: $e');
+      }
+    } finally {
+      if (mounted) setState(() => _payoutSaving = false);
+    }
   }
 
   Future<void> _save() async {
@@ -847,6 +940,10 @@ class _LandlordDialogState extends State<_LandlordDialog>
                 Tab(
                   icon: Icon(Icons.lock_outline_rounded, size: 16),
                   text: 'Credentials',
+                ),
+                Tab(
+                  icon: Icon(Icons.account_balance_wallet_outlined, size: 16),
+                  text: 'Payout',
                 ),
               ],
             ),
@@ -1243,6 +1340,170 @@ class _LandlordDialogState extends State<_LandlordDialog>
                       ],
                     ),
                   ),
+                  // ── Tab 4: Payout ────────────────────────────────────
+                  SingleChildScrollView(
+                    padding: EdgeInsets.all(_isPhone(context) ? 16 : 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SectionLabel(
+                          icon: Icons.account_balance_wallet_outlined,
+                          label: 'Paystack payout account',
+                        ),
+                        if (_payoutHasAccount) ...[
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: kGreen.withOpacity(0.06),
+                              borderRadius: BorderRadius.circular(10),
+                              border:
+                                  Border.all(color: kGreen.withOpacity(0.20)),
+                            ),
+                            child: Row(children: [
+                              Icon(Icons.check_circle_rounded,
+                                  color: kGreen, size: 16),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Payout account active',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: kGreen)),
+                                    Text(_payoutNumber.text,
+                                        style: const TextStyle(
+                                            fontSize: 13, color: kTextDark)),
+                                  ],
+                                ),
+                              ),
+                            ]),
+                          ),
+                          const SizedBox(height: 14),
+                          Text('Update payout account:',
+                              style:
+                                  TextStyle(fontSize: 12, color: kTextLight)),
+                          const SizedBox(height: 10),
+                        ] else ...[
+                          _InfoNote(
+                            icon: Icons.info_outline_rounded,
+                            text:
+                                'Set up the landlord\'s mobile money account so student payments are automatically routed to them.',
+                          ),
+                          const SizedBox(height: 14),
+                        ],
+
+                        // Business name
+                        _FormField(
+                          label: 'Business / Full Name',
+                          required: true,
+                          icon: Icons.person_outline,
+                          controller: _payoutName,
+                        ),
+                        const SizedBox(height: 12),
+
+                        // Provider selector
+                        Text('Mobile Money Network',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: kTextLight)),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: _payoutProviders.map((p) {
+                            final selected = _payoutProvider == p;
+                            return Expanded(
+                              child: GestureDetector(
+                                onTap: () =>
+                                    setState(() => _payoutProvider = p),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  margin: EdgeInsets.only(
+                                      right:
+                                          p != _payoutProviders.last ? 8 : 0),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                  decoration: BoxDecoration(
+                                    color: selected
+                                        ? kGreen.withOpacity(0.08)
+                                        : kSurfaceAlt,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: selected ? kGreen : kBorder,
+                                      width: selected ? 1.5 : 1,
+                                    ),
+                                  ),
+                                  child: Text(p,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color:
+                                              selected ? kGreen : kTextLight)),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 12),
+
+                        // MoMo number
+                        _FormField(
+                          label: 'Mobile Money Number',
+                          required: true,
+                          icon: Icons.phone_android_outlined,
+                          controller: _payoutNumber,
+                          keyboard: TextInputType.phone,
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Save button — only shown when editing (landlord doc exists)
+                        if (_isEdit)
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _payoutSaving
+                                  ? null
+                                  : () => _savePayout(widget.doc!.id),
+                              icon: _payoutSaving
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.save_outlined,
+                                      size: 16, color: Colors.white),
+                              label: Text(
+                                _payoutSaving
+                                    ? 'Saving…'
+                                    : _payoutHasAccount
+                                        ? 'Update Payout Account'
+                                        : 'Save Payout Account',
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: kGreen,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                                elevation: 0,
+                              ),
+                            ),
+                          )
+                        else
+                          _InfoNote(
+                            icon: Icons.info_outline_rounded,
+                            text:
+                                'Save the landlord first, then come back to edit and set up the payout account.',
+                          ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1270,6 +1531,8 @@ class _LandlordDialogState extends State<_LandlordDialog>
       _code,
       _profileImage,
       _password,
+      _payoutName,
+      _payoutNumber,
     ]) {
       c.dispose();
     }

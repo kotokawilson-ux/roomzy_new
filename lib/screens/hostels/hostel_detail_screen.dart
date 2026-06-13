@@ -34,9 +34,7 @@ const _kTextMuted = Color(0xFF64748B);
 const _kTextDim = Color(0xFF94A3B8);
 
 // ── Paystack ─────────────────────────────────────────────────────────────────
-const _kPaystackSecretKey = 'sk_test_6350329ac171a2de1a9b7e6309865e837b163d12';
-const _kPaystackBaseUrl = 'https://api.paystack.co';
-
+const _kBackendUrl = 'https://roomzy-backend-eight.vercel.app/api';
 const _kTestMomoNumbers = {
   '0551234987',
   '0571234987',
@@ -1794,14 +1792,73 @@ class _BookingSheetState extends State<_BookingSheet>
     }
     setState(() => _busy = true);
     try {
+      // ── Step 1: Fetch commission rate ──────────────────────────────────────
+      String landlordId = '';
+      double commissionRate = 5.0; // fallback default
+
+      try {
+        // Get landlord_id from hostel doc
+        final hostelDoc = await FirebaseFirestore.instance
+            .collection('hostels')
+            .doc(widget.hostel.id)
+            .get();
+        landlordId = hostelDoc.data()?['landlord_id']?.toString() ?? '';
+
+        if (landlordId.isNotEmpty) {
+          // Try landlord-specific rate first
+          final landlordDoc = await FirebaseFirestore.instance
+              .collection('landlords')
+              .doc(landlordId)
+              .get();
+          final landlordCustomRate =
+              (landlordDoc.data()?['commission_percent'] as num?)?.toDouble();
+
+          if (landlordCustomRate != null) {
+            commissionRate = landlordCustomRate;
+          } else {
+            // Fall back to global platform rate
+            final settingsDoc = await FirebaseFirestore.instance
+                .collection('settings')
+                .doc('platform')
+                .get();
+            commissionRate = (settingsDoc.data()?['commission_percent'] as num?)
+                    ?.toDouble() ??
+                5.0;
+          }
+        } else {
+          // No landlord linked — use global rate
+          final settingsDoc = await FirebaseFirestore.instance
+              .collection('settings')
+              .doc('platform')
+              .get();
+          commissionRate =
+              (settingsDoc.data()?['commission_percent'] as num?)?.toDouble() ??
+                  5.0;
+        }
+      } catch (e) {
+        // Commission fetch failed — safe fallback, don't block booking
+        debugPrint('Commission fetch error: $e');
+        commissionRate = 5.0;
+      }
+
+      // ── Step 2: Calculate commission fields ────────────────────────────────
+      final commissionOwed = _totalAmount * (commissionRate / 100);
+
+      // ── Step 3: Save booking with all commission fields ────────────────────
       final docRef =
           await FirebaseFirestore.instance.collection('bookings').add({
+        // ── Room & hostel ───────────────────────────────────────────────────
         'room_id': widget.room.id,
         'room_number': widget.room.roomNumber,
         'hostel_id': widget.hostel.id,
         'hostel_name': widget.hostel.hostelName,
         'hostel_code': widget.hostel.hostelCode,
         'hostel_phone': widget.hostel.phone,
+        'landlord_id': landlordId,
+
+        // ── Guest details ───────────────────────────────────────────────────
+        // ── Guest details ───────────────────────────────────────────────────
+        'user_id': FirebaseAuth.instance.currentUser?.uid ?? '',
         'name': _name.text.trim(),
         'email': _email.text.trim(),
         'phone': _phone.text.trim(),
@@ -1811,17 +1868,34 @@ class _BookingSheetState extends State<_BookingSheet>
         'school_id': _notStudent ? '' : _schoolId.text.trim(),
         'not_student': _notStudent,
         'notes': _notes.text.trim(),
+
+        // ── Payment method ──────────────────────────────────────────────────
         'payment_method': 'Mobile Money',
         'momo_type': _momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash',
+
+        // ── Booking amounts ─────────────────────────────────────────────────
         'slots_booked': _slots,
         'amount': _totalAmount,
         'deposit_amount': _depositAmount,
         'amount_paid': 0.0,
         'balance': _totalAmount,
-        'status': 'pending',
+
+        // ── Commission snapshot ─────────────────────────────────────────────
+        // Locked at booking time — never changes even if rate is renegotiated
+        'commission_rate': commissionRate,
+        'commission_owed': commissionOwed,
+        'commission_collected': 0.0,
+        'commission_remaining': commissionOwed,
+
+        // ── Payment tracking ────────────────────────────────────────────────
+        'payment_count': 0, // increments with every successful payment
         'payment_status': 'pending',
+        'status': 'pending',
+
+        // ── Timestamps ──────────────────────────────────────────────────────
         'booked_at': FieldValue.serverTimestamp(),
       });
+
       _bookingId = docRef.id;
       _goToStep(1);
     } catch (e) {
@@ -1829,6 +1903,49 @@ class _BookingSheetState extends State<_BookingSheet>
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<String?> _promptForOtp() async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Enter Confirmation Code'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Check the SMS sent to your phone by your mobile money provider and enter the code below.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'OTP / Confirmation Code',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final v = ctrl.text.trim();
+              if (v.isNotEmpty) Navigator.pop(ctx, v);
+            },
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Initiate Paystack payment ─────────────────────────────────────────────
@@ -1846,32 +1963,44 @@ class _BookingSheetState extends State<_BookingSheet>
 
       final provider = _momoProvider == 'mtn' ? 'mtn' : 'vod';
       final chargeRes = await http.post(
-        Uri.parse('$_kPaystackBaseUrl/charge'),
-        headers: {
-          'Authorization': 'Bearer $_kPaystackSecretKey',
-          'Content-Type': 'application/json'
-        },
+        Uri.parse('$_kBackendUrl/charge-momo'),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
+          'bookingId': _bookingId,
           'email': _email.text.trim(),
-          'amount': (_amountToPay * 100).toInt(),
-          'currency': 'GHS',
-          'mobile_money': {'phone': _momo.text.trim(), 'provider': provider},
+          'amount': _amountToPay,
+          'phone': _momo.text.trim(),
+          'provider': provider,
           'reference': _payRef,
-          'metadata': {
-            'booking_id': _bookingId,
-            'hostel_name': widget.hostel.hostelName,
-            'room_number': widget.room.roomNumber,
-            'slots': _slots,
-          },
         }),
       );
 
       final chargeData = jsonDecode(chargeRes.body);
-      final status = chargeData['data']?['status'];
+      final status = chargeData['status'];
 
-      if (status == 'pay_offline' ||
-          status == 'pending' ||
-          status == 'send_otp') {
+      if (status == 'send_otp') {
+        setState(() => _busy = false);
+        final otp = await _promptForOtp();
+        if (otp == null) {
+          _goToStep(1);
+          return;
+        }
+        setState(() => _busy = true);
+        _goToStep(2);
+
+        final otpRes = await http.post(
+          Uri.parse('$_kBackendUrl/submit-otp'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'otp': otp, 'reference': _payRef}),
+        );
+        final otpData = jsonDecode(otpRes.body);
+
+        if (otpData['status'] == 'success') {
+          await _onPaymentSuccess(_payRef);
+        } else {
+          await _pollPaymentStatus(_payRef);
+        }
+      } else if (status == 'pay_offline' || status == 'pending') {
         await _pollPaymentStatus(_payRef);
       } else if (status == 'success') {
         await _onPaymentSuccess(_payRef);
@@ -1888,16 +2017,83 @@ class _BookingSheetState extends State<_BookingSheet>
     }
   }
 
+  void _showPaymentFailedDialog(String? gatewayResponse, String? message) {
+    if (!mounted) return;
+
+    final raw = gatewayResponse ?? message ?? 'Unknown error';
+
+    // Friendly translations for common Paystack/MTN/Vodafone codes
+    final friendlyMessages = <String, String>{
+      'LOW_BALANCE_OR_PAYEE_LIMIT_REACHED_OR_NOT_ALLOWED':
+          'Your Mobile Money wallet doesn\'t have enough balance to complete this payment, or you\'ve reached your transaction limit. Please top up your wallet and try again.',
+      'INVALID_OTP':
+          'The code you entered was incorrect or has expired. Please try again with a new code.',
+      'EXPIRED_OTP': 'The code has expired. Please try again to get a new one.',
+      'TRANSACTION_NOT_ALLOWED_FOR_USER':
+          'This transaction is not allowed for your Mobile Money account. Please contact your provider.',
+      'DECLINED':
+          'The payment was declined. Please try again or use a different number.',
+    };
+
+    final friendly = friendlyMessages[raw] ??
+        raw.replaceAll('_', ' ').toLowerCase().replaceFirstMapped(
+              RegExp(r'^.'),
+              (m) => m.group(0)!.toUpperCase(),
+            );
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _kRed.withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
+          child:
+              const Icon(Icons.error_outline_rounded, color: _kRed, size: 32),
+        ),
+        title: const Text(
+          'Payment Failed',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          friendly,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 14, color: _kTextMuted, height: 1.5),
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kPrimary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(50)),
+            ),
+            child: const Text('Try Again',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _pollPaymentStatus(String reference) async {
     for (int i = 0; i < 12; i++) {
       await Future.delayed(const Duration(seconds: 5));
       if (!mounted) return;
-      final res = await http.get(
-        Uri.parse('$_kPaystackBaseUrl/transaction/verify/$reference'),
-        headers: {'Authorization': 'Bearer $_kPaystackSecretKey'},
+      final res = await http.post(
+        Uri.parse('$_kBackendUrl/verify-payment'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'reference': reference}),
       );
       final data = jsonDecode(res.body);
-      final status = data['data']?['status'];
+      debugPrint('verify-payment response: $data');
+      final status = data['status'];
       if (status == 'success') {
         await _onPaymentSuccess(reference);
         return;
@@ -1905,7 +2101,7 @@ class _BookingSheetState extends State<_BookingSheet>
       if (status == 'failed') {
         if (!mounted) return;
         _goToStep(1);
-        _showSnack('Payment declined. Please try again.', isError: true);
+        _showPaymentFailedDialog(data['gateway_response'], data['message']);
         return;
       }
     }
@@ -1918,53 +2114,149 @@ class _BookingSheetState extends State<_BookingSheet>
   Future<void> _onPaymentSuccess(String reference) async {
     final roomRef =
         FirebaseFirestore.instance.collection('rooms').doc(widget.room.id);
-    try {
-      await FirebaseFirestore.instance.runTransaction((txn) async {
-        final snap = await txn.get(roomRef);
-        final capacity = (snap.data()?['capacity'] ?? 1) as int;
-        final booked = (snap.data()?['booked'] ?? 0) as int;
-        if (capacity - booked < _slots)
-          throw Exception('Not enough slots left');
+    final bookingRef =
+        FirebaseFirestore.instance.collection('bookings').doc(_bookingId);
 
-        txn.update(roomRef, {'booked': FieldValue.increment(_slots)});
-        txn.update(
-          FirebaseFirestore.instance.collection('bookings').doc(_bookingId),
-          {
-            'payment_status': _paymentStatusLabel,
-            'status': (_depositAmount > 0 && _amountToPay >= _depositAmount) ||
-                    _amountToPay >= _totalAmount
-                ? 'confirmed'
-                : 'pending',
-            'payment_reference': reference,
-            'amount_paid': _amountToPay,
-            'balance': (_totalAmount - _amountToPay).clamp(0, _totalAmount),
-            'paid_at': FieldValue.serverTimestamp(),
-          },
-        );
+    try {
+      // ── Step 1: Read booking doc BEFORE transaction to get commission fields
+      final bookingSnap = await bookingRef.get();
+      final bData = bookingSnap.data() ?? {};
+      final rawRate = (bData['commission_rate'] as num?)?.toDouble() ?? 5.0;
+      final commissionRateDecimal = rawRate > 1 ? rawRate / 100 : rawRate;
+      final commissionOwed = (bData['commission_owed'] as num?)?.toDouble() ??
+          (_totalAmount * 0.05);
+      final commissionCollected =
+          (bData['commission_collected'] as num?)?.toDouble() ?? 0.0;
+      final commissionRemaining = commissionOwed - commissionCollected;
+      final paymentCount = (bData['payment_count'] as num?)?.toInt() ?? 0;
+      final amountAlreadyPaid =
+          (bData['amount_paid'] as num?)?.toDouble() ?? 0.0;
+
+      // ── Step 2: Determine payment position ────────────────────────────────
+      final newTotalPaid = amountAlreadyPaid + _amountToPay;
+      final isFirstPayment = paymentCount == 0;
+      final isFinalPayment = newTotalPaid >= _totalAmount;
+
+      // ── Step 3: Apply commission rule ─────────────────────────────────────
+      // First + Final (full amount at once) → full commission
+      // First only (deposit/partial)        → half commission
+      // Final only (clears balance)         → remaining commission
+      // Middle payment                      → zero commission
+      double commissionThisPayment;
+      if (isFirstPayment && isFinalPayment) {
+        commissionThisPayment = commissionOwed;
+      } else if (isFirstPayment) {
+        commissionThisPayment = commissionOwed / 2;
+      } else if (isFinalPayment) {
+        commissionThisPayment = commissionRemaining;
+      } else {
+        commissionThisPayment = 0.0;
+      }
+
+      final landlordGetsThisPayment = _amountToPay - commissionThisPayment;
+      final newCommissionCollected =
+          commissionCollected + commissionThisPayment;
+      final newCommissionRemaining = commissionOwed - newCommissionCollected;
+      final newBalance = (_totalAmount - newTotalPaid).clamp(0.0, _totalAmount);
+
+      // ── Step 4: Determine statuses ────────────────────────────────────────
+      final newPaymentStatus = isFinalPayment ? 'fully_paid' : 'deposit_paid';
+      final newBookingStatus =
+          (_depositAmount > 0 && newTotalPaid >= _depositAmount) ||
+                  isFinalPayment
+              ? 'confirmed'
+              : 'pending';
+
+      // ── Step 5: Run Firestore transaction ─────────────────────────────────
+      await FirebaseFirestore.instance.runTransaction((txn) async {
+        final roomSnap = await txn.get(roomRef);
+        final capacity = (roomSnap.data()?['capacity'] ?? 1) as int;
+        final booked = (roomSnap.data()?['booked'] ?? 0) as int;
+
+        // Only check + increment slots on first payment
+        // (slots were not reserved yet — room was just held as pending)
+        if (isFirstPayment) {
+          if (capacity - booked < _slots) {
+            throw Exception('Not enough slots left');
+          }
+          txn.update(roomRef, {'booked': FieldValue.increment(_slots)});
+        }
+
+        // Update booking doc
+        txn.update(bookingRef, {
+          // ── Payment amounts ───────────────────────────────────────────────
+          'amount_paid': newTotalPaid,
+          'balance': newBalance,
+          'payment_status': newPaymentStatus,
+          'status': newBookingStatus,
+          'payment_reference': reference,
+
+          // ── Commission tracking ───────────────────────────────────────────
+          'commission_collected': newCommissionCollected,
+          'commission_remaining': newCommissionRemaining,
+
+          // ── Payment count ─────────────────────────────────────────────────
+          'payment_count': FieldValue.increment(1),
+
+          // ── Timestamps ────────────────────────────────────────────────────
+          'paid_at': FieldValue.serverTimestamp(),
+          if (isFinalPayment) 'fully_paid_at': FieldValue.serverTimestamp(),
+        });
       });
-// Record this transaction in the payments subcollection
-      await FirebaseFirestore.instance
-          .collection('bookings')
-          .doc(_bookingId)
-          .collection('payments')
-          .add({
+
+      // ── Step 6: Record in payments subcollection ──────────────────────────
+      // Outside transaction — subcollection writes can't go inside runTransaction
+      await bookingRef.collection('payments').add({
+        // ── What the student paid ─────────────────────────────────────────
         'amount': _amountToPay,
         'method': 'momo',
         'provider': _momoProvider,
         'reference': reference,
         'status': 'paid',
-        'note': _payMode == 0
-            ? 'Deposit payment'
-            : _payMode == 1
-                ? 'Partial payment'
-                : 'Full payment',
+
+        // ── Commission breakdown for this payment ─────────────────────────
+        'commission_taken': commissionThisPayment,
+        'landlord_received': landlordGetsThisPayment,
+        'commission_rate_used': commissionRateDecimal,
+
+        // ── Payment position ──────────────────────────────────────────────
+        'payment_number': paymentCount + 1,
+        'is_first_payment': isFirstPayment,
+        'is_final_payment': isFinalPayment,
+
+        // ── Running totals at time of this payment ────────────────────────
+        'total_paid_after': newTotalPaid,
+        'balance_after': newBalance,
+        'commission_collected_after': newCommissionCollected,
+
+        // ── Human-readable note ───────────────────────────────────────────
+        'note': isFirstPayment && isFinalPayment
+            ? 'Full payment — 100% commission taken'
+            : isFirstPayment
+                ? 'First payment — 50% commission taken'
+                : isFinalPayment
+                    ? 'Final payment — remaining commission taken'
+                    : 'Partial payment — no commission taken',
+
         'paid_at': FieldValue.serverTimestamp(),
       });
+
+      // ── Step 7: Log activity ──────────────────────────────────────────────
       await _logActivity(
-        action: 'Booking Confirmed',
+        action: isFirstPayment && isFinalPayment
+            ? 'Booking Fully Paid'
+            : isFirstPayment
+                ? 'Booking Deposit Paid'
+                : isFinalPayment
+                    ? 'Booking Balance Cleared'
+                    : 'Booking Partial Payment',
         details:
-            'User ${_email.text.trim()} booked $_slots slot(s) in Room ${widget.room.roomNumber} '
-            '(${widget.room.type}) at ${widget.hostel.hostelName} for GHS ${_totalAmount.toStringAsFixed(2)}. '
+            'User ${_email.text.trim()} paid GHS ${_amountToPay.toStringAsFixed(2)} '
+            '(payment #${paymentCount + 1}) for ${_slots} slot(s) in Room ${widget.room.roomNumber} '
+            'at ${widget.hostel.hostelName}. '
+            'Commission taken: GHS ${commissionThisPayment.toStringAsFixed(2)}. '
+            'Landlord received: GHS ${landlordGetsThisPayment.toStringAsFixed(2)}. '
+            'Balance remaining: GHS ${newBalance.toStringAsFixed(2)}. '
             '${_isTestNumber ? "(Test mode)" : "(Live payment)"}',
         userEmail: _email.text.trim(),
       );

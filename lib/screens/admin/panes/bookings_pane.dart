@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
-// ─── Theme tokens (self-contained so pane compiles standalone) ────────────────
+// ─── Theme tokens ─────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
 const _kAccent = Color(0xFF14B8A6);
 const _kDark = Color(0xFF0D1B2A);
@@ -29,32 +29,25 @@ const _kTextDark = Color(0xFF1E293B);
 const _kTextMid = Color(0xFF475569);
 const _kTextLight = Color(0xFF94A3B8);
 
-// ─── Shortcut ─────────────────────────────────────────────────────────────────
 FirebaseFirestore get _db => FirebaseFirestore.instance;
 
 String _fmtDate(DateTime d) => DateFormat('dd MMM yyyy, hh:mm a').format(d);
-String _fmtShort(DateTime d) => DateFormat('dd MMM yy').format(d);
+String _fmtShort(DateTime d) => DateFormat('dd MMM yy, hh:mm a').format(d);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ROOM SLOT HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Decrements the room's [booked] count by [slots], clamped to 0.
-/// Only call this when you are certain the slot was previously counted
-/// (i.e. the booking's old status was 'confirmed').
 Future<void> _decrementRoomSlots(String roomId, int slots) async {
   await _db.runTransaction((txn) async {
     final roomRef = _db.collection('rooms').doc(roomId);
     final snap = await txn.get(roomRef);
     if (!snap.exists) return;
     final current = (snap.data()?['booked'] ?? 0) as int;
-    final updated = (current - slots).clamp(0, 999999);
-    txn.update(roomRef, {'booked': updated});
+    txn.update(roomRef, {'booked': (current - slots).clamp(0, 999999)});
   });
 }
 
-/// Increments the room's [booked] count by [slots].
-/// Throws if there are not enough remaining slots.
 Future<void> _incrementRoomSlots(String roomId, int slots) async {
   await _db.runTransaction((txn) async {
     final roomRef = _db.collection('rooms').doc(roomId);
@@ -68,7 +61,7 @@ Future<void> _incrementRoomSlots(String roomId, int slots) async {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BOOKINGS PANE — root widget
+// BOOKINGS PANE
 // ══════════════════════════════════════════════════════════════════════════════
 class BookingsPane extends StatefulWidget {
   const BookingsPane({super.key});
@@ -78,7 +71,6 @@ class BookingsPane extends StatefulWidget {
 
 class _BookingsPaneState extends State<BookingsPane>
     with TickerProviderStateMixin {
-  // ── state ──────────────────────────────────────────────────────────────────
   String _statusFilter = 'all';
   String _searchQuery = '';
   String _sortField = 'booked_at';
@@ -86,8 +78,6 @@ class _BookingsPaneState extends State<BookingsPane>
   final _searchCtrl = TextEditingController();
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
-
-  // ── summary stream ─────────────────────────────────────────────────────────
   Stream<QuerySnapshot>? _stream;
 
   @override
@@ -134,7 +124,6 @@ class _BookingsPaneState extends State<BookingsPane>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Top bar: stats + search + filters ────────────────────────────
           _TopBar(
             stream: _db.collection('bookings').snapshots(),
             searchCtrl: _searchCtrl,
@@ -152,7 +141,6 @@ class _BookingsPaneState extends State<BookingsPane>
               _rebuildStream();
             },
           ),
-          // ── Table / list ────────────────────────────────────────────────
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: _stream,
@@ -171,10 +159,7 @@ class _BookingsPaneState extends State<BookingsPane>
                         _searchQuery.isNotEmpty || _statusFilter != 'all',
                   );
                 }
-                return _BookingsList(
-                  docs: filtered,
-                  allDocs: allDocs,
-                );
+                return _BookingsList(docs: filtered, allDocs: allDocs);
               },
             ),
           ),
@@ -185,7 +170,7 @@ class _BookingsPaneState extends State<BookingsPane>
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TOP BAR  ── stats chips + search + filters + sort
+// TOP BAR
 // ══════════════════════════════════════════════════════════════════════════════
 class _TopBar extends StatelessWidget {
   final Stream<QuerySnapshot> stream;
@@ -216,172 +201,153 @@ class _TopBar extends StatelessWidget {
         border: Border(bottom: BorderSide(color: _kBorder)),
       ),
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Title row
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                    colors: [_kPrimary, _kAccent],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.book_online_rounded,
-                  color: Colors.white, size: 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                  colors: [_kPrimary, _kAccent],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight),
+              borderRadius: BorderRadius.circular(10),
             ),
-            const SizedBox(width: 12),
-            const Text('Bookings Management',
-                style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: _kTextDark,
-                    letterSpacing: -0.3)),
-            const Spacer(),
-            // Live indicator
-            _LivePulse(),
-          ]),
-          const SizedBox(height: 16),
-          // Stat chips — real-time
-          StreamBuilder<QuerySnapshot>(
-            stream: stream,
-            builder: (ctx, snap) {
-              final docs = snap.data?.docs ?? [];
-              int total = docs.length;
-              int confirmed = docs
-                  .where((d) => (d.data() as Map)['status'] == 'confirmed')
-                  .length;
-              int pending = docs
-                  .where((d) =>
-                      (d.data() as Map)['status'] == 'booked' ||
-                      (d.data() as Map)['status'] == 'pending')
-                  .length;
-              int declined = docs
-                  .where((d) => (d.data() as Map)['status'] == 'declined')
-                  .length;
-              double revenue = docs.fold(
-                  0.0,
-                  (sum, d) =>
-                      sum + ((d.data() as Map)['amount_paid'] ?? 0).toDouble());
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(children: [
-                  _StatChip(
-                      label: 'Total',
-                      value: '$total',
-                      icon: Icons.receipt_long_rounded,
-                      color: _kBlue,
-                      bg: _kBlueBg),
-                  const SizedBox(width: 10),
-                  _StatChip(
-                      label: 'Confirmed',
-                      value: '$confirmed',
-                      icon: Icons.check_circle_rounded,
-                      color: _kGreen,
-                      bg: _kGreenBg),
-                  const SizedBox(width: 10),
-                  _StatChip(
-                      label: 'Pending',
-                      value: '$pending',
-                      icon: Icons.schedule_rounded,
-                      color: _kOrange,
-                      bg: _kOrangeBg),
-                  const SizedBox(width: 10),
-                  _StatChip(
-                      label: 'Declined',
-                      value: '$declined',
-                      icon: Icons.cancel_rounded,
-                      color: _kRed,
-                      bg: _kRedBg),
-                  const SizedBox(width: 10),
-                ]),
-              );
-            },
+            child: const Icon(Icons.book_online_rounded,
+                color: Colors.white, size: 18),
           ),
-          const SizedBox(height: 14),
-          // Search + filter row
-          Wrap(
-            spacing: 10,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              // Search field
-              SizedBox(
-                width: 260,
-                height: 40,
-                child: TextField(
-                  controller: searchCtrl,
-                  onChanged: onSearchChanged,
-                  style: const TextStyle(fontSize: 13),
-                  decoration: InputDecoration(
-                    hintText: 'Search name, email, room…',
-                    hintStyle:
-                        const TextStyle(fontSize: 13, color: _kTextLight),
-                    prefixIcon: const Icon(Icons.search_rounded,
-                        size: 18, color: _kTextLight),
-                    suffixIcon: searchCtrl.text.isNotEmpty
-                        ? GestureDetector(
-                            onTap: () {
-                              searchCtrl.clear();
-                              onSearchChanged('');
-                            },
-                            child: const Icon(Icons.close_rounded,
-                                size: 16, color: _kTextLight))
-                        : null,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 0),
-                    filled: true,
-                    fillColor: _kSurface,
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _kBorder)),
-                    enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _kBorder)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide:
-                            const BorderSide(color: _kPrimary, width: 1.5)),
-                  ),
+          const SizedBox(width: 12),
+          const Text('Bookings Management',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: _kTextDark,
+                  letterSpacing: -0.3)),
+          const Spacer(),
+          _LivePulse(),
+        ]),
+        const SizedBox(height: 16),
+        StreamBuilder<QuerySnapshot>(
+          stream: stream,
+          builder: (ctx, snap) {
+            final docs = snap.data?.docs ?? [];
+            final total = docs.length;
+            final confirmed = docs
+                .where((d) => (d.data() as Map)['status'] == 'confirmed')
+                .length;
+            final pending = docs.where((d) {
+              final s = (d.data() as Map)['status'];
+              return s == 'booked' || s == 'pending';
+            }).length;
+            final declined = docs
+                .where((d) => (d.data() as Map)['status'] == 'declined')
+                .length;
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                _StatChip(
+                    label: 'Total',
+                    value: '$total',
+                    icon: Icons.receipt_long_rounded,
+                    color: _kBlue,
+                    bg: _kBlueBg),
+                const SizedBox(width: 10),
+                _StatChip(
+                    label: 'Confirmed',
+                    value: '$confirmed',
+                    icon: Icons.check_circle_rounded,
+                    color: _kGreen,
+                    bg: _kGreenBg),
+                const SizedBox(width: 10),
+                _StatChip(
+                    label: 'Pending',
+                    value: '$pending',
+                    icon: Icons.schedule_rounded,
+                    color: _kOrange,
+                    bg: _kOrangeBg),
+                const SizedBox(width: 10),
+                _StatChip(
+                    label: 'Declined',
+                    value: '$declined',
+                    icon: Icons.cancel_rounded,
+                    color: _kRed,
+                    bg: _kRedBg),
+              ]),
+            );
+          },
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: 260,
+              height: 40,
+              child: TextField(
+                controller: searchCtrl,
+                onChanged: onSearchChanged,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Search name, email, room…',
+                  hintStyle: const TextStyle(fontSize: 13, color: _kTextLight),
+                  prefixIcon: const Icon(Icons.search_rounded,
+                      size: 18, color: _kTextLight),
+                  suffixIcon: searchCtrl.text.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () {
+                            searchCtrl.clear();
+                            onSearchChanged('');
+                          },
+                          child: const Icon(Icons.close_rounded,
+                              size: 16, color: _kTextLight))
+                      : null,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                  filled: true,
+                  fillColor: _kSurface,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _kBorder)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _kBorder)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide:
+                          const BorderSide(color: _kPrimary, width: 1.5)),
                 ),
               ),
-              // Status filters
-              ...[
-                ('all', 'All'),
-                ('booked', 'Pending'),
-                ('confirmed', 'Confirmed'),
-                ('declined', 'Declined'),
-              ].map((t) => _FilterChip(
-                    label: t.$2,
-                    selected: statusFilter == t.$1,
-                    color: _statusColor(t.$1),
-                    onTap: () => onFilterChanged(t.$1),
-                  )),
-              // Sort menu
-              _SortMenu(
-                  current: sortField, asc: sortAsc, onChanged: onSortChanged),
-            ],
-          ),
-          const SizedBox(height: 14),
-        ],
-      ),
+            ),
+            ...[
+              ('all', 'All'),
+              ('booked', 'Pending'),
+              ('confirmed', 'Confirmed'),
+              ('declined', 'Declined'),
+            ].map((t) => _FilterChip(
+                  label: t.$2,
+                  selected: statusFilter == t.$1,
+                  color: _statusColor(t.$1),
+                  onTap: () => onFilterChanged(t.$1),
+                )),
+            _SortMenu(
+                current: sortField, asc: sortAsc, onChanged: onSortChanged),
+          ],
+        ),
+        const SizedBox(height: 14),
+      ]),
     );
   }
 
-  Color _statusColor(String s) {
-    return switch (s) {
-      'confirmed' => _kGreen,
-      'declined' => _kRed,
-      'booked' => _kOrange,
-      _ => _kPrimary,
-    };
-  }
+  Color _statusColor(String s) => switch (s) {
+        'confirmed' => _kGreen,
+        'declined' => _kRed,
+        'booked' => _kOrange,
+        _ => _kPrimary,
+      };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BOOKINGS LIST — responsive: table on wide, cards on narrow
+// LIST / TABLE / CARDS
 // ══════════════════════════════════════════════════════════════════════════════
 class _BookingsList extends StatelessWidget {
   final List<QueryDocumentSnapshot> docs;
@@ -390,15 +356,11 @@ class _BookingsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final w = MediaQuery.of(context).size.width;
-    final isWide = w > 800;
+    final isWide = MediaQuery.of(context).size.width > 800;
     return isWide ? _BookingsTable(docs: docs) : _BookingsCards(docs: docs);
   }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// TABLE VIEW (wide screens)
-// ══════════════════════════════════════════════════════════════════════════════
 class _BookingsTable extends StatelessWidget {
   final List<QueryDocumentSnapshot> docs;
   const _BookingsTable({required this.docs});
@@ -422,33 +384,29 @@ class _BookingsTable extends StatelessWidget {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(16),
-            child: Column(
-              children: [
-                // Header
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-                  decoration: const BoxDecoration(
-                    color: _kSurface,
-                    border: Border(bottom: BorderSide(color: _kBorder)),
-                  ),
-                  child: const Row(children: [
-                    Expanded(flex: 3, child: _TH('Guest / Student')),
-                    Expanded(flex: 3, child: _TH('Hostel')),
-                    Expanded(flex: 2, child: _TH('Room')),
-                    Expanded(flex: 2, child: _TH('Amount')),
-                    Expanded(flex: 2, child: _TH('Status')),
-                    Expanded(flex: 2, child: _TH('Booked On')),
-                    SizedBox(width: 44),
-                  ]),
+            child: Column(children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                decoration: const BoxDecoration(
+                  color: _kSurface,
+                  border: Border(bottom: BorderSide(color: _kBorder)),
                 ),
-                // Rows
-                ...docs
-                    .asMap()
-                    .entries
-                    .map((e) => _TableRow(doc: e.value, index: e.key)),
-              ],
-            ),
+                child: const Row(children: [
+                  Expanded(flex: 3, child: _TH('Guest / Student')),
+                  Expanded(flex: 3, child: _TH('Hostel')),
+                  Expanded(flex: 2, child: _TH('Room')),
+                  Expanded(flex: 2, child: _TH('Amount')),
+                  Expanded(flex: 2, child: _TH('Status')),
+                  Expanded(flex: 2, child: _TH('Booked On')),
+                  SizedBox(width: 44),
+                ]),
+              ),
+              ...docs
+                  .asMap()
+                  .entries
+                  .map((e) => _TableRow(doc: e.value, index: e.key)),
+            ]),
           ),
         ),
         const SizedBox(height: 16),
@@ -529,16 +487,15 @@ class _TableRowState extends State<_TableRow>
           ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
           child: Row(children: [
-            // Guest
             Expanded(
-              flex: 3,
-              child: Row(children: [
-                _Avatar(name: d['name'] ?? '?', status: status),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+                flex: 3,
+                child: Row(children: [
+                  _Avatar(name: d['name'] ?? '?', status: status),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                         Text(d['name'] ?? '—',
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -549,93 +506,75 @@ class _TableRowState extends State<_TableRow>
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontSize: 11, color: _kTextLight)),
-                      ]),
-                ),
-              ]),
-            ),
-            // Hostel
+                      ])),
+                ])),
             Expanded(
-              flex: 3,
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(d['hostel_name'] ?? d['hostelName'] ?? '—',
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            color: _kTextDark,
-                            fontWeight: FontWeight.w600)),
-                    if ((d['hostel_code'] ?? '').toString().isNotEmpty)
-                      Text(d['hostel_code'],
+                flex: 3,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(d['hostel_name'] ?? d['hostelName'] ?? '—',
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              fontSize: 11, color: _kTextLight)),
-                  ]),
-            ),
-            // Room
+                              fontSize: 13,
+                              color: _kTextDark,
+                              fontWeight: FontWeight.w600)),
+                      if ((d['hostel_code'] ?? '').toString().isNotEmpty)
+                        Text(d['hostel_code'],
+                            style: const TextStyle(
+                                fontSize: 11, color: _kTextLight)),
+                    ])),
             Expanded(
-              flex: 2,
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(d['room_number'] ?? d['roomNumber'] ?? '—',
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: _kTextDark)),
-                    if ((d['slots_booked'] ?? 0) > 0)
-                      Text('${d['slots_booked']} slot(s)',
+                flex: 2,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(d['room_number'] ?? d['roomNumber'] ?? '—',
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              fontSize: 11, color: _kTextLight)),
-                  ]),
-            ),
-            // Amount
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: _kTextDark)),
+                      if ((d['slots_booked'] ?? 0) > 0)
+                        Text('${d['slots_booked']} slot(s)',
+                            style: const TextStyle(
+                                fontSize: 11, color: _kTextLight)),
+                    ])),
             Expanded(
-              flex: 2,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    amount > 0
-                        ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
-                        : '—',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: amount > 0 ? _kGreen : _kTextLight),
-                  ),
-                  if ((d['amount_paid'] ?? 0) > 0) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      'Paid: GHS ${NumberFormat('#,##0.00').format((d['amount_paid'] ?? 0).toDouble())}',
-                      style: const TextStyle(fontSize: 10, color: _kGreen),
-                    ),
-                    if ((d['balance'] ?? 0) > 0)
+                flex: 2,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        'Bal: GHS ${NumberFormat('#,##0.00').format((d['balance'] ?? 0).toDouble())}',
-                        style: const TextStyle(fontSize: 10, color: _kOrange),
+                        amount > 0
+                            ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
+                            : '—',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: amount > 0 ? _kGreen : _kTextLight),
                       ),
-                  ],
-                ],
-              ),
-            ),
-            // Status
+                      if ((d['amount_paid'] ?? 0) > 0) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                            'Paid: GHS ${NumberFormat('#,##0.00').format((d['amount_paid'] ?? 0).toDouble())}',
+                            style:
+                                const TextStyle(fontSize: 10, color: _kGreen)),
+                        if ((d['balance'] ?? 0) > 0)
+                          Text(
+                              'Bal: GHS ${NumberFormat('#,##0.00').format((d['balance'] ?? 0).toDouble())}',
+                              style: const TextStyle(
+                                  fontSize: 10, color: _kOrange)),
+                      ],
+                    ])),
+            Expanded(flex: 2, child: _StatusBadge(status: status)),
             Expanded(
-              flex: 2,
-              child: _StatusBadge(status: status),
-            ),
-            // Date
-            Expanded(
-              flex: 2,
-              child: Text(date,
-                  style: const TextStyle(fontSize: 12, color: _kTextMid)),
-            ),
-            // Actions
+                flex: 2,
+                child: Text(date,
+                    style: const TextStyle(fontSize: 12, color: _kTextMid))),
             SizedBox(
-              width: 44,
-              child: _ActionBtn(docId: widget.doc.id, data: d),
-            ),
+                width: 44, child: _ActionBtn(docId: widget.doc.id, data: d)),
           ]),
         ),
       ),
@@ -644,7 +583,7 @@ class _TableRowState extends State<_TableRow>
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CARD VIEW (narrow screens)
+// CARD VIEW
 // ══════════════════════════════════════════════════════════════════════════════
 class _BookingsCards extends StatelessWidget {
   final List<QueryDocumentSnapshot> docs;
@@ -694,6 +633,12 @@ class _BookingCardState extends State<_BookingCard>
     super.dispose();
   }
 
+  Color _statusBg(String s) => switch (s) {
+        'confirmed' => _kGreenBg,
+        'declined' => _kRedBg,
+        _ => _kOrangeBg,
+      };
+
   @override
   Widget build(BuildContext context) {
     final d = widget.doc.data() as Map<String, dynamic>;
@@ -719,7 +664,6 @@ class _BookingCardState extends State<_BookingCard>
             ],
           ),
           child: Column(children: [
-            // Card header
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
@@ -731,25 +675,23 @@ class _BookingCardState extends State<_BookingCard>
                 _Avatar(name: d['name'] ?? '?', status: status, size: 36),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(d['name'] ?? '—',
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 14,
-                                color: _kTextDark)),
-                        Text(d['email'] ?? '',
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 11, color: _kTextMid)),
-                      ]),
-                ),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(d['name'] ?? '—',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 14,
+                              color: _kTextDark)),
+                      Text(d['email'] ?? '',
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              const TextStyle(fontSize: 11, color: _kTextMid)),
+                    ])),
                 _StatusBadge(status: status),
               ]),
             ),
-            // Card body
             Padding(
               padding: const EdgeInsets.all(14),
               child: Column(children: [
@@ -779,12 +721,10 @@ class _BookingCardState extends State<_BookingCard>
                     value: date),
               ]),
             ),
-            // Actions row
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: _kBorder)),
-              ),
+                  border: Border(top: BorderSide(color: _kBorder))),
               child: Row(children: [
                 Expanded(
                   child: _SmallActionBtn(
@@ -803,14 +743,6 @@ class _BookingCardState extends State<_BookingCard>
       ),
     );
   }
-
-  Color _statusBg(String s) {
-    return switch (s) {
-      'confirmed' => _kGreenBg,
-      'declined' => _kRedBg,
-      _ => _kOrangeBg,
-    };
-  }
 }
 
 class _CardRow extends StatelessWidget {
@@ -818,12 +750,12 @@ class _CardRow extends StatelessWidget {
   final String label;
   final String value;
   final Color? valueColor;
-  const _CardRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.valueColor,
-  });
+  const _CardRow(
+      {required this.icon,
+      required this.label,
+      required this.value,
+      this.valueColor});
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -849,53 +781,43 @@ class _CardRow extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ACTION BUTTON — opens popup menu
+// ACTION BUTTON
 // ══════════════════════════════════════════════════════════════════════════════
 class _ActionBtn extends StatelessWidget {
   final String docId;
   final Map<String, dynamic> data;
   const _ActionBtn({required this.docId, required this.data});
 
-  // ── FIXED: correctly manage room slots on every status change ─────────────
   Future<void> _setStatus(BuildContext ctx, String newStatus) async {
     try {
-      // 1. Read current status BEFORE writing anything
       final bookingSnap = await _db.collection('bookings').doc(docId).get();
       final oldStatus = (bookingSnap.data()?['status'] ?? 'booked') as String;
 
-      // 2. Update the booking document
       await _db.collection('bookings').doc(docId).update({
         'status': newStatus,
         'updated_at': FieldValue.serverTimestamp(),
       });
 
-      // 3. Adjust room slot count based on transition
       final roomId = (data['room_id'] ?? data['roomId'])?.toString();
       final slots = (data['slots_booked'] ?? 1) as int;
 
       if (roomId != null && roomId.isNotEmpty) {
-        if (newStatus == 'confirmed' && oldStatus != 'confirmed') {
-          // Pending/declined → confirmed: lock the slot
-          await _incrementRoomSlots(roomId, slots);
-        } else if (newStatus == 'declined' && oldStatus == 'confirmed') {
-          // Confirmed → declined: free the slot
-          await _decrementRoomSlots(roomId, slots);
-        } else if (newStatus == 'booked' && oldStatus == 'confirmed') {
-          // Confirmed → reset to pending: free the slot
+        // Only decrement if moving AWAY from confirmed (freeing up the slot)
+        if ((newStatus == 'declined' || newStatus == 'booked') &&
+            oldStatus == 'confirmed') {
           await _decrementRoomSlots(roomId, slots);
         }
-        // pending → declined: slot was never locked, nothing to do
+        // Never increment here — slots are booked when the student pays,
+        // not when admin confirms
       }
 
-      if (ctx.mounted) {
+      if (ctx.mounted)
         _showSnack(ctx, _statusMsg(newStatus), _statusColor(newStatus));
-      }
     } catch (e) {
       if (ctx.mounted) _showSnack(ctx, 'Error: $e', _kRed);
     }
   }
 
-  // ── FIXED: decrement room booked count if booking was confirmed ───────────
   Future<void> _deleteBooking(BuildContext ctx) async {
     final confirm = await showDialog<bool>(
       context: ctx,
@@ -907,23 +829,28 @@ class _ActionBtn extends StatelessWidget {
         confirmColor: _kRed,
       ),
     );
-    if (confirm != true) return;
-    if (!ctx.mounted) return;
-
+    if (confirm != true || !ctx.mounted) return;
     try {
       final roomId = (data['room_id'] ?? data['roomId'])?.toString();
       final slots = (data['slots_booked'] ?? 1) as int;
       final status = (data['status'] ?? 'booked') as String;
 
-      // ✅ Step 1: free the room slot FIRST and wait for it to fully complete
+      // Restore slot only if booking was confirmed
       if (roomId != null && roomId.isNotEmpty && status == 'confirmed') {
         await _decrementRoomSlots(roomId, slots);
       }
 
-      // ✅ Step 2: only delete AFTER the transaction has fully resolved
-      if (!ctx.mounted) return;
-      await _db.collection('bookings').doc(docId).delete();
+      // Delete payments subcollection first to avoid ghost documents
+      final paymentsSnap = await _db
+          .collection('bookings')
+          .doc(docId)
+          .collection('payments')
+          .get();
+      for (final doc in paymentsSnap.docs) {
+        await doc.reference.delete();
+      }
 
+      await _db.collection('bookings').doc(docId).delete();
       if (ctx.mounted) _showSnack(ctx, 'Booking deleted', _kRed);
     } catch (e) {
       if (ctx.mounted) _showSnack(ctx, 'Error: $e', _kRed);
@@ -935,13 +862,11 @@ class _ActionBtn extends StatelessWidget {
         'declined' => '❌ Booking declined',
         _ => '🔄 Status reset to pending',
       };
-
   Color _statusColor(String s) => switch (s) {
         'confirmed' => _kGreen,
         'declined' => _kRed,
         _ => _kOrange,
       };
-
   void _showSnack(BuildContext ctx, String msg, Color color) {
     ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
       content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -1017,318 +942,753 @@ class _ActionBtn extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// DETAIL BOTTOM SHEET
+// DETAIL SHEET — now live-streaming so installment updates reflect instantly
 // ══════════════════════════════════════════════════════════════════════════════
 void _showDetail(BuildContext ctx, String docId, Map<String, dynamic> d) {
   showModalBottomSheet(
     context: ctx,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _DetailSheet(docId: docId, data: d),
+    builder: (_) => _DetailSheet(docId: docId, initialData: d),
   );
 }
 
-class _DetailSheet extends StatelessWidget {
+class _DetailSheet extends StatefulWidget {
   final String docId;
-  final Map<String, dynamic> data;
-  const _DetailSheet({required this.docId, required this.data});
+  final Map<String, dynamic> initialData;
+  const _DetailSheet({required this.docId, required this.initialData});
 
-  // ── FIXED: frees room slot when declining a confirmed booking ─────────────
-  Future<void> _handleConfirm(BuildContext ctx) async {
+  @override
+  State<_DetailSheet> createState() => _DetailSheetState();
+}
+
+class _DetailSheetState extends State<_DetailSheet> {
+  // ── room-slot helpers ──────────────────────────────────────────────────────
+  Future<void> _handleConfirm(BuildContext ctx, Map<String, dynamic> d) async {
     try {
-      final bookingSnap = await _db.collection('bookings').doc(docId).get();
-      final oldStatus = (bookingSnap.data()?['status'] ?? 'booked') as String;
-
       await _db
           .collection('bookings')
-          .doc(docId)
+          .doc(widget.docId)
           .update({'status': 'confirmed'});
-
-      final roomId = (data['room_id'] ?? data['roomId'])?.toString();
-      final slots = (data['slots_booked'] ?? 1) as int;
-
-      if (roomId != null && roomId.isNotEmpty && oldStatus != 'confirmed') {
-        await _incrementRoomSlots(roomId, slots);
-      }
-
+      // No slot change — slots already incremented when student paid
       if (ctx.mounted) Navigator.pop(ctx);
     } catch (e) {
       if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-          SnackBar(
-              content: Text('Error: $e'),
-              backgroundColor: _kRed,
-              behavior: SnackBarBehavior.floating),
-        );
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: _kRed,
+            behavior: SnackBarBehavior.floating));
       }
     }
   }
 
-  // ── FIXED: frees room slot when declining a confirmed booking ─────────────
-  Future<void> _handleDecline(BuildContext ctx) async {
+  Future<void> _handleDecline(BuildContext ctx, Map<String, dynamic> d) async {
     try {
-      final bookingSnap = await _db.collection('bookings').doc(docId).get();
-      final oldStatus = (bookingSnap.data()?['status'] ?? 'booked') as String;
-
+      final snap = await _db.collection('bookings').doc(widget.docId).get();
+      final old = (snap.data()?['status'] ?? 'booked') as String;
       await _db
           .collection('bookings')
-          .doc(docId)
+          .doc(widget.docId)
           .update({'status': 'declined'});
-
-      final roomId = (data['room_id'] ?? data['roomId'])?.toString();
-      final slots = (data['slots_booked'] ?? 1) as int;
-
-      // Only decrement if the slot was previously locked
-      if (roomId != null && roomId.isNotEmpty && oldStatus == 'confirmed') {
+      final roomId = (d['room_id'] ?? d['roomId'])?.toString();
+      final slots = (d['slots_booked'] ?? 1) as int;
+      if (roomId != null && roomId.isNotEmpty && old == 'confirmed') {
         await _decrementRoomSlots(roomId, slots);
       }
-
       if (ctx.mounted) Navigator.pop(ctx);
     } catch (e) {
       if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx).showSnackBar(
-          SnackBar(
-              content: Text('Error: $e'),
-              backgroundColor: _kRed,
-              behavior: SnackBarBehavior.floating),
-        );
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: _kRed,
+            behavior: SnackBarBehavior.floating));
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final d = data;
-    final ts = d['booked_at'];
-    final date = ts is Timestamp ? _fmtDate(ts.toDate()) : '—';
-    final status = (d['status'] ?? 'booked') as String;
-    final amount = (d['amount'] ?? 0).toDouble();
-    final isWide = MediaQuery.of(context).size.width > 700;
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      // Live stream — updates the whole sheet whenever a payment comes in
+      stream: _db
+          .collection('bookings')
+          .doc(widget.docId)
+          .snapshots()
+          .cast<DocumentSnapshot<Map<String, dynamic>>>(),
+      builder: (context, snap) {
+        // Fall back to initial data while the stream warms up
+        final d = snap.data?.data() ?? widget.initialData;
+        final ts = d['booked_at'];
+        final date = ts is Timestamp ? _fmtDate(ts.toDate()) : '—';
+        final status = (d['status'] ?? 'booked') as String;
+        final amount = (d['amount'] ?? 0).toDouble();
+        final isWide = MediaQuery.of(context).size.width > 700;
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.92,
-      maxChildSize: 0.97,
-      minChildSize: 0.5,
-      builder: (_, ctrl) => Container(
-        decoration: const BoxDecoration(
-          color: _kCard,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: Column(children: [
-          // Handle
-          Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.symmetric(vertical: 10),
-            decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2)),
-          ),
-          // Sheet header
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 4, 12, 16),
+        return DraggableScrollableSheet(
+          initialChildSize: 0.92,
+          maxChildSize: 0.97,
+          minChildSize: 0.5,
+          builder: (_, ctrl) => Container(
             decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                  colors: [_kPrimary, _kAccent],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight),
+              color: _kCard,
               borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
             ),
-            child: Row(children: [
-              _Avatar(name: d['name'] ?? '?', status: status, size: 42),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(d['name'] ?? '—',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white)),
-                      Text(d['email'] ?? '',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white.withOpacity(0.85))),
-                    ]),
+            child: Column(children: [
+              // Handle
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2)),
               ),
-              _StatusBadge(status: status, large: true),
-              const SizedBox(width: 4),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close, color: Colors.white, size: 20),
+              // Header
+              Container(
+                padding: const EdgeInsets.fromLTRB(20, 4, 12, 16),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                      colors: [_kPrimary, _kAccent],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                ),
+                child: Row(children: [
+                  _Avatar(name: d['name'] ?? '?', status: status, size: 42),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        Text(d['name'] ?? '—',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white)),
+                        Text(d['email'] ?? '',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withOpacity(0.85))),
+                      ])),
+                  _StatusBadge(status: status, large: true),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon:
+                        const Icon(Icons.close, color: Colors.white, size: 20),
+                  ),
+                ]),
+              ),
+              // Body
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: ctrl,
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Summary card
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                                colors: [
+                                  _kPrimary.withOpacity(0.06),
+                                  _kAccent.withOpacity(0.04),
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight),
+                            borderRadius: BorderRadius.circular(16),
+                            border:
+                                Border.all(color: _kPrimary.withOpacity(0.15)),
+                          ),
+                          child: isWide
+                              ? Row(children: [
+                                  Expanded(
+                                      child: _SumCell(
+                                          'Hostel', d['hostel_name'] ?? '—')),
+                                  Expanded(
+                                      child: _SumCell(
+                                          'Room', d['room_number'] ?? '—')),
+                                  Expanded(
+                                      child: _SumCell('Slots',
+                                          '${d['slots_booked'] ?? 1}')),
+                                  Expanded(
+                                      child: _SumCell(
+                                          'Amount',
+                                          amount > 0
+                                              ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
+                                              : '—',
+                                          valueColor: _kGreen)),
+                                ])
+                              : Wrap(spacing: 16, runSpacing: 12, children: [
+                                  _SumCell('Hostel', d['hostel_name'] ?? '—'),
+                                  _SumCell('Room', d['room_number'] ?? '—'),
+                                  _SumCell(
+                                      'Slots', '${d['slots_booked'] ?? 1}'),
+                                  _SumCell(
+                                      'Amount',
+                                      amount > 0
+                                          ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
+                                          : '—',
+                                      valueColor: _kGreen),
+                                ]),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // ── Personal Info ───────────────────────────────────────
+                        _DetailSection(title: 'Personal Info', children: [
+                          _DetailTile(Icons.person_rounded, 'Full Name',
+                              d['name'] ?? '—'),
+                          _DetailTile(
+                              Icons.email_rounded, 'Email', d['email'] ?? '—',
+                              copyable: true),
+                          _DetailTile(
+                              Icons.phone_rounded, 'Phone', d['phone'] ?? '—',
+                              copyable: true),
+                        ]),
+                        const SizedBox(height: 16),
+
+                        // ── Academic Info ───────────────────────────────────────
+                        _DetailSection(title: 'Academic Info', children: [
+                          _DetailTile(Icons.school_rounded, 'School',
+                              d['school'] ?? '—'),
+                          _DetailTile(
+                              Icons.badge_rounded,
+                              'School ID',
+                              d['school_id']?.toString().isNotEmpty == true
+                                  ? d['school_id']
+                                  : '—'),
+                          _DetailTile(Icons.person_off_rounded, 'Is Student',
+                              d['not_student'] == true ? 'No' : 'Yes'),
+                        ]),
+                        const SizedBox(height: 16),
+
+                        // ── Payment Info ────────────────────────────────────────
+                        _DetailSection(title: 'Payment Info', children: [
+                          _DetailTile(Icons.payment_rounded, 'Method',
+                              d['payment_method'] ?? d['momo_type'] ?? '—'),
+                          _DetailTile(Icons.phone_android_rounded,
+                              'MoMo Number', d['momo_number'] ?? '—',
+                              copyable: true),
+                          _DetailTile(Icons.receipt_rounded, 'Reference',
+                              d['payment_reference'] ?? '—',
+                              copyable: true),
+                          _DetailTile(
+                              Icons.percent_rounded,
+                              'Commission Rate',
+                              d['commission_rate'] != null
+                                  ? '${(d['commission_rate'] as num).toStringAsFixed(0)}%'
+                                  : '—'),
+                          _DetailTile(
+                              Icons.savings_rounded,
+                              'Total Amount',
+                              d['amount'] != null
+                                  ? 'GHS ${NumberFormat('#,##0.00').format((d['amount'] as num).toDouble())}'
+                                  : '—'),
+                          _DetailTile(
+                              Icons.check_rounded,
+                              'Amount Paid',
+                              d['amount_paid'] != null
+                                  ? 'GHS ${NumberFormat('#,##0.00').format((d['amount_paid'] as num).toDouble())}'
+                                  : 'GHS 0.00'),
+                          _DetailTile(
+                              Icons.pending_rounded,
+                              'Balance Remaining',
+                              d['balance'] != null
+                                  ? 'GHS ${NumberFormat('#,##0.00').format((d['balance'] as num).toDouble())}'
+                                  : '—'),
+                          _DetailTile(
+                              Icons.account_balance_wallet_rounded,
+                              'Deposit Amount',
+                              d['deposit_amount'] != null
+                                  ? 'GHS ${NumberFormat('#,##0.00').format((d['deposit_amount'] as num).toDouble())}'
+                                  : '—'),
+                          // ── Dual-status tiles ──────────────────────────────
+                          _DetailTile(Icons.paid_rounded, 'Payment Status',
+                              d['payment_status'] ?? '—'),
+                          _DetailTile(Icons.toggle_on_rounded, 'Booking Status',
+                              d['status'] ?? '—'),
+                        ]),
+                        const SizedBox(height: 12),
+
+                        // ── Payment progress bar (live) ─────────────────────────
+                        if (amount > 0)
+                          _PaymentProgressBar(
+                            total: amount,
+                            paid: (d['amount_paid'] as num? ?? 0).toDouble(),
+                            paymentCount:
+                                (d['payment_count'] as num? ?? 0).toInt(),
+                            paymentStatus:
+                                d['payment_status']?.toString() ?? '',
+                          ),
+                        const SizedBox(height: 16),
+
+                        // ── Booking Info ────────────────────────────────────────
+                        _DetailSection(title: 'Booking Info', children: [
+                          _DetailTile(
+                              Icons.calendar_today_rounded, 'Booked At', date),
+                          if ((d['notes'] ?? '').toString().isNotEmpty)
+                            _DetailTile(
+                                Icons.notes_rounded, 'Notes', d['notes']),
+                          _DetailTile(Icons.fingerprint_rounded, 'Booking ID',
+                              widget.docId,
+                              copyable: true, small: true),
+                        ]),
+                        const SizedBox(height: 16),
+
+                        // ── Payment timeline ────────────────────────────────────
+                        _PaymentTimeline(docId: widget.docId),
+                        const SizedBox(height: 24),
+
+                        // ── Quick-action buttons ────────────────────────────────
+                        Row(children: [
+                          if (status != 'confirmed')
+                            Expanded(
+                                child: _BigActionBtn(
+                              label: 'Confirm',
+                              icon: Icons.check_circle_rounded,
+                              color: _kGreen,
+                              onTap: () => _handleConfirm(context, d),
+                            )),
+                          if (status != 'confirmed' && status != 'declined')
+                            const SizedBox(width: 10),
+                          if (status != 'declined')
+                            Expanded(
+                                child: _BigActionBtn(
+                              label: 'Decline',
+                              icon: Icons.cancel_rounded,
+                              color: _kRed,
+                              onTap: () => _handleDecline(context, d),
+                            )),
+                        ]),
+                      ]),
+                ),
               ),
             ]),
           ),
-          // Body
-          Expanded(
-            child: SingleChildScrollView(
-              controller: ctrl,
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Summary card
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                            colors: [
-                              _kPrimary.withOpacity(0.06),
-                              _kAccent.withOpacity(0.04)
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: _kPrimary.withOpacity(0.15)),
-                      ),
-                      child: isWide
-                          ? Row(children: [
-                              Expanded(
-                                  child: _SumCell(
-                                      'Hostel', d['hostel_name'] ?? '—')),
-                              Expanded(
-                                  child: _SumCell(
-                                      'Room', d['room_number'] ?? '—')),
-                              Expanded(
-                                  child: _SumCell(
-                                      'Slots', '${d['slots_booked'] ?? 1}')),
-                              Expanded(
-                                child: _SumCell(
-                                    'Amount',
-                                    amount > 0
-                                        ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
-                                        : '—',
-                                    valueColor: _kGreen),
-                              ),
-                            ])
-                          : Wrap(
-                              spacing: 16,
-                              runSpacing: 12,
-                              children: [
-                                _SumCell('Hostel', d['hostel_name'] ?? '—'),
-                                _SumCell('Room', d['room_number'] ?? '—'),
-                                _SumCell('Slots', '${d['slots_booked'] ?? 1}'),
-                                _SumCell(
-                                    'Amount',
-                                    amount > 0
-                                        ? 'GHS ${NumberFormat('#,##0.00').format(amount)}'
-                                        : '—',
-                                    valueColor: _kGreen),
-                              ],
-                            ),
-                    ),
-                    const SizedBox(height: 20),
-                    // Sections
-                    _DetailSection(title: 'Personal Info', children: [
-                      _DetailTile(
-                          Icons.person_rounded, 'Full Name', d['name'] ?? '—'),
-                      _DetailTile(
-                          Icons.email_rounded, 'Email', d['email'] ?? '—',
-                          copyable: true),
-                      _DetailTile(
-                          Icons.phone_rounded, 'Phone', d['phone'] ?? '—',
-                          copyable: true),
-                    ]),
-                    const SizedBox(height: 16),
-                    _DetailSection(title: 'Academic Info', children: [
-                      _DetailTile(
-                          Icons.school_rounded, 'School', d['school'] ?? '—'),
-                      _DetailTile(
-                          Icons.badge_rounded,
-                          'School ID',
-                          d['school_id']?.toString().isNotEmpty == true
-                              ? d['school_id']
-                              : '—'),
-                      _DetailTile(Icons.person_off_rounded, 'Is Student',
-                          d['not_student'] == true ? 'No' : 'Yes'),
-                    ]),
-                    const SizedBox(height: 16),
-                    _DetailSection(title: 'Payment Info', children: [
-                      _DetailTile(Icons.payment_rounded, 'Method',
-                          d['payment_method'] ?? d['momo_type'] ?? '—'),
-                      _DetailTile(Icons.phone_android_rounded, 'MoMo Number',
-                          d['momo_number'] ?? '—',
-                          copyable: true),
-                      _DetailTile(Icons.receipt_rounded, 'Reference',
-                          d['payment_reference'] ?? '—',
-                          copyable: true),
-                      _DetailTile(Icons.paid_rounded, 'Payment Status',
-                          d['payment_status'] ?? '—'),
-                      _DetailTile(
-                          Icons.savings_rounded,
-                          'Total Amount',
-                          d['amount'] != null
-                              ? 'GHS ${NumberFormat('#,##0.00').format((d['amount'] as num).toDouble())}'
-                              : '—'),
-                      _DetailTile(
-                          Icons.check_rounded,
-                          'Amount Paid',
-                          d['amount_paid'] != null
-                              ? 'GHS ${NumberFormat('#,##0.00').format((d['amount_paid'] as num).toDouble())}'
-                              : 'GHS 0.00'),
-                      _DetailTile(
-                          Icons.pending_rounded,
-                          'Balance Remaining',
-                          d['balance'] != null
-                              ? 'GHS ${NumberFormat('#,##0.00').format((d['balance'] as num).toDouble())}'
-                              : '—'),
-                      _DetailTile(
-                          Icons.account_balance_wallet_rounded,
-                          'Deposit Amount',
-                          d['deposit_amount'] != null
-                              ? 'GHS ${NumberFormat('#,##0.00').format((d['deposit_amount'] as num).toDouble())}'
-                              : '—'),
-                    ]),
-                    const SizedBox(height: 16),
-                    _DetailSection(title: 'Booking Info', children: [
-                      _DetailTile(
-                          Icons.calendar_today_rounded, 'Booked At', date),
-                      if ((d['notes'] ?? '').toString().isNotEmpty)
-                        _DetailTile(Icons.notes_rounded, 'Notes', d['notes']),
-                      _DetailTile(
-                          Icons.fingerprint_rounded, 'Booking ID', docId,
-                          copyable: true, small: true),
-                    ]),
+        );
+      },
+    );
+  }
+}
 
-                    const SizedBox(height: 16),
-                    _PaymentHistorySection(docId: docId),
-                    const SizedBox(height: 24),
+// ══════════════════════════════════════════════════════════════════════════════
+// PAYMENT PROGRESS BAR
+// ══════════════════════════════════════════════════════════════════════════════
+class _PaymentProgressBar extends StatelessWidget {
+  final double total;
+  final double paid;
+  final int paymentCount;
+  final String paymentStatus;
+  const _PaymentProgressBar({
+    required this.total,
+    required this.paid,
+    required this.paymentCount,
+    required this.paymentStatus,
+  });
 
-                    // Quick action buttons — now with proper room slot management
-                    Row(children: [
-                      if (status != 'confirmed')
-                        Expanded(
-                          child: _BigActionBtn(
-                            label: 'Confirm',
-                            icon: Icons.check_circle_rounded,
-                            color: _kGreen,
-                            onTap: () => _handleConfirm(context),
-                          ),
-                        ),
-                      if (status != 'confirmed' && status != 'declined')
-                        const SizedBox(width: 10),
-                      if (status != 'declined')
-                        Expanded(
-                          child: _BigActionBtn(
-                            label: 'Decline',
-                            icon: Icons.cancel_rounded,
-                            color: _kRed,
-                            onTap: () => _handleDecline(context),
-                          ),
-                        ),
-                    ]),
-                  ]),
-            ),
+  @override
+  Widget build(BuildContext context) {
+    final progress = total > 0 ? (paid / total).clamp(0.0, 1.0) : 0.0;
+    final balance = (total - paid).clamp(0.0, total);
+    final isFullyPaid = paymentStatus == 'fully_paid' || balance == 0;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _kDark,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Amount Paid',
+                  style: TextStyle(color: Colors.white54, fontSize: 11)),
+              Text(
+                'GHS ${NumberFormat('#,##0.00').format(paid)}',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900),
+              ),
+            ]),
+            if (isFullyPaid)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: _kGreen.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(50),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.check_circle_rounded, size: 12, color: _kGreen),
+                  SizedBox(width: 4),
+                  Text('Fully Paid',
+                      style: TextStyle(
+                          color: _kGreen,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700)),
+                ]),
+              )
+            else
+              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                const Text('Balance',
+                    style: TextStyle(color: Colors.white38, fontSize: 11)),
+                Text(
+                  'GHS ${NumberFormat('#,##0.00').format(balance)}',
+                  style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700),
+                ),
+              ]),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: progress,
+            minHeight: 8,
+            backgroundColor: Colors.white12,
+            valueColor:
+                AlwaysStoppedAnimation<Color>(isFullyPaid ? _kGreen : _kAccent),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(
+            '$paymentCount payment${paymentCount != 1 ? 's' : ''} made',
+            style: const TextStyle(color: Colors.white38, fontSize: 10),
+          ),
+          Text(
+            '${(progress * 100).toStringAsFixed(0)}% of GHS ${NumberFormat('#,##0.00').format(total)}',
+            style: const TextStyle(color: Colors.white38, fontSize: 10),
           ),
         ]),
+      ]),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PAYMENT TIMELINE  — replaces _PaymentHistorySection
+// Shows every installment as a vertical timeline with commission breakdown
+// ══════════════════════════════════════════════════════════════════════════════
+class _PaymentTimeline extends StatelessWidget {
+  final String docId;
+  const _PaymentTimeline({required this.docId});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _db
+          .collection('bookings')
+          .doc(docId)
+          .collection('payments')
+          .orderBy('paid_at') // ascending: oldest first = chronological
+          .snapshots(),
+      builder: (ctx, snap) {
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) return const SizedBox.shrink();
+
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Section header
+          Row(children: [
+            Container(
+                width: 3,
+                height: 14,
+                decoration: BoxDecoration(
+                    color: _kPrimary, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 8),
+            Text(
+                'Payment History  ·  ${docs.length} payment${docs.length != 1 ? 's' : ''}',
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: _kTextDark)),
+          ]),
+          const SizedBox(height: 12),
+
+          // Timeline
+          ...docs.asMap().entries.map((entry) {
+            final i = entry.key;
+            final doc = entry.value;
+            final p = doc.data() as Map<String, dynamic>;
+            final isLast = i == docs.length - 1;
+            return _TimelineEntry(data: p, index: i, isLast: isLast);
+          }),
+        ]);
+      },
+    );
+  }
+}
+
+class _TimelineEntry extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final int index;
+  final bool isLast;
+  const _TimelineEntry({
+    required this.data,
+    required this.index,
+    required this.isLast,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = data;
+    final ts = p['paid_at'];
+    final date = ts is Timestamp ? _fmtShort(ts.toDate()) : '—';
+    final amt = (p['amount'] ?? 0).toDouble();
+    final commissionTaken = (p['commission_taken'] as num?)?.toDouble() ?? 0.0;
+    final landlordRec = (p['landlord_received'] as num?)?.toDouble() ?? 0.0;
+    final method = (p['method'] ?? '').toString().toUpperCase();
+    final note = (p['note'] ?? '').toString();
+    final status = (p['status'] ?? '').toString();
+    final payNum = (p['payment_number'] as num?)?.toInt() ?? (index + 1);
+    final isTest = p['is_test'] == true;
+    final isFirst = p['is_first_payment'] == true;
+    final isFinal = p['is_final_payment'] == true;
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Left: dot + line ──────────────────────────────────────────────
+          SizedBox(
+            width: 32,
+            child: Column(
+              children: [
+                // Dot
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: status == 'paid'
+                        ? _kGreen.withOpacity(0.15)
+                        : _kOrange.withOpacity(0.15),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: status == 'paid' ? _kGreen : _kOrange,
+                      width: 2,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '$payNum',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: status == 'paid' ? _kGreen : _kOrange),
+                    ),
+                  ),
+                ),
+                // Connecting line
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _kBorder,
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+
+          // ── Right: card ───────────────────────────────────────────────────
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: _kSurface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _kBorder),
+                ),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // ── Top row: label + badges + amount ─────────────────────
+                      Row(children: [
+                        Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Expanded(
+                                    child: Text(
+                                      note.isNotEmpty
+                                          ? note
+                                          : 'Payment #$payNum',
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: _kTextDark),
+                                    ),
+                                  ),
+                                  if (isTest) _Badge('TEST', _kOrange),
+                                  if (isFirst) _Badge('1st', _kBlue),
+                                  if (isFinal) _Badge('Final', _kGreen),
+                                ]),
+                                const SizedBox(height: 3),
+                                Text(
+                                  method.isNotEmpty ? '$method · $date' : date,
+                                  style: const TextStyle(
+                                      fontSize: 11, color: _kTextLight),
+                                ),
+                                if (status.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: status == 'paid'
+                                          ? _kGreenBg
+                                          : _kOrangeBg,
+                                      borderRadius: BorderRadius.circular(50),
+                                    ),
+                                    child: Text(
+                                      status.toUpperCase(),
+                                      style: TextStyle(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w800,
+                                          color: status == 'paid'
+                                              ? _kGreen
+                                              : _kOrange),
+                                    ),
+                                  ),
+                                ],
+                              ]),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          'GHS ${NumberFormat('#,##0.00').format(amt)}',
+                          style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              color: _kGreen),
+                        ),
+                      ]),
+
+                      // ── Commission breakdown ──────────────────────────────────
+                      if (commissionTaken > 0 || landlordRec > 0) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 9),
+                          decoration: BoxDecoration(
+                            color: _kPrimary.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(10),
+                            border:
+                                Border.all(color: _kPrimary.withOpacity(0.12)),
+                          ),
+                          child: Row(children: [
+                            _CommissionCell(
+                              icon: Icons.account_balance_rounded,
+                              label: 'Platform commission',
+                              value:
+                                  'GHS ${NumberFormat('#,##0.00').format(commissionTaken)}',
+                              color: _kPrimary,
+                            ),
+                            Container(
+                              width: 1,
+                              height: 32,
+                              margin:
+                                  const EdgeInsets.symmetric(horizontal: 12),
+                              color: _kBorder,
+                            ),
+                            _CommissionCell(
+                              icon: Icons.home_work_rounded,
+                              label: 'Landlord received',
+                              value:
+                                  'GHS ${NumberFormat('#,##0.00').format(landlordRec)}',
+                              color: _kBlue,
+                            ),
+                          ]),
+                        ),
+                      ],
+                    ]),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
+// Small inline badge used inside timeline entries
+class _Badge extends StatelessWidget {
+  final String text;
+  final Color color;
+  const _Badge(this.text, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(left: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(50),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 9, fontWeight: FontWeight.w800, color: color)),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMMISSION CELL
+// ══════════════════════════════════════════════════════════════════════════════
+class _CommissionCell extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+  const _CommissionCell({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+        child: Row(children: [
+          Icon(icon, size: 13, color: color.withOpacity(0.7)),
+          const SizedBox(width: 6),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 9,
+                    color: color.withOpacity(0.7),
+                    fontWeight: FontWeight.w500)),
+            const SizedBox(height: 1),
+            Text(value,
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w800, color: color)),
+          ]),
+        ]),
+      );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SHARED DETAIL-SHEET WIDGETS
+// ══════════════════════════════════════════════════════════════════════════════
 class _SumCell extends StatelessWidget {
   final String label;
   final String value;
@@ -1464,9 +1824,8 @@ class _BigActionBtn extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// HELPERS — Avatar, StatusBadge, etc.
+// HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
-
 class _Avatar extends StatelessWidget {
   final String name;
   final String status;
@@ -1519,6 +1878,7 @@ class _StatusBadge extends StatelessWidget {
             Icons.check_circle_rounded
           ),
         'declined' => (_kRed, _kRedBg, 'Declined', Icons.cancel_rounded),
+        'cancelled' => (_kRed, _kRedBg, 'Cancelled', Icons.cancel_rounded),
         _ => (_kOrange, _kOrangeBg, 'Pending', Icons.schedule_rounded),
       };
 
@@ -1666,25 +2026,25 @@ class _SortMenu extends StatelessWidget {
         }
       },
       itemBuilder: (_) => _options.map((o) {
-        final isSelected = o.$1 == current;
+        final sel = o.$1 == current;
         return PopupMenuItem(
           value: o.$1,
           height: 38,
           child: Row(children: [
             Icon(
-                isSelected
+                sel
                     ? (asc
                         ? Icons.arrow_upward_rounded
                         : Icons.arrow_downward_rounded)
                     : Icons.sort_rounded,
                 size: 14,
-                color: isSelected ? _kPrimary : _kTextLight),
+                color: sel ? _kPrimary : _kTextLight),
             const SizedBox(width: 10),
             Text(o.$2,
                 style: TextStyle(
                     fontSize: 13,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: isSelected ? _kPrimary : _kTextDark)),
+                    fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                    color: sel ? _kPrimary : _kTextDark)),
           ]),
         );
       }).toList(),
@@ -1722,7 +2082,7 @@ class _SmallActionBtn extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// LIVE PULSE indicator
+// LIVE PULSE
 // ══════════════════════════════════════════════════════════════════════════════
 class _LivePulse extends StatefulWidget {
   @override
@@ -1783,12 +2143,11 @@ class _ConfirmDialog extends StatelessWidget {
   final String message;
   final String confirmLabel;
   final Color confirmColor;
-  const _ConfirmDialog({
-    required this.title,
-    required this.message,
-    required this.confirmLabel,
-    required this.confirmColor,
-  });
+  const _ConfirmDialog(
+      {required this.title,
+      required this.message,
+      required this.confirmLabel,
+      required this.confirmColor});
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -1856,9 +2215,8 @@ class _ConfirmDialog extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// LOADING / EMPTY / ERROR states
+// LOADING / EMPTY / ERROR
 // ══════════════════════════════════════════════════════════════════════════════
-
 class _LoadingGrid extends StatelessWidget {
   const _LoadingGrid();
   @override
@@ -1988,111 +2346,6 @@ class _ErrorBox extends StatelessWidget {
               style: const TextStyle(color: _kTextMid, fontSize: 13)),
         ]),
       ),
-    );
-  }
-}
-
-class _PaymentHistorySection extends StatelessWidget {
-  final String docId;
-  const _PaymentHistorySection({required this.docId});
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _db
-          .collection('bookings')
-          .doc(docId)
-          .collection('payments')
-          .orderBy('paid_at', descending: true)
-          .snapshots(),
-      builder: (ctx, snap) {
-        final docs = snap.data?.docs ?? [];
-        if (docs.isEmpty) return const SizedBox.shrink();
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(
-                width: 3,
-                height: 14,
-                decoration: BoxDecoration(
-                    color: _kPrimary, borderRadius: BorderRadius.circular(2))),
-            const SizedBox(width: 8),
-            const Text('Payment History',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: _kTextDark)),
-          ]),
-          const SizedBox(height: 10),
-          ...docs.map((doc) {
-            final p = doc.data() as Map<String, dynamic>;
-            final ts = p['paid_at'];
-            final date = ts is Timestamp ? _fmtShort(ts.toDate()) : '—';
-            final amt = (p['amount'] ?? 0).toDouble();
-            final method = (p['method'] ?? '').toString().toUpperCase();
-            final note = p['note'] ?? '';
-            final status = p['status'] ?? '';
-            return Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _kSurface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _kBorder),
-              ),
-              child: Row(children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: _kGreen.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.payments_rounded,
-                      size: 16, color: _kGreen),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(note.isNotEmpty ? note : 'Payment',
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: _kTextDark)),
-                        const SizedBox(height: 2),
-                        Text('$method · $date',
-                            style: const TextStyle(
-                                fontSize: 11, color: _kTextLight)),
-                        if (status.isNotEmpty)
-                          Container(
-                            margin: const EdgeInsets.only(top: 4),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: status == 'paid' ? _kGreenBg : _kOrangeBg,
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                            child: Text(status,
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                    color:
-                                        status == 'paid' ? _kGreen : _kOrange)),
-                          ),
-                      ]),
-                ),
-                Text(
-                  'GHS ${NumberFormat('#,##0.00').format(amt)}',
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      color: _kGreen),
-                ),
-              ]),
-            );
-          }),
-        ]);
-      },
     );
   }
 }

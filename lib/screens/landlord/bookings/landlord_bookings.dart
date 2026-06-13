@@ -1,4 +1,7 @@
 // lib/screens/landlord/bookings/landlord_bookings.dart
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║ LANDLORD BOOKINGS — Live, Advanced, Real-time View                      ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -25,6 +28,9 @@ class _C {
   static const redLight = Color(0xFFFEE2E2);
   static const blue = Color(0xFF3B82F6);
   static const blueLight = Color(0xFFDBEAFE);
+  static const dark = Color(0xFF111827);
+  static const teal = Color(0xFF0D9488);
+  static const tealLight = Color(0xFFCCFBF1);
 }
 
 FirebaseFirestore get _db => FirebaseFirestore.instance;
@@ -92,7 +98,6 @@ class _LandlordBookingsScreenState extends State<LandlordBookingsScreen>
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
 
-    // DEBUG
     debugPrint('🔑 landlordId: "${widget.landlordId}"');
     widget.service.getHostels(widget.landlordId).then((hostels) {
       debugPrint('🏠 Hostels found: ${hostels.length}');
@@ -244,9 +249,6 @@ class _TopBar extends StatelessWidget {
     final cancelled = allBookings
         .where((b) => b.status == 'cancelled' || b.status == 'declined')
         .length;
-    // Revenue: sum of confirmed bookings that carry an amount
-    final revenue =
-        allBookings.fold<double>(0.0, (sum, b) => sum + b.amountPaid);
 
     return Container(
       decoration: const BoxDecoration(
@@ -311,8 +313,6 @@ class _TopBar extends StatelessWidget {
                   icon: Icons.cancel_rounded,
                   color: _C.red,
                   bg: _C.redLight),
-              const SizedBox(width: 10),
-              // Revenue chip — mirrors admin
             ]),
           ),
           const SizedBox(height: 14),
@@ -572,7 +572,6 @@ class _TableRowState extends State<_TableRow>
                               fontSize: 11, color: _C.textMuted)),
                   ]),
             ),
-            // Amount column — mirrors admin exactly
             Expanded(
               flex: 2,
               child: Column(
@@ -603,7 +602,6 @@ class _TableRowState extends State<_TableRow>
                 ],
               ),
             ),
-
             Expanded(flex: 2, child: _StatusBadge(status: b.status)),
             Expanded(
               flex: 2,
@@ -842,14 +840,13 @@ class _ActionBtn extends StatelessWidget {
       });
 
       if (booking.roomId.isNotEmpty) {
-        if (newStatus == 'confirmed' && oldStatus != 'confirmed') {
-          await _incrementRoomSlots(booking.roomId, booking.slotsBooked);
-        } else if ((newStatus == 'cancelled' || newStatus == 'declined') &&
+        if ((newStatus == 'cancelled' ||
+                newStatus == 'declined' ||
+                newStatus == 'booked') &&
             oldStatus == 'confirmed') {
           await _decrementRoomSlots(booking.roomId, booking.slotsBooked);
-        } else if (newStatus == 'booked' && oldStatus == 'confirmed') {
-          await _decrementRoomSlots(booking.roomId, booking.slotsBooked);
         }
+        // Never increment — slots already booked when student paid
       }
 
       if (ctx.mounted) _snack(ctx, _msg(newStatus), _color(newStatus));
@@ -874,6 +871,17 @@ class _ActionBtn extends StatelessWidget {
       if (booking.roomId.isNotEmpty && booking.isConfirmed) {
         await _decrementRoomSlots(booking.roomId, booking.slotsBooked);
       }
+
+      // Delete payments subcollection first to avoid ghost documents
+      final paymentsSnap = await _db
+          .collection('bookings')
+          .doc(booking.id)
+          .collection('payments')
+          .get();
+      for (final doc in paymentsSnap.docs) {
+        await doc.reference.delete();
+      }
+
       await _db.collection('bookings').doc(booking.id).delete();
       if (ctx.mounted) _snack(ctx, 'Booking deleted', _C.red);
     } catch (e) {
@@ -967,7 +975,7 @@ class _ActionBtn extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// DETAIL BOTTOM SHEET — mirrors admin exactly
+// DETAIL BOTTOM SHEET — Live StreamBuilder, matches admin bookings_pane.dart
 // ══════════════════════════════════════════════════════════════════════════════
 
 void _showDetail(BuildContext ctx, Booking b) {
@@ -975,25 +983,26 @@ void _showDetail(BuildContext ctx, Booking b) {
     context: ctx,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _DetailSheet(booking: b),
+    builder: (_) => _DetailSheet(bookingId: b.id),
   );
 }
 
-class _DetailSheet extends StatelessWidget {
-  const _DetailSheet({required this.booking});
-  final Booking booking;
+/// Live detail sheet — streams the booking doc so any payment update
+/// (progress bar, balance, timeline) is reflected without closing/reopening.
+class _DetailSheet extends StatefulWidget {
+  const _DetailSheet({required this.bookingId});
+  final String bookingId;
 
-  Future<void> _confirm(BuildContext ctx) async {
+  @override
+  State<_DetailSheet> createState() => _DetailSheetState();
+}
+
+class _DetailSheetState extends State<_DetailSheet> {
+  Future<void> _confirm(BuildContext ctx, Booking booking) async {
     try {
-      final snap = await _db.collection('bookings').doc(booking.id).get();
-      final oldStatus = (snap.data()?['status'] ?? 'booked') as String;
-
       await _db.collection('bookings').doc(booking.id).update(
           {'status': 'confirmed', 'updated_at': FieldValue.serverTimestamp()});
-
-      if (booking.roomId.isNotEmpty && oldStatus != 'confirmed') {
-        await _incrementRoomSlots(booking.roomId, booking.slotsBooked);
-      }
+      // No slot change — slots already incremented when student paid
       if (ctx.mounted) Navigator.pop(ctx);
     } catch (e) {
       if (ctx.mounted) {
@@ -1005,7 +1014,7 @@ class _DetailSheet extends StatelessWidget {
     }
   }
 
-  Future<void> _cancel(BuildContext ctx) async {
+  Future<void> _cancel(BuildContext ctx, Booking booking) async {
     try {
       final snap = await _db.collection('bookings').doc(booking.id).get();
       final oldStatus = (snap.data()?['status'] ?? 'booked') as String;
@@ -1029,224 +1038,694 @@ class _DetailSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final b = booking;
-    final isWide = MediaQuery.of(context).size.width > 700;
+    return StreamBuilder<DocumentSnapshot>(
+      stream: _db.collection('bookings').doc(widget.bookingId).snapshots(),
+      builder: (ctx, snap) {
+        if (!snap.hasData || !snap.data!.exists) {
+          return const Center(
+              child: CircularProgressIndicator(color: _C.green));
+        }
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.92,
-      maxChildSize: 0.97,
-      minChildSize: 0.5,
-      builder: (_, ctrl) => Container(
-        decoration: const BoxDecoration(
-          color: _C.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: Column(children: [
-          // Drag handle
-          Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.symmetric(vertical: 10),
-            decoration: BoxDecoration(
-                color: _C.border, borderRadius: BorderRadius.circular(2)),
-          ),
-          // Gradient header
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 4, 12, 16),
+        final data = snap.data!.data() as Map<String, dynamic>;
+        // Reconstruct a Booking from live data so every field reflects latest
+        final b = Booking.fromJson(widget.bookingId, data);
+        final isWide = MediaQuery.of(context).size.width > 700;
+
+        return DraggableScrollableSheet(
+          initialChildSize: 0.92,
+          maxChildSize: 0.97,
+          minChildSize: 0.5,
+          builder: (_, ctrl) => Container(
             decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                  colors: [Color(0xFF1B4332), _C.green],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight),
+              color: _C.surface,
               borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
             ),
-            child: Row(children: [
-              _Avatar(name: b.name, status: b.status, size: 42),
-              const SizedBox(width: 12),
+            child: Column(children: [
+              // Drag handle
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                    color: _C.border, borderRadius: BorderRadius.circular(2)),
+              ),
+              // Gradient header
+              Container(
+                padding: const EdgeInsets.fromLTRB(20, 4, 12, 16),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                      colors: [Color(0xFF1B4332), _C.green],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                ),
+                child: Row(children: [
+                  _Avatar(name: b.name, status: b.status, size: 42),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(b.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white)),
+                          Text(b.email,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white.withOpacity(0.85))),
+                        ]),
+                  ),
+                  _StatusBadge(status: b.status, large: true),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon:
+                        const Icon(Icons.close, color: Colors.white, size: 20),
+                  ),
+                ]),
+              ),
+              // Scrollable body
               Expanded(
-                child: Column(
+                child: SingleChildScrollView(
+                  controller: ctrl,
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(b.name,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white)),
-                      Text(b.email,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white.withOpacity(0.85))),
-                    ]),
-              ),
-              _StatusBadge(status: b.status, large: true),
-              const SizedBox(width: 4),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                      // ── Summary card ─────────────────────────────────
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(colors: [
+                            _C.green.withOpacity(0.06),
+                            _C.greenAccent.withOpacity(0.04),
+                          ]),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: _C.green.withOpacity(0.15)),
+                        ),
+                        child: isWide
+                            ? Row(children: [
+                                Expanded(
+                                    child: _SumCell('Hostel', b.hostelName)),
+                                Expanded(child: _SumCell('Room', b.roomNumber)),
+                                Expanded(
+                                    child:
+                                        _SumCell('Slots', '${b.slotsBooked}')),
+                                Expanded(
+                                  child: _SumCell(
+                                    'Amount',
+                                    b.amount > 0
+                                        ? 'GHS ${NumberFormat('#,##0.00').format(b.amount)}'
+                                        : '—',
+                                    valueColor: b.amount > 0 ? _C.green : null,
+                                  ),
+                                ),
+                              ])
+                            : Wrap(
+                                spacing: 16,
+                                runSpacing: 12,
+                                children: [
+                                  _SumCell('Hostel', b.hostelName),
+                                  _SumCell('Room', b.roomNumber),
+                                  _SumCell('Slots', '${b.slotsBooked}'),
+                                  _SumCell(
+                                    'Amount',
+                                    b.amount > 0
+                                        ? 'GHS ${NumberFormat('#,##0.00').format(b.amount)}'
+                                        : '—',
+                                    valueColor: b.amount > 0 ? _C.green : null,
+                                  ),
+                                ],
+                              ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // ── Payment Progress Bar ──────────────────────────
+                      if (b.amount > 0)
+                        _PaymentProgressBar(
+                          total: b.amount,
+                          paid: b.amountPaid,
+                          balance: b.balance,
+                          paymentStatus: b.paymentStatus,
+                        ),
+                      if (b.amount > 0) const SizedBox(height: 16),
+
+                      // ── Personal Info ─────────────────────────────────
+                      _Section(title: 'Personal Info', children: [
+                        _Tile(Icons.person_rounded, 'Full Name', b.name),
+                        _Tile(Icons.email_rounded, 'Email', b.email,
+                            copyable: true),
+                        _Tile(Icons.phone_rounded, 'Phone',
+                            b.phone.isNotEmpty ? b.phone : '—',
+                            copyable: true),
+                      ]),
+                      const SizedBox(height: 16),
+
+                      // ── Academic Info ─────────────────────────────────
+                      _Section(title: 'Academic Info', children: [
+                        _Tile(Icons.school_rounded, 'School',
+                            b.school.isNotEmpty ? b.school : '—'),
+                        _Tile(Icons.badge_rounded, 'School ID',
+                            b.schoolId.isNotEmpty ? b.schoolId : '—'),
+                        _Tile(Icons.person_off_rounded, 'Is Student',
+                            b.notStudent ? 'No' : 'Yes'),
+                      ]),
+                      const SizedBox(height: 16),
+
+                      // ── Payment Info ──────────────────────────────────
+                      _Section(title: 'Payment Info', children: [
+                        _Tile(Icons.payment_rounded, 'Method',
+                            b.paymentMethod.isNotEmpty ? b.paymentMethod : '—'),
+                        _Tile(Icons.phone_android_rounded, 'MoMo Number',
+                            b.momoNumber.isNotEmpty ? b.momoNumber : '—',
+                            copyable: true),
+                        _Tile(
+                            Icons.receipt_rounded,
+                            'Reference',
+                            b.paymentReference.isNotEmpty
+                                ? b.paymentReference
+                                : '—',
+                            copyable: true),
+                        // payment_status (from payments subcollection)
+                        _Tile(Icons.credit_score_rounded, 'Payment Status',
+                            b.paymentStatus.isNotEmpty ? b.paymentStatus : '—'),
+                        // booking status (workflow status)
+                        _Tile(Icons.flag_rounded, 'Booking Status', b.status),
+                        // commission_rate
+                        _CommissionCell(
+                            commissionRate: data['commission_rate']),
+                        _Tile(
+                            Icons.savings_rounded,
+                            'Total Amount',
+                            b.amount > 0
+                                ? 'GHS ${NumberFormat('#,##0.00').format(b.amount)}'
+                                : '—'),
+                        _Tile(Icons.check_rounded, 'Amount Paid',
+                            'GHS ${NumberFormat('#,##0.00').format(b.amountPaid)}'),
+                        _Tile(
+                            Icons.pending_rounded,
+                            'Balance Remaining',
+                            b.balance > 0
+                                ? 'GHS ${NumberFormat('#,##0.00').format(b.balance)}'
+                                : '—'),
+                        _Tile(
+                            Icons.account_balance_wallet_rounded,
+                            'Deposit Amount',
+                            b.depositAmount > 0
+                                ? 'GHS ${NumberFormat('#,##0.00').format(b.depositAmount)}'
+                                : '—'),
+                        // payment count
+                        StreamBuilder<QuerySnapshot>(
+                          stream: _db
+                              .collection('bookings')
+                              .doc(b.id)
+                              .collection('payments')
+                              .snapshots(),
+                          builder: (_, ps) {
+                            final count = ps.data?.docs.length ?? 0;
+                            return _Tile(
+                                Icons.format_list_numbered_rounded,
+                                'Payment Count',
+                                count == 0
+                                    ? '—'
+                                    : '$count instalment${count != 1 ? 's' : ''}');
+                          },
+                        ),
+                      ]),
+                      const SizedBox(height: 16),
+
+                      // ── Booking Info ──────────────────────────────────
+                      _Section(title: 'Booking Info', children: [
+                        _Tile(Icons.calendar_today_rounded, 'Booked At',
+                            _fmtDate(b.bookedAt)),
+                        if (b.notes.isNotEmpty)
+                          _Tile(Icons.notes_rounded, 'Notes', b.notes),
+                        _Tile(Icons.fingerprint_rounded, 'Booking ID', b.id,
+                            copyable: true, small: true),
+                      ]),
+                      const SizedBox(height: 24),
+
+                      // ── Advanced Payment Timeline ─────────────────────
+                      _PaymentTimeline(
+                        bookingId: b.id,
+                        totalAmount: b.amount,
+                        commissionRate:
+                            (data['commission_rate'] ?? 0.0).toDouble(),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // ── Action buttons ────────────────────────────────
+                      Row(children: [
+                        if (!b.isConfirmed)
+                          Expanded(
+                            child: _BigBtn(
+                              label: 'Confirm',
+                              icon: Icons.check_circle_rounded,
+                              color: _C.green,
+                              onTap: () => _confirm(context, b),
+                            ),
+                          ),
+                        if (!b.isConfirmed &&
+                            b.status != 'cancelled' &&
+                            b.status != 'declined')
+                          const SizedBox(width: 10),
+                        if (b.status != 'cancelled' && b.status != 'declined')
+                          Expanded(
+                            child: _BigBtn(
+                              label: 'Cancel',
+                              icon: Icons.cancel_rounded,
+                              color: _C.red,
+                              onTap: () => _cancel(context, b),
+                            ),
+                          ),
+                      ]),
+                    ],
+                  ),
+                ),
               ),
             ]),
           ),
-          // Scrollable body
-          Expanded(
-            child: SingleChildScrollView(
-              controller: ctrl,
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Summary card — 4 cells, mirrors admin ──────────────
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(colors: [
-                        _C.green.withOpacity(0.06),
-                        _C.greenAccent.withOpacity(0.04),
-                      ]),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _C.green.withOpacity(0.15)),
-                    ),
-                    child: isWide
-                        ? Row(children: [
-                            Expanded(child: _SumCell('Hostel', b.hostelName)),
-                            Expanded(child: _SumCell('Room', b.roomNumber)),
-                            Expanded(
-                                child: _SumCell('Slots', '${b.slotsBooked}')),
-                            Expanded(
-                              child: _SumCell(
-                                'Amount',
-                                b.amount > 0
-                                    ? 'GHS ${NumberFormat('#,##0.00').format(b.amount)}'
-                                    : '—',
-                                valueColor: b.amount > 0 ? _C.green : null,
-                              ),
-                            ),
-                          ])
-                        : Wrap(
-                            spacing: 16,
-                            runSpacing: 12,
-                            children: [
-                              _SumCell('Hostel', b.hostelName),
-                              _SumCell('Room', b.roomNumber),
-                              _SumCell('Slots', '${b.slotsBooked}'),
-                              _SumCell(
-                                'Amount',
-                                b.amount > 0
-                                    ? 'GHS ${NumberFormat('#,##0.00').format(b.amount)}'
-                                    : '—',
-                                valueColor: b.amount > 0 ? _C.green : null,
-                              ),
-                            ],
-                          ),
-                  ),
-                  const SizedBox(height: 20),
+        );
+      },
+    );
+  }
+}
 
-                  // ── Personal Info ──────────────────────────────────────
-                  _Section(title: 'Personal Info', children: [
-                    _Tile(Icons.person_rounded, 'Full Name', b.name),
-                    _Tile(Icons.email_rounded, 'Email', b.email,
-                        copyable: true),
-                    _Tile(Icons.phone_rounded, 'Phone',
-                        b.phone.isNotEmpty ? b.phone : '—',
-                        copyable: true),
-                  ]),
-                  const SizedBox(height: 16),
+// ══════════════════════════════════════════════════════════════════════════════
+// PAYMENT PROGRESS BAR
+// ══════════════════════════════════════════════════════════════════════════════
 
-                  // ── Academic Info — new section matching admin ─────────
-                  _Section(title: 'Academic Info', children: [
-                    _Tile(Icons.school_rounded, 'School',
-                        b.school.isNotEmpty ? b.school : '—'),
-                    _Tile(Icons.badge_rounded, 'School ID',
-                        b.schoolId.isNotEmpty ? b.schoolId : '—'),
-                    _Tile(Icons.person_off_rounded, 'Is Student',
-                        b.notStudent ? 'No' : 'Yes'),
-                  ]),
-                  const SizedBox(height: 16),
+class _PaymentProgressBar extends StatelessWidget {
+  const _PaymentProgressBar({
+    required this.total,
+    required this.paid,
+    required this.balance,
+    required this.paymentStatus,
+  });
 
-                  // ── Payment Info — full admin parity ──────────────────
-                  // ── Payment Info — full admin parity ──────────────────
-                  _Section(title: 'Payment Info', children: [
-                    _Tile(Icons.payment_rounded, 'Method',
-                        b.paymentMethod.isNotEmpty ? b.paymentMethod : '—'),
-                    _Tile(Icons.phone_android_rounded, 'MoMo Number',
-                        b.momoNumber.isNotEmpty ? b.momoNumber : '—',
-                        copyable: true),
-                    _Tile(
-                        Icons.receipt_rounded,
-                        'Reference',
-                        b.paymentReference.isNotEmpty
-                            ? b.paymentReference
-                            : '—',
-                        copyable: true),
-                    _Tile(Icons.paid_rounded, 'Payment Status',
-                        b.paymentStatus.isNotEmpty ? b.paymentStatus : '—'),
-                    _Tile(
-                        Icons.savings_rounded,
-                        'Total Amount',
-                        b.amount > 0
-                            ? 'GHS ${NumberFormat('#,##0.00').format(b.amount)}'
-                            : '—'),
-                    _Tile(Icons.check_rounded, 'Amount Paid',
-                        'GHS ${NumberFormat('#,##0.00').format(b.amountPaid)}'),
-                    _Tile(
-                        Icons.pending_rounded,
-                        'Balance Remaining',
-                        b.balance > 0
-                            ? 'GHS ${NumberFormat('#,##0.00').format(b.balance)}'
-                            : '—'),
-                    _Tile(
-                        Icons.account_balance_wallet_rounded,
-                        'Deposit Amount',
-                        b.depositAmount > 0
-                            ? 'GHS ${NumberFormat('#,##0.00').format(b.depositAmount)}'
-                            : '—'),
-                  ]),
-                  const SizedBox(height: 16),
+  final double total, paid, balance;
+  final String paymentStatus;
 
-                  // ── Booking Info ───────────────────────────────────────
-                  _Section(title: 'Booking Info', children: [
-                    _Tile(Icons.calendar_today_rounded, 'Booked At',
-                        _fmtDate(b.bookedAt)),
-                    if (b.notes.isNotEmpty)
-                      _Tile(Icons.notes_rounded, 'Notes', b.notes),
-                    _Tile(Icons.fingerprint_rounded, 'Booking ID', b.id,
-                        copyable: true, small: true),
-                  ]),
-                  const SizedBox(height: 24),
-                  _PaymentHistorySection(bookingId: b.id),
-                  // ── Action buttons ─────────────────────────────────────
-                  Row(children: [
-                    if (!b.isConfirmed)
-                      Expanded(
-                        child: _BigBtn(
-                          label: 'Confirm',
-                          icon: Icons.check_circle_rounded,
-                          color: _C.green,
-                          onTap: () => _confirm(context),
-                        ),
-                      ),
-                    if (!b.isConfirmed &&
-                        b.status != 'cancelled' &&
-                        b.status != 'declined')
-                      const SizedBox(width: 10),
-                    if (b.status != 'cancelled' && b.status != 'declined')
-                      Expanded(
-                        child: _BigBtn(
-                          label: 'Cancel',
-                          icon: Icons.cancel_rounded,
-                          color: _C.red,
-                          onTap: () => _cancel(context),
-                        ),
-                      ),
-                  ]),
-                ],
-              ),
+  @override
+  Widget build(BuildContext context) {
+    final pct = total > 0 ? (paid / total).clamp(0.0, 1.0) : 0.0;
+    final isFullyPaid = balance <= 0;
+    final barColor = isFullyPaid ? _C.green : _C.teal;
+    final fmt = NumberFormat('#,##0.00');
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.dark,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 12,
+              offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.account_balance_wallet_rounded,
+              size: 15, color: Colors.white70),
+          const SizedBox(width: 8),
+          const Text('Payment Progress',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white70,
+                  letterSpacing: 0.4)),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: isFullyPaid
+                  ? _C.green.withOpacity(0.3)
+                  : _C.teal.withOpacity(0.25),
+              borderRadius: BorderRadius.circular(50),
+            ),
+            child: Text(
+              '${(pct * 100).toStringAsFixed(0)}%',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: isFullyPaid ? _C.greenLight : _C.tealLight),
             ),
           ),
         ]),
-      ),
+        const SizedBox(height: 14),
+        // progress track
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: pct,
+            minHeight: 8,
+            backgroundColor: Colors.white.withOpacity(0.1),
+            valueColor: AlwaysStoppedAnimation<Color>(barColor),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Row(children: [
+          _ProgCell(
+              label: 'Paid', value: 'GHS ${fmt.format(paid)}', color: _C.green),
+          const SizedBox(width: 20),
+          _ProgCell(
+              label: 'Balance',
+              value: balance > 0 ? 'GHS ${fmt.format(balance)}' : '—',
+              color: balance > 0 ? _C.amber : Colors.white54),
+          const Spacer(),
+          _ProgCell(
+              label: 'Total',
+              value: 'GHS ${fmt.format(total)}',
+              color: Colors.white70),
+        ]),
+      ]),
     );
+  }
+}
+
+class _ProgCell extends StatelessWidget {
+  const _ProgCell(
+      {required this.label, required this.value, required this.color});
+  final String label, value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: const TextStyle(fontSize: 10, color: Colors.white54)),
+          const SizedBox(height: 2),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+        ],
+      );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PAYMENT TIMELINE — advanced, with commission breakdown per instalment
+// ══════════════════════════════════════════════════════════════════════════════
+
+class _PaymentTimeline extends StatelessWidget {
+  const _PaymentTimeline({
+    required this.bookingId,
+    required this.totalAmount,
+    required this.commissionRate,
+  });
+
+  final String bookingId;
+  final double totalAmount;
+  final double commissionRate;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _db
+          .collection('bookings')
+          .doc(bookingId)
+          .collection('payments')
+          .orderBy('paid_at', descending: false)
+          .snapshots(),
+      builder: (ctx, snap) {
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) return const SizedBox.shrink();
+
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+                width: 3,
+                height: 14,
+                decoration: BoxDecoration(
+                    color: _C.green, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 8),
+            const Text('Payment Timeline',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: _C.textDark)),
+            const Spacer(),
+            Text('${docs.length} instalment${docs.length != 1 ? 's' : ''}',
+                style: const TextStyle(fontSize: 11, color: _C.textMuted)),
+          ]),
+          const SizedBox(height: 12),
+          ...docs.asMap().entries.map((entry) {
+            final i = entry.key;
+            final doc = entry.value;
+            final p = doc.data() as Map<String, dynamic>;
+            final isLast = i == docs.length - 1;
+
+            final ts = p['paid_at'];
+            final date = ts is Timestamp ? ts.toDate() : DateTime.now();
+            final amt = (p['amount'] ?? 0).toDouble();
+            final method = (p['method'] ?? '').toString().toUpperCase();
+            final note = (p['note'] ?? '').toString();
+            final status = (p['status'] ?? '').toString();
+            final isPaid = status == 'paid';
+
+            // commission breakdown
+            // commission breakdown — use stored values from payment doc (same as admin)
+            final commission =
+                (p['commission_taken'] as num?)?.toDouble() ?? 0.0;
+            final landlordReceives =
+                (p['landlord_received'] as num?)?.toDouble() ??
+                    (amt - commission);
+            final rate = amt > 0 ? commission / amt : 0.0;
+            // badge logic
+            final isTest = note.toLowerCase().contains('test');
+            final isFirst = i == 0 && !isTest;
+            final isFinal = isLast && docs.length > 1;
+
+            return IntrinsicHeight(
+              child:
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // Timeline spine
+                SizedBox(
+                  width: 36,
+                  child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        // numbered circle
+                        Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: isPaid ? _C.green : _C.amber,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                  color: (isPaid ? _C.green : _C.amber)
+                                      .withOpacity(0.35),
+                                  blurRadius: 6,
+                                  offset: const Offset(0, 2)),
+                            ],
+                          ),
+                          child: Center(
+                            child: Text('${i + 1}',
+                                style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white)),
+                          ),
+                        ),
+                        // connecting line
+                        if (!isLast)
+                          Expanded(
+                            child: Container(
+                              width: 2,
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              color: _C.border,
+                            ),
+                          ),
+                      ]),
+                ),
+                const SizedBox(width: 12),
+                // card
+                Expanded(
+                  child: Container(
+                    margin: EdgeInsets.only(bottom: isLast ? 0 : 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _C.pageBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _C.border),
+                    ),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // top row: note + badges + amount
+                          Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          note.isNotEmpty
+                                              ? note
+                                              : 'Instalment ${i + 1}',
+                                          style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                              color: _C.textDark),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Wrap(spacing: 6, children: [
+                                          // method badge
+                                          if (method.isNotEmpty)
+                                            _MiniTag(
+                                                method, _C.blue, _C.blueLight),
+                                          // status badge
+                                          _MiniTag(
+                                            isPaid ? 'Paid' : 'Pending',
+                                            isPaid ? _C.green : _C.amber,
+                                            isPaid
+                                                ? _C.greenLight
+                                                : _C.amberLight,
+                                          ),
+                                          if (isTest)
+                                            _MiniTag('TEST', _C.textMuted,
+                                                _C.border),
+                                          if (isFirst)
+                                            _MiniTag(
+                                                '1st', _C.green, _C.greenFaint),
+                                          if (isFinal)
+                                            _MiniTag(
+                                                'Final', _C.blue, _C.blueLight),
+                                        ]),
+                                      ]),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'GHS ${NumberFormat('#,##0.00').format(amt)}',
+                                  style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w900,
+                                      color: _C.green),
+                                ),
+                              ]),
+                          // timestamp
+                          const SizedBox(height: 6),
+                          Text(
+                            _fmtDate(date),
+                            style: const TextStyle(
+                                fontSize: 10, color: _C.textMuted),
+                          ),
+                          // commission breakdown strip
+                          if ((commission > 0 || landlordReceives > 0) &&
+                              isPaid) ...[
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 7),
+                              decoration: BoxDecoration(
+                                color: _C.green.withOpacity(0.06),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                    color: _C.green.withOpacity(0.12)),
+                              ),
+                              child: Row(children: [
+                                _CommissionSplit(
+                                  label: 'Platform',
+                                  value: commission,
+                                  color: _C.red,
+                                ),
+                                Container(
+                                    width: 1,
+                                    height: 28,
+                                    color: _C.border,
+                                    margin: const EdgeInsets.symmetric(
+                                        horizontal: 12)),
+                                _CommissionSplit(
+                                  label: 'You receive',
+                                  value: landlordReceives,
+                                  color: _C.green,
+                                ),
+                                const Spacer(),
+                                Text(
+                                  '${(rate * 100).toStringAsFixed(0)}% fee',
+                                  style: const TextStyle(
+                                      fontSize: 10, color: _C.textMuted),
+                                ),
+                              ]),
+                            ),
+                          ],
+                        ]),
+                  ),
+                ),
+              ]),
+            );
+          }),
+        ]);
+      },
+    );
+  }
+}
+
+class _CommissionSplit extends StatelessWidget {
+  const _CommissionSplit(
+      {required this.label, required this.value, required this.color});
+  final String label;
+  final double value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 9, color: _C.textMuted)),
+          Text(
+            'GHS ${NumberFormat('#,##0.00').format(value)}',
+            style: TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w800, color: color),
+          ),
+        ],
+      );
+}
+
+class _MiniTag extends StatelessWidget {
+  const _MiniTag(this.label, this.color, this.bg);
+  final String label;
+  final Color color, bg;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(50),
+          border: Border.all(color: color.withOpacity(0.25)),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+      );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMMISSION CELL — inline in Payment Info section
+// ══════════════════════════════════════════════════════════════════════════════
+
+class _CommissionCell extends StatelessWidget {
+  const _CommissionCell({required this.commissionRate});
+  final dynamic commissionRate;
+
+  @override
+  Widget build(BuildContext context) {
+    final rawRate =
+        commissionRate != null ? (commissionRate as num).toDouble() : null;
+    final rate =
+        rawRate != null ? (rawRate > 1 ? rawRate / 100 : rawRate) : null;
+    final display = rate != null ? '${(rate * 100).toStringAsFixed(1)}%' : '—';
+    return _Tile(Icons.percent_rounded, 'Commission Rate', display);
   }
 }
 
@@ -1257,7 +1736,7 @@ class _DetailSheet extends StatelessWidget {
 class _SumCell extends StatelessWidget {
   const _SumCell(this.label, this.value, {this.valueColor});
   final String label, value;
-  final Color? valueColor; // ← added to match admin
+  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -1803,114 +2282,6 @@ class _EmptyBox extends StatelessWidget {
               textAlign: TextAlign.center),
         ]),
       );
-}
-
-class _PaymentHistorySection extends StatelessWidget {
-  final String bookingId;
-  const _PaymentHistorySection({required this.bookingId});
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _db
-          .collection('bookings')
-          .doc(bookingId)
-          .collection('payments')
-          .orderBy('paid_at', descending: true)
-          .snapshots(),
-      builder: (ctx, snap) {
-        final docs = snap.data?.docs ?? [];
-        if (docs.isEmpty) return const SizedBox.shrink();
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(
-                width: 3,
-                height: 14,
-                decoration: BoxDecoration(
-                    color: _C.green, borderRadius: BorderRadius.circular(2))),
-            const SizedBox(width: 8),
-            const Text('Payment History',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: _C.textDark)),
-          ]),
-          const SizedBox(height: 10),
-          ...docs.map((doc) {
-            final p = doc.data() as Map<String, dynamic>;
-            final ts = p['paid_at'];
-            final date = ts is Timestamp ? _fmtShort(ts.toDate()) : '—';
-            final amt = (p['amount'] ?? 0).toDouble();
-            final method = (p['method'] ?? '').toString().toUpperCase();
-            final note = p['note'] ?? '';
-            final status = p['status'] ?? '';
-            return Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _C.pageBg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _C.border),
-              ),
-              child: Row(children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: _C.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.payments_rounded,
-                      size: 16, color: _C.green),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(note.isNotEmpty ? note : 'Payment',
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: _C.textDark)),
-                        const SizedBox(height: 2),
-                        Text('$method · $date',
-                            style: const TextStyle(
-                                fontSize: 11, color: _C.textMuted)),
-                        if (status.isNotEmpty)
-                          Container(
-                            margin: const EdgeInsets.only(top: 4),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: status == 'paid'
-                                  ? _C.greenLight
-                                  : _C.amberLight,
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                            child: Text(status,
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                    color: status == 'paid'
-                                        ? _C.green
-                                        : _C.amber)),
-                          ),
-                      ]),
-                ),
-                Text(
-                  'GHS ${NumberFormat('#,##0.00').format(amt)}',
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      color: _C.green),
-                ),
-              ]),
-            );
-          }),
-        ]);
-      },
-    );
-  }
 }
 
 class _ErrorBox extends StatelessWidget {

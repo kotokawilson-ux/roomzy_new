@@ -8,6 +8,366 @@ import 'package:flutter/material.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/landlord_service.dart';
 import '../../../models/models.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+const _kBackendUrl = 'https://roomzy-backend-eight.vercel.app/api';
+
+class _PayoutSection extends StatefulWidget {
+  const _PayoutSection({required this.landlordId});
+  final String landlordId;
+
+  @override
+  State<_PayoutSection> createState() => _PayoutSectionState();
+}
+
+class _PayoutSectionState extends State<_PayoutSection> {
+  final _accountNumber = TextEditingController();
+  final _businessName = TextEditingController();
+  String _provider = 'MTN';
+  bool _saving = false;
+  bool _hasPayout = false;
+  String? _savedAccount;
+
+  final _providers = ['MTN', 'Vodafone', 'AirtelTigo'];
+
+  // Paystack bank codes for mobile money
+  String get _bankCode => switch (_provider) {
+        'MTN' => 'MTN',
+        'Vodafone' => 'VOD',
+        _ => 'ATL',
+      };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExisting();
+  }
+
+  Future<void> _loadExisting() async {
+    final doc = await FirebaseFirestore.instance
+        .collection('landlords')
+        .doc(widget.landlordId)
+        .get();
+    if (!mounted) return;
+    final data = doc.data();
+    final subaccount = data?['paystack_subaccount'];
+    final account = data?['payout_account_number']?.toString() ?? '';
+    setState(() {
+      _hasPayout = subaccount != null && subaccount.toString().isNotEmpty;
+      _savedAccount = account.isNotEmpty ? account : null;
+    });
+  }
+
+  Future<void> _save() async {
+    if (_accountNumber.text.trim().isEmpty ||
+        _businessName.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Please fill in all fields'),
+        backgroundColor: _C.red,
+      ));
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      final res = await http.post(
+        Uri.parse('$_kBackendUrl/create-subaccount'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'landlordId': widget.landlordId,
+          'businessName': _businessName.text.trim(),
+          'bankCode': _bankCode,
+          'accountNumber': _accountNumber.text.trim(),
+          'percentageCharge': 5,
+        }),
+      );
+
+      final data = jsonDecode(res.body);
+
+      if (data['error'] != null) {
+        throw Exception(data['error']);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _hasPayout = true;
+        _savedAccount = _accountNumber.text.trim();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Payout account saved successfully'),
+        backgroundColor: _C.green,
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Error: $e'),
+        backgroundColor: _C.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _accountNumber.dispose();
+    _businessName.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _C.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Row(children: [
+            const Icon(Icons.account_balance_wallet_outlined,
+                size: 16, color: _C.green),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('Payout Account',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _C.textDark)),
+            ),
+            if (_hasPayout)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _C.greenFaint,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: _C.greenLight),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.check_circle_rounded, size: 12, color: _C.green),
+                  SizedBox(width: 4),
+                  Text('Active',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: _C.green)),
+                ]),
+              ),
+          ]),
+        ),
+        const Divider(height: 20, color: _C.border),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (_hasPayout && _savedAccount != null) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _C.greenFaint,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _C.greenLight),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.phone_android_rounded,
+                      size: 16, color: _C.green),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Current payout number',
+                              style:
+                                  TextStyle(fontSize: 11, color: _C.textLight)),
+                          Text(_savedAccount!,
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: _C.textDark)),
+                        ]),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 12),
+              const Text('Update payout account:',
+                  style: TextStyle(fontSize: 12, color: _C.textLight)),
+              const SizedBox(height: 10),
+            ] else ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFED7AA)),
+                ),
+                child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline_rounded,
+                          size: 15, color: Color(0xFFEA580C)),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Set up your payout account so students can pay you directly through the app.',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFFEA580C),
+                              height: 1.5),
+                        ),
+                      ),
+                    ]),
+              ),
+              const SizedBox(height: 14),
+            ],
+
+            // Business name
+            const Text('Business / Full Name',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _C.textLight)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _businessName,
+              style: const TextStyle(fontSize: 13, color: _C.textDark),
+              decoration: InputDecoration(
+                hintText: 'Your name or business name',
+                hintStyle: const TextStyle(fontSize: 13, color: _C.textMuted),
+                prefixIcon: const Icon(Icons.person_outline_rounded,
+                    size: 17, color: _C.green),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _C.border)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _C.border)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _C.green, width: 1.5)),
+                filled: true,
+                fillColor: const Color(0xFFF9FAFB),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Provider selector
+            const Text('Mobile Money Network',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _C.textLight)),
+            const SizedBox(height: 8),
+            Row(
+              children: _providers.map((p) {
+                final selected = _provider == p;
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _provider = p),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      margin:
+                          EdgeInsets.only(right: p != _providers.last ? 8 : 0),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color:
+                            selected ? _C.greenFaint : const Color(0xFFF9FAFB),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: selected ? _C.green : _C.border,
+                          width: selected ? 1.5 : 1,
+                        ),
+                      ),
+                      child: Text(p,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: selected ? _C.green : _C.textLight)),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 12),
+
+            // Account number
+            const Text('Mobile Money Number',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _C.textLight)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _accountNumber,
+              keyboardType: TextInputType.phone,
+              style: const TextStyle(fontSize: 13, color: _C.textDark),
+              decoration: InputDecoration(
+                hintText: '024XXXXXXX',
+                hintStyle: const TextStyle(fontSize: 13, color: _C.textMuted),
+                prefixIcon: const Icon(Icons.phone_android_rounded,
+                    size: 17, color: _C.green),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _C.border)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _C.border)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: _C.green, width: 1.5)),
+                filled: true,
+                fillColor: const Color(0xFFF9FAFB),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.save_rounded,
+                        size: 16, color: Colors.white),
+                label: Text(
+                  _saving
+                      ? 'Saving…'
+                      : _hasPayout
+                          ? 'Update Payout Account'
+                          : 'Save Payout Account',
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _C.green,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
 
 // ── Colour tokens ─────────────────────────────────────────────
 class _C {
@@ -133,6 +493,8 @@ class _LandlordProfileScreenState extends State<LandlordProfileScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
+                _PayoutSection(landlordId: widget.landlordId),
+                 const SizedBox(height: 16),
               ],
 
               // ── Settings ─────────────────────────────────

@@ -493,6 +493,63 @@ class _RoomCard extends StatelessWidget {
                 _InfoRow(label: 'Hostel', value: room.hostelName),
                 _InfoRow(label: 'Type', value: room.type),
                 _InfoRow(label: 'Capacity', value: '${room.capacity}'),
+// ── Slot usage bar ──────────────────────────────────────
+                Builder(builder: (_) {
+                  final booked = room.booked;
+                  final cap = room.capacity;
+                  final slotsLeft = (cap - booked).clamp(0, cap);
+                  final progress =
+                      cap > 0 ? (booked / cap).clamp(0.0, 1.0) : 0.0;
+                  final isFull = booked >= cap;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            SizedBox(
+                              width: 72,
+                              child: Text('Slots:',
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: _C.textLight)),
+                            ),
+                            Expanded(
+                              child: Text(
+                                isFull
+                                    ? 'Fully booked ($booked/$cap)'
+                                    : '$booked of $cap slot${cap == 1 ? '' : 's'} booked · $slotsLeft left',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: isFull ? _C.red : _C.textDark),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ]),
+                          const SizedBox(height: 6),
+                          Padding(
+                            padding: const EdgeInsets.only(left: 72),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: progress,
+                                minHeight: 6,
+                                backgroundColor: Colors.grey.shade200,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  isFull
+                                      ? _C.red
+                                      : progress > 0.6
+                                          ? _C.amber
+                                          : _C.green,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ]),
+                  );
+                }),
                 _InfoRow(
                     label: 'Price',
                     value: 'GHS ${room.price.toStringAsFixed(2)}'),
