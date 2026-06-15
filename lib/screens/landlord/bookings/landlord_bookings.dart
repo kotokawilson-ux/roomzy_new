@@ -602,11 +602,18 @@ class _TableRowState extends State<_TableRow>
                 ],
               ),
             ),
+            // AFTER
             Expanded(
                 flex: 2,
-                child: _StatusBadge(
-                    status: b.status,
-                    isActive: b.moveInDate != null || b.status == 'active')),
+                child: Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [
+                    _StatusBadge(
+                        status: b.status,
+                        isActive: b.moveInDate != null || b.status == 'active'),
+                  ],
+                )),
             Expanded(
               flex: 2,
               child: Text(_fmtShort(b.bookedAt),
@@ -2055,8 +2062,9 @@ class _StatusBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final (color, bg, label, icon) = _cfg;
     final showActive = isActive || status == 'active';
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
       children: [
         Container(
           padding: EdgeInsets.symmetric(
@@ -2076,8 +2084,7 @@ class _StatusBadge extends StatelessWidget {
                     color: color)),
           ]),
         ),
-        if (showActive) ...[
-          const SizedBox(width: 4),
+        if (showActive)
           Container(
             padding: EdgeInsets.symmetric(
                 horizontal: large ? 10 : 6, vertical: large ? 6 : 4),
@@ -2096,7 +2103,6 @@ class _StatusBadge extends StatelessWidget {
                       color: _C.blue)),
             ]),
           ),
-        ],
       ],
     );
   }
