@@ -43,39 +43,42 @@ class MoveInService {
     ];
   }
 
-  Future<void> confirmMoveIn(String bookingId) async {
-    final snap = await _db.collection('bookings').doc(bookingId).get();
-    final data = snap.data()!;
-    final moveIn = DateTime.now();
-    final durationType = data['duration_type'] ?? 'year';
-    final totalAmount = (data['amount'] as num).toDouble();
+ Future<void> confirmMoveIn(String bookingId) async {
+  final snap = await _db.collection('bookings').doc(bookingId).get();
+  final data = snap.data()!;
+  final moveIn = DateTime.now();
+  final durationType = data['duration_type'] ?? 'year';
+  final totalAmount = (data['amount'] as num).toDouble();
 
-    final schedule = buildSchedule(moveIn, durationType, totalAmount);
+  final schedule = buildSchedule(moveIn, durationType, totalAmount);
 
-    await _db.collection('bookings').doc(bookingId).update({
-      'move_in_date': Timestamp.fromDate(moveIn),
-      'payment_schedule': schedule,
-      'balance_due_date': schedule.first['due_date'],
-      'status': 'active',
-    });
-    await BalanceReminderService.instance.cancelMoveInReminders(bookingId);
-  }
+  await _db.collection('bookings').doc(bookingId).update({
+    'move_in_date': Timestamp.fromDate(moveIn),
+    'payment_schedule': schedule,
+    'balance_due_date': schedule.first['due_date'],
+    'status': 'active',          // ← was 'active'
+    'move_in_confirmed': true,    // ← new flag for tracking
+    'move_in_set_by': 'student',  // ← new flag
+  });
+  await BalanceReminderService.instance.cancelMoveInReminders(bookingId);
+}
 
-  Future<void> landlordSetMoveIn(String bookingId, DateTime date) async {
-    final snap = await _db.collection('bookings').doc(bookingId).get();
-    final data = snap.data()!;
-    final durationType = data['duration_type'] ?? 'year';
-    final totalAmount = (data['amount'] as num).toDouble();
+Future<void> landlordSetMoveIn(String bookingId, DateTime date) async {
+  final snap = await _db.collection('bookings').doc(bookingId).get();
+  final data = snap.data()!;
+  final durationType = data['duration_type'] ?? 'year';
+  final totalAmount = (data['amount'] as num).toDouble();
 
-    final schedule = buildSchedule(date, durationType, totalAmount);
+  final schedule = buildSchedule(date, durationType, totalAmount);
 
-    await _db.collection('bookings').doc(bookingId).update({
-      'move_in_date': Timestamp.fromDate(date),
-      'payment_schedule': schedule,
-      'balance_due_date': schedule.first['due_date'],
-      'status': 'active',
-      'move_in_set_by': 'landlord_or_admin',
-    });
-    await BalanceReminderService.instance.cancelMoveInReminders(bookingId);
-  }
+  await _db.collection('bookings').doc(bookingId).update({
+    'move_in_date': Timestamp.fromDate(date),
+    'payment_schedule': schedule,
+    'balance_due_date': schedule.first['due_date'],
+    'status': 'active', // ← was 'active'
+    'move_in_confirmed': true,       // ← new flag
+    'move_in_set_by': 'landlord_or_admin',
+  });
+  await BalanceReminderService.instance.cancelMoveInReminders(bookingId);
+}
 }

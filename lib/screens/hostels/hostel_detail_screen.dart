@@ -2020,7 +2020,7 @@ class _BookingSheetState extends State<_BookingSheet>
         _school.text = data['school'] ?? '';
         _schoolId.text = data['school_id'] ?? '';
         _notes.text = data['notes'] ?? '';
-        _slots = (data['slots_booked'] as num?)?.toInt() ?? 1;
+        _slots = 1; // always reset, let user re-pick
         _momoProvider = data['momo_provider'] ?? 'mtn';
         _notStudent = data['not_student'] ?? false;
       });
@@ -2587,10 +2587,12 @@ class _BookingSheetState extends State<_BookingSheet>
         // Only check + increment slots on first payment
         // (slots were not reserved yet — room was just held as pending)
         if (isFirstPayment) {
-          if (capacity - booked < _slots) {
+          final currentBooked = (roomSnap.data()?['booked'] ?? 0) as int;
+          if (capacity - currentBooked < _slots) {
             throw Exception('Not enough slots left');
           }
-          txn.update(roomRef, {'booked': FieldValue.increment(_slots)});
+          txn.update(
+              roomRef, {'booked': currentBooked + _slots}); // ← plain value
         }
 
         // Update booking doc
@@ -3157,14 +3159,7 @@ class _BookingSheetState extends State<_BookingSheet>
           kb: TextInputType.phone,
           hint: 'e.g. 0244123456 → auto-formatted to 233244123456',
           onChanged: (v) {
-            final normalized = _normalizeMomo(v);
-            if (normalized != v) {
-              _momo.value = TextEditingValue(
-                text: normalized,
-                selection: TextSelection.collapsed(offset: normalized.length),
-              );
-            }
-            final detected = _detectProvider(normalized);
+            final detected = _detectProvider(_normalizeMomo(v));
             setState(() => _momoProvider = detected);
           },
           validator: (v) {

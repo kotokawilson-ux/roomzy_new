@@ -17,6 +17,7 @@ class OneSignal {
 class _Notifications {
   Future<bool> requestPermission(bool fallbackToSettings) async => false;
   void addClickListener(Function(dynamic) handler) {}
+  void addForegroundWillDisplayListener(Function(dynamic) handler) {}
 }
 
 class _User {

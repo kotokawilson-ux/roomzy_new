@@ -11,13 +11,14 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 
-// OneSignal is a mobile-only plugin — import it conditionally so the web
-// build never references the native channel at all.
+// OneSignal is a mobile-only plugin — import it conditionally so web
+// and desktop builds never reference the native channel at all.
 import 'package:onesignal_flutter/onesignal_flutter.dart'
     if (dart.library.html) 'notification_service_web_stub.dart';
 
@@ -34,6 +35,14 @@ class NotificationService {
 
   String _lastSavedUid = '';
 
+  // ── Platform guard ────────────────────────────────────────────────────────
+  // OneSignal only works on Android and iOS.
+  // Web, Windows, macOS, Linux all skip every OneSignal call at runtime.
+  bool get _isMobileOnly =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
   // ── Init ──────────────────────────────────────────────────────────────────
   Future<void> init({
     required GlobalKey<NavigatorState> navKey,
@@ -42,9 +51,8 @@ class NotificationService {
     _navKey = navKey;
     _router = router;
 
-    // OneSignal has no web implementation — skip entirely on web.
-    if (kIsWeb) {
-      debugPrint('[OneSignal] Skipped — not supported on web');
+    if (!_isMobileOnly) {
+      debugPrint('[OneSignal] Skipped — only supported on Android/iOS');
       return;
     }
 
@@ -71,14 +79,24 @@ class NotificationService {
 
       debugPrint('[OneSignal] Initialized');
     } catch (e) {
-      // Catch any unexpected init error so the app still launches.
       debugPrint('[OneSignal] Init error (non-fatal): $e');
+    }
+  }
+
+  // ── Current OneSignal player/subscription ID ──────────────────────────────
+  // Returns empty string on web/desktop or if OneSignal hasn't assigned an ID.
+  String get currentPlayerId {
+    if (!_isMobileOnly) return '';
+    try {
+      return OneSignal.User.pushSubscription.id ?? '';
+    } catch (_) {
+      return '';
     }
   }
 
   // ── Save player ID for a regular user ─────────────────────────────────────
   Future<void> saveTokenForUser(String uid) async {
-    if (uid.isEmpty || kIsWeb) return;
+    if (uid.isEmpty || !_isMobileOnly) return;
     _lastSavedUid = uid;
 
     try {
@@ -100,7 +118,7 @@ class NotificationService {
 
   // ── Save player ID for admin ───────────────────────────────────────────────
   Future<void> saveTokenForAdmin(String adminUid) async {
-    if (adminUid.isEmpty || kIsWeb) return;
+    if (adminUid.isEmpty || !_isMobileOnly) return;
 
     try {
       final playerId = OneSignal.User.pushSubscription.id;
@@ -115,24 +133,13 @@ class NotificationService {
     }
   }
 
-// ── Current OneSignal player/subscription ID ──────────────────────────────
-  // Returns empty string on web or if OneSignal hasn't assigned an ID yet.
-  String get currentPlayerId {
-    if (kIsWeb) return '';
-    try {
-      return OneSignal.User.pushSubscription.id ?? '';
-    } catch (_) {
-      return '';
-    }
-  }
-
   // ── Notify a student (called from admin) ──────────────────────────────────
   Future<void> notifyStudent({
     required String studentUid,
     required String title,
     required String body,
   }) async {
-    if (kIsWeb) return; // No push on web
+    if (!_isMobileOnly) return;
     try {
       final doc = await FirebaseFirestore.instance
           .collection('users')
@@ -160,7 +167,7 @@ class NotificationService {
     required String body,
     required String studentUid,
   }) async {
-    if (kIsWeb) return; // No push on web
+    if (!_isMobileOnly) return;
     try {
       final snap =
           await FirebaseFirestore.instance.collection('admins').limit(1).get();
@@ -184,9 +191,7 @@ class NotificationService {
     }
   }
 
-  // ── REST push via http package (works on web + mobile) ────────────────────
-  // NOTE: On web, all the callers already return early above, so this is only
-  // ever called from mobile. Kept platform-agnostic anyway for safety.
+  // ── REST push via OneSignal API ────────────────────────────────────────────
   Future<void> _sendPush({
     required List<String> playerIds,
     required String title,
@@ -198,7 +203,7 @@ class NotificationService {
         Uri.parse('https://api.onesignal.com/notifications'),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'key $_oneSignalRestApiKey'
+          'Authorization': 'key $_oneSignalRestApiKey',
         },
         body: jsonEncode({
           'app_id': _oneSignalAppId,

@@ -468,6 +468,8 @@ class _TableRowState extends State<_TableRow>
   @override
   Widget build(BuildContext context) {
     final d = widget.doc.data() as Map<String, dynamic>;
+    final hasMovedIn =
+        d['move_in_date'] != null || d['status'] == 'active'; // ← moved here
     final ts = d['booked_at'];
     final date = ts is Timestamp ? _fmtShort(ts.toDate()) : '—';
     final status = (d['status'] ?? 'booked') as String;
@@ -568,7 +570,9 @@ class _TableRowState extends State<_TableRow>
                                   fontSize: 10, color: _kOrange)),
                       ],
                     ])),
-            Expanded(flex: 2, child: _StatusBadge(status: status)),
+            Expanded(
+                flex: 2,
+                child: _StatusBadge(status: status, isActive: hasMovedIn)),
             Expanded(
                 flex: 2,
                 child: Text(date,
@@ -689,7 +693,9 @@ class _BookingCardState extends State<_BookingCard>
                           style:
                               const TextStyle(fontSize: 11, color: _kTextMid)),
                     ])),
-                _StatusBadge(status: status),
+                _StatusBadge(
+                    status: status,
+                    isActive: d['move_in_date'] != null || status == 'active'),
               ]),
             ),
             Padding(
@@ -1095,7 +1101,8 @@ class _DetailSheetState extends State<_DetailSheet> {
         'move_in_date': Timestamp.fromDate(picked),
         'payment_schedule': schedule,
         'balance_due_date': schedule.first['due_date'],
-        'status': 'active',
+        'status': 'active', // ← was 'active'
+        'move_in_confirmed': true, // ← add this
         'move_in_set_by': 'admin',
       });
 
@@ -1207,7 +1214,11 @@ class _DetailSheetState extends State<_DetailSheet> {
                                 fontSize: 12,
                                 color: Colors.white.withOpacity(0.85))),
                       ])),
-                  _StatusBadge(status: status, large: true),
+                  _StatusBadge(
+                      status: status,
+                      large: true,
+                      isActive:
+                          d['move_in_date'] != null || status == 'active'),
                   const SizedBox(width: 4),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
@@ -2045,7 +2056,9 @@ class _Avatar extends StatelessWidget {
 class _StatusBadge extends StatelessWidget {
   final String status;
   final bool large;
-  const _StatusBadge({required this.status, this.large = false});
+  final bool isActive; // ← add this
+  const _StatusBadge(
+      {required this.status, this.large = false, this.isActive = false});
 
   (Color, Color, String, IconData) get _cfg => switch (status.toLowerCase()) {
         'confirmed' => (
@@ -2054,6 +2067,12 @@ class _StatusBadge extends StatelessWidget {
             'Confirmed',
             Icons.check_circle_rounded
           ),
+        'active' => (
+            _kGreen,
+            _kGreenBg,
+            'Confirmed',
+            Icons.check_circle_rounded
+          ), // ← handles old docs
         'declined' => (_kRed, _kRedBg, 'Declined', Icons.cancel_rounded),
         'cancelled' => (_kRed, _kRedBg, 'Cancelled', Icons.cancel_rounded),
         _ => (_kOrange, _kOrangeBg, 'Pending', Icons.schedule_rounded),
@@ -2062,23 +2081,51 @@ class _StatusBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (color, bg, label, icon) = _cfg;
-    return Container(
-      padding: EdgeInsets.symmetric(
-          horizontal: large ? 12 : 8, vertical: large ? 6 : 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(50),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: large ? 13 : 11, color: color),
-        const SizedBox(width: 4),
-        Text(label,
-            style: TextStyle(
-                fontSize: large ? 12 : 10,
-                fontWeight: FontWeight.w700,
-                color: color)),
-      ]),
+    final showActive = isActive || status == 'active'; // ← handles old docs too
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: large ? 12 : 8, vertical: large ? 6 : 4),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(50),
+            border: Border.all(color: color.withOpacity(0.3)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: large ? 13 : 11, color: color),
+            const SizedBox(width: 4),
+            Text(label,
+                style: TextStyle(
+                    fontSize: large ? 12 : 10,
+                    fontWeight: FontWeight.w700,
+                    color: color)),
+          ]),
+        ),
+        // ── Active pill ───────────────────────────────────────────────
+        if (showActive) ...[
+          const SizedBox(width: 4),
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: large ? 10 : 6, vertical: large ? 6 : 4),
+            decoration: BoxDecoration(
+              color: _kBlueBg,
+              borderRadius: BorderRadius.circular(50),
+              border: Border.all(color: _kBlue.withOpacity(0.3)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.home_rounded, size: large ? 13 : 11, color: _kBlue),
+              const SizedBox(width: 4),
+              Text('Active',
+                  style: TextStyle(
+                      fontSize: large ? 12 : 10,
+                      fontWeight: FontWeight.w700,
+                      color: _kBlue)),
+            ]),
+          ),
+        ],
+      ],
     );
   }
 }

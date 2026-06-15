@@ -99,7 +99,7 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    _removeSpeedDial();
+    _removeSpeedDial(updateState: false);
     _chatFabCtrl.dispose();
     _speedDialCtrl.dispose();
     _contextBarCtrl.dispose();
@@ -169,11 +169,11 @@ class _AppShellState extends State<AppShell> with TickerProviderStateMixin {
     _speedDialCtrl.forward(from: 0);
   }
 
-  void _removeSpeedDial() {
+  void _removeSpeedDial({bool updateState = true}) {
     _speedDialOverlay?.remove();
     _speedDialOverlay = null;
     _speedDialCtrl.reverse();
-    if (mounted) setState(() => _speedDialOpen = false);
+    if (updateState && mounted) setState(() => _speedDialOpen = false);
   }
 
   void _toggleSpeedDial(BuildContext context, String uid) {

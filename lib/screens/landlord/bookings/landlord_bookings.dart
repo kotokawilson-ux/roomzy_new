@@ -602,7 +602,11 @@ class _TableRowState extends State<_TableRow>
                 ],
               ),
             ),
-            Expanded(flex: 2, child: _StatusBadge(status: b.status)),
+            Expanded(
+                flex: 2,
+                child: _StatusBadge(
+                    status: b.status,
+                    isActive: b.moveInDate != null || b.status == 'active')),
             Expanded(
               flex: 2,
               child: Text(_fmtShort(b.bookedAt),
@@ -718,7 +722,9 @@ class _BookingCardState extends State<_BookingCard>
                                 fontSize: 11, color: _C.textMid)),
                       ]),
                 ),
-                _StatusBadge(status: b.status),
+                _StatusBadge(
+                    status: b.status,
+                    isActive: b.moveInDate != null || b.status == 'active'),
               ]),
             ),
             Padding(
@@ -1186,7 +1192,10 @@ class _DetailSheetState extends State<_DetailSheet> {
                                   color: Colors.white.withOpacity(0.85))),
                         ]),
                   ),
-                  _StatusBadge(status: b.status, large: true),
+                  _StatusBadge(
+                      status: b.status,
+                      large: true,
+                      isActive: b.moveInDate != null || b.status == 'active'),
                   const SizedBox(width: 4),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
@@ -2012,13 +2021,22 @@ class _Avatar extends StatelessWidget {
   }
 }
 
+// landlord_bookings.dart — _StatusBadge
 class _StatusBadge extends StatelessWidget {
-  const _StatusBadge({required this.status, this.large = false});
+  const _StatusBadge(
+      {required this.status, this.large = false, this.isActive = false});
   final String status;
   final bool large;
+  final bool isActive;
 
   (Color, Color, String, IconData) get _cfg => switch (status.toLowerCase()) {
         'confirmed' => (
+            _C.green,
+            _C.greenLight,
+            'Confirmed',
+            Icons.check_circle_rounded
+          ),
+        'active' => (
             _C.green,
             _C.greenLight,
             'Confirmed',
@@ -2036,23 +2054,50 @@ class _StatusBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (color, bg, label, icon) = _cfg;
-    return Container(
-      padding: EdgeInsets.symmetric(
-          horizontal: large ? 12 : 8, vertical: large ? 6 : 4),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(50),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: large ? 13 : 11, color: color),
-        const SizedBox(width: 4),
-        Text(label,
-            style: TextStyle(
-                fontSize: large ? 12 : 10,
-                fontWeight: FontWeight.w700,
-                color: color)),
-      ]),
+    final showActive = isActive || status == 'active';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: large ? 12 : 8, vertical: large ? 6 : 4),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(50),
+            border: Border.all(color: color.withOpacity(0.3)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: large ? 13 : 11, color: color),
+            const SizedBox(width: 4),
+            Text(label,
+                style: TextStyle(
+                    fontSize: large ? 12 : 10,
+                    fontWeight: FontWeight.w700,
+                    color: color)),
+          ]),
+        ),
+        if (showActive) ...[
+          const SizedBox(width: 4),
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: large ? 10 : 6, vertical: large ? 6 : 4),
+            decoration: BoxDecoration(
+              color: _C.blueLight,
+              borderRadius: BorderRadius.circular(50),
+              border: Border.all(color: _C.blue.withOpacity(0.3)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.home_rounded, size: large ? 13 : 11, color: _C.blue),
+              const SizedBox(width: 4),
+              Text('Active',
+                  style: TextStyle(
+                      fontSize: large ? 12 : 10,
+                      fontWeight: FontWeight.w700,
+                      color: _C.blue)),
+            ]),
+          ),
+        ],
+      ],
     );
   }
 }
