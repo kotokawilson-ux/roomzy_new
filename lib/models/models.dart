@@ -12,6 +12,15 @@ int _parseInt(dynamic v, [int fallback = 0]) {
   return int.tryParse(v.toString()) ?? fallback;
 }
 
+List<Map<String, dynamic>> _parseSchedule(dynamic v) {
+  if (v == null) return const [];
+  if (v is! List) return const [];
+  return v
+      .whereType<Map>()
+      .map((e) => e.map((k, val) => MapEntry(k.toString(), val)))
+      .toList();
+}
+
 double _parseDouble(dynamic v, [double fallback = 0.0]) {
   if (v == null) return fallback;
   if (v is double) return v;
@@ -445,7 +454,10 @@ class Room {
 }
 
 // ─── Booking ──────────────────────────────────────────────────
-/// status values: 'booked' | 'confirmed' | 'cancelled' | 'completed'
+/// status values: 'booked' | 'confirmed' | 'active' | 'cancelled' | 'declined' | 'completed'
+/// - 'booked'/'confirmed': awaiting payment confirmation or move-in
+/// - 'active': move_in_date set, payment_schedule running
+/// - 'cancelled'/'declined': revoked or rejected
 class Booking {
   final String id;
   final String roomId;
@@ -479,6 +491,13 @@ class Booking {
   final DateTime bookedAt;
   final int slotsBooked;
 
+  // ── Move-in / Payment Schedule ──────────────────────────────
+  final String durationType; // 'year' | 'academic_year' | 'semester' | 'month'
+  final DateTime? moveInDate;
+  final List<Map<String, dynamic>> paymentSchedule;
+  final DateTime? balanceDueDate;
+  final String? moveInSetBy; // 'student' | 'landlord_or_admin'
+
   const Booking({
     required this.id,
     required this.roomId,
@@ -505,6 +524,11 @@ class Booking {
     required this.status,
     required this.bookedAt,
     required this.slotsBooked,
+    this.durationType = 'year',
+    this.moveInDate,
+    this.paymentSchedule = const [],
+    this.balanceDueDate,
+    this.moveInSetBy,
   });
 
   // ── Convenience getters ─────────────────────────────────────
@@ -512,6 +536,21 @@ class Booking {
   bool get isConfirmed => status == 'confirmed';
   bool get isCancelled => status == 'cancelled';
   bool get isCompleted => status == 'completed';
+
+  /// True once the student has logged a move-in date and the
+  /// payment schedule/due dates are active.
+  bool get isActive => status == 'active';
+
+  /// True when status is 'confirmed' but move-in hasn't been logged yet.
+  bool get awaitingMoveIn => status == 'confirmed' && moveInDate == null;
+
+  /// The next unpaid schedule entry, or null if fully paid / no schedule.
+  Map<String, dynamic>? get nextUnpaidEntry {
+    for (final entry in paymentSchedule) {
+      if (entry['paid'] != true) return entry;
+    }
+    return null;
+  }
 
   factory Booking.fromJson(String docId, Map<String, dynamic> json) => Booking(
         id: docId,
@@ -540,6 +579,11 @@ class Booking {
         bookedAt: _parseDate(json['booked_at']) ??
             DateTime.fromMillisecondsSinceEpoch(0),
         slotsBooked: _parseInt(json['slots_booked'], 1),
+        durationType: json['duration_type']?.toString() ?? 'year',
+        moveInDate: _parseDate(json['move_in_date']),
+        paymentSchedule: _parseSchedule(json['payment_schedule']),
+        balanceDueDate: _parseDate(json['balance_due_date']),
+        moveInSetBy: json['move_in_set_by']?.toString(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -567,6 +611,12 @@ class Booking {
         'status': status,
         'booked_at': _dateToString(bookedAt),
         'slots_booked': slotsBooked,
+        'duration_type': durationType,
+        if (moveInDate != null) 'move_in_date': moveInDate!.toIso8601String(),
+        'payment_schedule': paymentSchedule,
+        if (balanceDueDate != null)
+          'balance_due_date': balanceDueDate!.toIso8601String(),
+        if (moveInSetBy != null) 'move_in_set_by': moveInSetBy,
       };
 
   Booking copyWith({
@@ -595,6 +645,11 @@ class Booking {
     String? status,
     DateTime? bookedAt,
     int? slotsBooked,
+    String? durationType,
+    DateTime? moveInDate,
+    List<Map<String, dynamic>>? paymentSchedule,
+    DateTime? balanceDueDate,
+    String? moveInSetBy,
   }) =>
       Booking(
         id: id ?? this.id,
@@ -622,6 +677,11 @@ class Booking {
         status: status ?? this.status,
         bookedAt: bookedAt ?? this.bookedAt,
         slotsBooked: slotsBooked ?? this.slotsBooked,
+        durationType: durationType ?? this.durationType,
+        moveInDate: moveInDate ?? this.moveInDate,
+        paymentSchedule: paymentSchedule ?? this.paymentSchedule,
+        balanceDueDate: balanceDueDate ?? this.balanceDueDate,
+        moveInSetBy: moveInSetBy ?? this.moveInSetBy,
       );
 }
 

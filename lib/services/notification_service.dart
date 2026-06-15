@@ -52,6 +52,11 @@ class NotificationService {
       OneSignal.initialize(_oneSignalAppId);
       await OneSignal.Notifications.requestPermission(true);
 
+      // Show heads-up banner even when app is in foreground (like WhatsApp)
+      OneSignal.Notifications.addForegroundWillDisplayListener((event) {
+        event.notification.display();
+      });
+
       OneSignal.Notifications.addClickListener((event) {
         final data = event.notification.additionalData;
         final role = data?['role'] as String?;
@@ -107,6 +112,17 @@ class NotificationService {
       debugPrint('[OneSignal] Player ID saved for admin $adminUid');
     } catch (e) {
       debugPrint('[OneSignal] saveTokenForAdmin error: $e');
+    }
+  }
+
+// ── Current OneSignal player/subscription ID ──────────────────────────────
+  // Returns empty string on web or if OneSignal hasn't assigned an ID yet.
+  String get currentPlayerId {
+    if (kIsWeb) return '';
+    try {
+      return OneSignal.User.pushSubscription.id ?? '';
+    } catch (_) {
+      return '';
     }
   }
 

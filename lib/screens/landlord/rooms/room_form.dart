@@ -3,8 +3,13 @@
 // RoomzyFind — Add / Edit Room Form
 // ─────────────────────────────────────────────────────────────
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 import '../../../services/landlord_service.dart';
 import '../../../models/models.dart';
@@ -21,6 +26,365 @@ class _C {
   static const greenLight = Color(0xFFD8F3DC);
   static const greenFaint = Color(0xFFF0FAF3);
   static const red = Color(0xFFEF4444);
+}
+
+// ─────────────────────────────────────────────────────────────
+// CLOUDINARY CONFIG
+// ─────────────────────────────────────────────────────────────
+
+const _kCloudName = 'dfv9yibba';
+const _kUploadPreset = 'ml_default';
+
+/// Cross-platform Cloudinary upload — no dart:io, works on
+/// Web + Android + iOS + Desktop.
+Future<String?> _pickAndUpload({String folder = 'rooms'}) async {
+  final picker = ImagePicker();
+  final XFile? picked = await picker.pickImage(
+    source: ImageSource.gallery,
+    imageQuality: 85,
+  );
+  if (picked == null) return null;
+
+  final Uint8List bytes = await picked.readAsBytes();
+  final String filename = picked.name.isNotEmpty
+      ? picked.name
+      : 'upload_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+  final uri = Uri.parse(
+    'https://api.cloudinary.com/v1_1/$_kCloudName/image/upload',
+  );
+
+  final req = http.MultipartRequest('POST', uri)
+    ..fields['upload_preset'] = _kUploadPreset
+    ..fields['folder'] = folder
+    ..files.add(
+      http.MultipartFile.fromBytes('file', bytes, filename: filename),
+    );
+
+  try {
+    final res = await req.send();
+    final body = await res.stream.bytesToString();
+    final json = jsonDecode(body) as Map<String, dynamic>;
+    if (res.statusCode == 200) return json['secure_url'] as String?;
+    debugPrint('Cloudinary error [${res.statusCode}]: $body');
+    return null;
+  } catch (e) {
+    debugPrint('_pickAndUpload exception: $e');
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SINGLE IMAGE PICKER FIELD
+// ─────────────────────────────────────────────────────────────
+
+class _ImagePickerField extends StatefulWidget {
+  const _ImagePickerField({
+    required this.label,
+    required this.controller,
+    this.folder = 'rooms',
+  });
+  final String label;
+  final TextEditingController controller;
+  final String folder;
+
+  @override
+  State<_ImagePickerField> createState() => _ImagePickerFieldState();
+}
+
+class _ImagePickerFieldState extends State<_ImagePickerField> {
+  bool _uploading = false;
+
+  Future<void> _pick() async {
+    setState(() => _uploading = true);
+    try {
+      final url = await _pickAndUpload(folder: widget.folder);
+      if (url != null && mounted) {
+        widget.controller.text = url;
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Upload failed: $e'),
+            backgroundColor: _C.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final url = widget.controller.text.trim();
+    final previewH = 140.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          widget.label,
+          style: const TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w600, color: _C.textDark),
+        ),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: _C.pageBg,
+                border: Border.all(color: _C.border),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                url.isEmpty ? 'No image selected' : url,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: url.isEmpty ? _C.textMuted : _C.textDark),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: _uploading ? null : _pick,
+            icon: _uploading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.upload_rounded,
+                    size: 16, color: Colors.white),
+            label: Text(
+              _uploading ? 'Uploading…' : 'Upload',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.green,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ]),
+        if (url.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.network(
+              url,
+              height: previewH,
+              width: double.infinity,
+              fit: BoxFit.cover,
+              loadingBuilder: (_, child, progress) => progress == null
+                  ? child
+                  : Container(
+                      height: previewH,
+                      color: _C.pageBg,
+                      child: const Center(
+                          child: CircularProgressIndicator(strokeWidth: 2)),
+                    ),
+              errorBuilder: (_, __, ___) => Container(
+                height: 60,
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.broken_image_outlined,
+                        color: Colors.red.shade400, size: 16),
+                    const SizedBox(width: 6),
+                    Text('Could not load image',
+                        style: TextStyle(
+                            color: Colors.red.shade400, fontSize: 11)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MULTIPLE IMAGES PICKER FIELD
+// ─────────────────────────────────────────────────────────────
+
+class _MultiImagePickerField extends StatefulWidget {
+  const _MultiImagePickerField({
+    required this.label,
+    required this.controller,
+    this.folder = 'rooms',
+  });
+  final String label;
+  final TextEditingController controller;
+  final String folder;
+
+  @override
+  State<_MultiImagePickerField> createState() => _MultiImagePickerFieldState();
+}
+
+class _MultiImagePickerFieldState extends State<_MultiImagePickerField> {
+  bool _uploading = false;
+
+  List<String> get _urls {
+    final raw = widget.controller.text.trim();
+    if (raw.isEmpty) return [];
+    return raw
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
+  void _setUrls(List<String> urls) {
+    widget.controller.text = urls.join(',');
+    setState(() {});
+  }
+
+  Future<void> _pickMore() async {
+    setState(() => _uploading = true);
+    try {
+      final url = await _pickAndUpload(folder: widget.folder);
+      if (url != null && mounted) {
+        final current = _urls;
+        current.add(url);
+        _setUrls(current);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed: $e'), backgroundColor: _C.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _remove(int index) {
+    final current = _urls;
+    current.removeAt(index);
+    _setUrls(current);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = _urls;
+    const thumbSize = 100.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Expanded(
+            child: Text(
+              widget.label,
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _C.textDark),
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: _uploading ? null : _pickMore,
+            icon: _uploading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.add_photo_alternate_outlined,
+                    size: 16, color: Colors.white),
+            label: Text(
+              _uploading ? 'Uploading…' : 'Add Image',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _C.green,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        if (urls.isEmpty)
+          Container(
+            height: thumbSize,
+            decoration: BoxDecoration(
+              border: Border.all(color: _C.border),
+              borderRadius: BorderRadius.circular(8),
+              color: _C.pageBg,
+            ),
+            child: const Center(
+              child: Text('No additional images',
+                  style: TextStyle(fontSize: 12, color: _C.textMuted)),
+            ),
+          )
+        else
+          SizedBox(
+            height: thumbSize,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: urls.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) => Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(
+                      urls[i],
+                      width: thumbSize,
+                      height: thumbSize,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: thumbSize,
+                        height: thumbSize,
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(Icons.broken_image_outlined,
+                            color: Colors.red.shade300),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: GestureDetector(
+                      onTap: () => _remove(i),
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.6),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.close,
+                            color: Colors.white, size: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -55,6 +419,8 @@ class _RoomFormState extends State<RoomForm> {
   late final TextEditingController _roomNumber;
   late final TextEditingController _price;
   late final TextEditingController _capacity;
+  late final TextEditingController _image; // main image URL
+  late final TextEditingController _images; // comma-separated additional URLs
 
   late String _type;
   late bool _available;
@@ -70,8 +436,8 @@ class _RoomFormState extends State<RoomForm> {
     'Quad',
     'Studio',
     'Suite',
-    'Dormitory'
-        'Chamber and Hall',
+    'Dormitory',
+    'Chamber and Hall',
     'Other',
   ];
 
@@ -84,7 +450,9 @@ class _RoomFormState extends State<RoomForm> {
         text: r != null ? r.price.toStringAsFixed(0) : '');
     _capacity =
         TextEditingController(text: r != null ? r.capacity.toString() : '');
-    _type = r?.type ?? 'Single';
+    _image = TextEditingController(text: r?.image ?? '');
+    _images = TextEditingController(text: r?.images ?? '');
+    _type = (_roomTypes.contains(r?.type) ? r?.type : null) ?? 'Single';
     _available = r?.available ?? true;
     _selectedHostelId = r?.hostelId ??
         widget.preselectedHostelId ??
@@ -96,6 +464,8 @@ class _RoomFormState extends State<RoomForm> {
     _roomNumber.dispose();
     _price.dispose();
     _capacity.dispose();
+    _image.dispose();
+    _images.dispose();
     super.dispose();
   }
 
@@ -123,6 +493,8 @@ class _RoomFormState extends State<RoomForm> {
       price: double.tryParse(_price.text.trim()) ?? 0,
       available: _available,
       booked: widget.room?.booked ?? 0,
+      image: _image.text.trim(),
+      images: _images.text.trim(),
     );
 
     final result = _isEdit
@@ -212,7 +584,7 @@ class _RoomFormState extends State<RoomForm> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              // ── Hostel selector ──────────────────────────
+              // ── Hostel selector ──────────────────────────────────────
               _Section(
                 title: 'Hostel',
                 icon: Icons.apartment_rounded,
@@ -227,7 +599,7 @@ class _RoomFormState extends State<RoomForm> {
 
               const SizedBox(height: 16),
 
-              // ── Room Details ─────────────────────────────
+              // ── Room Details ─────────────────────────────────────────
               _Section(
                 title: 'Room Details',
                 icon: Icons.bed_rounded,
@@ -330,6 +702,27 @@ class _RoomFormState extends State<RoomForm> {
                         activeColor: _C.green,
                       ),
                     ]),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              // ── Room Images ──────────────────────────────────────────
+              _Section(
+                title: 'Room Images',
+                icon: Icons.photo_library_rounded,
+                children: [
+                  _ImagePickerField(
+                    label: 'Main Room Image',
+                    controller: _image,
+                    folder: 'rooms/main',
+                  ),
+                  const SizedBox(height: 16),
+                  _MultiImagePickerField(
+                    label: 'Additional Room Images',
+                    controller: _images,
+                    folder: 'rooms/gallery',
                   ),
                 ],
               ),

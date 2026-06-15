@@ -8,6 +8,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
+import 'package:onesignal_flutter/onesignal_flutter.dart';
+import '../../services/balance_reminder_service.dart';
+import '../../services/move_in_service.dart';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -40,6 +43,9 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
   late Animation<double> _scale;
   late Animation<double> _fade;
 
+  // ── Reminder state ──────────────────────────────────────────────────────
+  ReminderSettings _reminderSettings = const ReminderSettings();
+
   @override
   void initState() {
     super.initState();
@@ -64,23 +70,109 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
       _error = null;
     });
     try {
+      // ── 1. Auto-revoke check before rendering ─────────────────────────
+      await _checkRevoke();
+
       final doc = await FirebaseFirestore.instance
           .collection('bookings')
           .doc(widget.bookingId)
           .get();
       if (!doc.exists) throw Exception('Booking not found');
       if (!mounted) return;
+
+      final data = {'id': doc.id, ...doc.data()!};
+
+      // ── 2. Load saved reminder settings ───────────────────────────────
+      final settings =
+          await BalanceReminderService.instance.loadSettings(widget.bookingId);
+
+      if (!mounted) return;
       setState(() {
-        _booking = {'id': doc.id, ...doc.data()!};
+        _booking = data;
+        _reminderSettings = settings;
         _loading = false;
       });
       _anim.forward();
+
+      // ── 3. Re-arm reminders if balance still owed ─────────────────────
+      _maybeRescheduleReminders(data, settings);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _checkRevoke() async {
+    final doc = await FirebaseFirestore.instance
+        .collection('bookings')
+        .doc(widget.bookingId)
+        .get();
+    if (!doc.exists) return;
+
+    final data = doc.data()!;
+    final balance = (data['balance'] as num?)?.toDouble() ?? 0.0;
+    final dueDateTs = data['balance_due_date'] as Timestamp?;
+    final status = data['status'] as String? ?? '';
+
+    if (balance <= 0 ||
+        dueDateTs == null ||
+        status == 'cancelled' ||
+        status == 'declined') return;
+
+    if (dueDateTs.toDate().isBefore(DateTime.now())) {
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .update({
+        'status': 'cancelled',
+        'cancellation_reason': 'Balance not paid by due date',
+        'cancelled_at': FieldValue.serverTimestamp(),
+        'auto_revoked': true,
+      });
+      await BalanceReminderService.instance.cancelReminders(widget.bookingId);
+    }
+  }
+
+  Future<void> _maybeRescheduleReminders(
+      Map<String, dynamic> booking, ReminderSettings settings) async {
+    final balance = (booking['balance'] as num?)?.toDouble() ?? 0.0;
+    final dueDateTs = booking['balance_due_date'] as Timestamp?;
+    if (balance <= 0 || dueDateTs == null) return;
+    final dueDate = dueDateTs.toDate();
+    if (dueDate.isBefore(DateTime.now())) return;
+
+    // Fetch this device's OneSignal subscription ID
+    final playerId = OneSignal.User.pushSubscription.id;
+    if (playerId == null || playerId.isEmpty) return;
+
+    await BalanceReminderService.instance.scheduleReminders(
+      bookingId: widget.bookingId,
+      balance: balance,
+      dueDate: dueDate,
+      settings: settings,
+      oneSignalPlayerId: playerId,
+      hostelName: booking['hostel_name'] ?? 'your room',
+    );
+  }
+
+  Future<void> _saveDueDate(DateTime picked) async {
+    await FirebaseFirestore.instance
+        .collection('bookings')
+        .doc(widget.bookingId)
+        .update({'balance_due_date': Timestamp.fromDate(picked)});
+    await _load();
+  }
+
+  Future<void> _updateReminderSettings(ReminderSettings updated) async {
+    setState(() => _reminderSettings = updated);
+    await BalanceReminderService.instance
+        .saveSettings(widget.bookingId, updated);
+
+    if (_booking != null) {
+      await _maybeRescheduleReminders(_booking!, updated);
     }
   }
 
@@ -116,7 +208,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     );
   }
 
-  // ── Shimmer ──────────────────────────────────────────────────────────────
+  // ── Shimmer ───────────────────────────────────────────────────────────────
   Widget _buildShimmer() {
     return Shimmer.fromColors(
       baseColor: Colors.grey[300]!,
@@ -147,7 +239,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     );
   }
 
-  // ── Error ────────────────────────────────────────────────────────────────
+  // ── Error ─────────────────────────────────────────────────────────────────
   Widget _buildError() {
     return Center(
         child: Padding(
@@ -167,7 +259,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     ));
   }
 
-  // ── Content ──────────────────────────────────────────────────────────────
+  // ── Content ───────────────────────────────────────────────────────────────
   Widget _buildContent() {
     final b = _booking!;
     final bookingRef = (b['id'] as String).toUpperCase().substring(0, 8);
@@ -196,13 +288,31 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     final isFullyPaid =
         paymentStatus == 'fully_paid' || (isPaid && balance == 0);
     final isDepositPaid = paymentStatus == 'deposit_paid';
+    final autoRevoked = b['auto_revoked'] == true;
+    final moveInDateTs = b['move_in_date'] as Timestamp?;
+    final hasMovedIn = moveInDateTs != null;
+    final awaitingMoveIn = isConfirmed && !hasMovedIn;
+    // ── Due date ────────────────────────────────────────────────────────────
+    final dueDateTs = b['balance_due_date'] as Timestamp?;
+    final dueDate = dueDateTs?.toDate();
+    final isOverdue =
+        dueDate != null && dueDate.isBefore(DateTime.now()) && balance > 0;
+    final daysUntilDue = dueDate != null && !isOverdue
+        ? dueDate.difference(DateTime.now()).inDays
+        : null;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(children: [
         const SizedBox(height: 8),
 
-        // ── Status Hero Card ────────────────────────────────────────
+        // ── Auto-revoke banner ──────────────────────────────────────────────
+        if (autoRevoked) ...[
+          _AutoRevokedBanner(hostelName: hostelName),
+          const SizedBox(height: 16),
+        ],
+
+        // ── Status Hero Card ────────────────────────────────────────────────
         FadeTransition(
           opacity: _fade,
           child: ScaleTransition(
@@ -260,7 +370,9 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                       : isConfirmed && isDepositPaid
                           ? 'Confirmed — Deposit Paid'
                           : status == 'cancelled' || status == 'declined'
-                              ? 'Booking Cancelled'
+                              ? autoRevoked
+                                  ? 'Booking Auto-Cancelled'
+                                  : 'Booking Cancelled'
                               : isDepositPaid
                                   ? 'Deposit Paid — Awaiting Confirmation'
                                   : 'Booking Pending Payment',
@@ -277,7 +389,9 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                       : isConfirmed && isDepositPaid
                           ? 'Balance of GHS ${balance.toStringAsFixed(2)} due on arrival.'
                           : status == 'cancelled' || status == 'declined'
-                              ? 'This booking has been cancelled'
+                              ? autoRevoked
+                                  ? 'Balance was not paid by the due date.'
+                                  : 'This booking has been cancelled'
                               : isDepositPaid
                                   ? 'Deposit received. Awaiting landlord confirmation.'
                                   : 'Complete your MoMo payment to confirm',
@@ -286,7 +400,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
-                // Booking ref pill — tap to copy
+                // Booking ref pill
                 GestureDetector(
                   onTap: () {
                     Clipboard.setData(ClipboardData(text: bookingRef));
@@ -323,9 +437,48 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
           ),
         ),
 
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
+        // ── Move-in prompt ────────────────────────────────────────────────────
+        if (awaitingMoveIn) ...[
+          _MoveInPromptCard(
+            bookingId: widget.bookingId,
+            onConfirmed: _load,
+          ),
+          const SizedBox(height: 16),
+        ],
+        // ── Due date + countdown card ────────────────────────────────────────
+        if (hasMovedIn &&
+            balance > 0 &&
+            status != 'cancelled' &&
+            status != 'declined') ...[
+          _DueDateCard(
+            dueDate: dueDate,
+            balance: balance,
+            daysUntilDue: daysUntilDue,
+            isOverdue: isOverdue,
+            onPickDate: () async {
+              final now = DateTime.now();
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: dueDate ?? now.add(const Duration(days: 7)),
+                firstDate: now,
+                lastDate: now.add(const Duration(days: 365)),
+                helpText: 'Set Balance Payment Deadline',
+                builder: (ctx, child) => Theme(
+                  data: Theme.of(ctx).copyWith(
+                    colorScheme: const ColorScheme.light(
+                        primary: _kPrimary, onPrimary: Colors.white),
+                  ),
+                  child: child!,
+                ),
+              );
+              if (picked != null) await _saveDueDate(picked);
+            },
+          ),
+          const SizedBox(height: 16),
+        ],
 
-        // ── Payment details card ────────────────────────────────────
+        // ── Payment details card ─────────────────────────────────────────────
         _Card(
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -379,7 +532,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
           if (payRef != '—') _DetailRow(label: 'Paystack Ref', value: payRef),
         ])),
 
-        // ── Balance payment card (outside the details card) ─────────
+        // ── Balance payment card ─────────────────────────────────────────────
         if (balance > 0 && status != 'cancelled' && status != 'declined') ...[
           const SizedBox(height: 16),
           _BalancePaymentCard(
@@ -396,9 +549,24 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
           ),
         ],
 
+        // ── Reminder settings panel ──────────────────────────────────────────
+        if (hasMovedIn &&
+            balance > 0 &&
+            status != 'cancelled' &&
+            status != 'declined') ...[
+          const SizedBox(height: 16),
+          _ReminderSettingsCard(
+            bookingId: widget.bookingId,
+            balance: balance,
+            dueDate: dueDate,
+            settings: _reminderSettings,
+            onChanged: _updateReminderSettings,
+          ),
+        ],
+
         const SizedBox(height: 16),
 
-        // ── Booking details card ────────────────────────────────────
+        // ── Booking details card ─────────────────────────────────────────────
         _Card(
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -415,7 +583,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
 
         const SizedBox(height: 16),
 
-        // ── Guest details card ──────────────────────────────────────
+        // ── Guest details card ───────────────────────────────────────────────
         _Card(
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -428,7 +596,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
 
         const SizedBox(height: 20),
 
-        // ── Action buttons ──────────────────────────────────────────
+        // ── Action buttons ───────────────────────────────────────────────────
         if (hostelPhone.isNotEmpty) ...[
           SizedBox(
               width: double.infinity,
@@ -506,7 +674,732 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BALANCE PAYMENT CARD
+// DUE DATE CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DueDateCard extends StatelessWidget {
+  final DateTime? dueDate;
+  final double balance;
+  final int? daysUntilDue;
+  final bool isOverdue;
+  final VoidCallback onPickDate;
+
+  const _DueDateCard({
+    required this.dueDate,
+    required this.balance,
+    required this.daysUntilDue,
+    required this.isOverdue,
+    required this.onPickDate,
+  });
+
+  Color get _accentColor => isOverdue
+      ? _kRed
+      : daysUntilDue != null && daysUntilDue! <= 3
+          ? _kOrange
+          : _kPrimary;
+
+  String get _dueDateLabel {
+    if (dueDate == null) return 'No deadline set';
+    if (isOverdue) return 'Overdue — booking at risk';
+    if (daysUntilDue == 0) return 'Due TODAY';
+    if (daysUntilDue == 1) return 'Due TOMORROW';
+    return 'Due in $daysUntilDue days';
+  }
+
+  String _fmt(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _accentColor.withOpacity(0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: _accentColor.withOpacity(0.07),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: _accentColor.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              isOverdue
+                  ? Icons.timer_off_rounded
+                  : daysUntilDue != null && daysUntilDue! <= 3
+                      ? Icons.warning_amber_rounded
+                      : Icons.event_rounded,
+              color: _accentColor,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Balance Payment Deadline',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.black45,
+                      fontWeight: FontWeight.w600)),
+              Text(
+                dueDate != null ? _fmt(dueDate!) : 'Tap to set a deadline',
+                style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    color: dueDate != null ? _kDark : Colors.black38),
+              ),
+            ]),
+          ),
+          // Edit date button
+          GestureDetector(
+            onTap: onPickDate,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: _accentColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(50),
+                border: Border.all(color: _accentColor.withOpacity(0.3)),
+              ),
+              child: Text(
+                dueDate != null ? 'Change' : 'Set Date',
+                style: TextStyle(
+                    color: _accentColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ]),
+        if (dueDate != null) ...[
+          const SizedBox(height: 12),
+          // Countdown bar
+          _CountdownBar(
+            daysUntilDue: daysUntilDue,
+            isOverdue: isOverdue,
+            accentColor: _accentColor,
+            dueDateLabel: _dueDateLabel,
+          ),
+        ],
+        if (isOverdue) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: _kRed.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kRed.withOpacity(0.2)),
+            ),
+            child: Row(children: [
+              const Icon(Icons.info_outline_rounded, size: 16, color: _kRed),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Your booking may have been cancelled due to overdue balance.',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _kRed.withOpacity(0.85),
+                      fontWeight: FontWeight.w500),
+                ),
+              ),
+            ]),
+          ),
+        ],
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COUNTDOWN BAR
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CountdownBar extends StatelessWidget {
+  final int? daysUntilDue;
+  final bool isOverdue;
+  final Color accentColor;
+  final String dueDateLabel;
+
+  const _CountdownBar({
+    required this.daysUntilDue,
+    required this.isOverdue,
+    required this.accentColor,
+    required this.dueDateLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Progress: how much of a 30-day window is left
+    final totalWindow = 30;
+    final remaining = daysUntilDue?.clamp(0, totalWindow) ?? 0;
+    final progress = isOverdue ? 0.0 : remaining / totalWindow;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(
+          dueDateLabel,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: accentColor,
+          ),
+        ),
+        if (!isOverdue && daysUntilDue != null)
+          Text(
+            '$daysUntilDue day${daysUntilDue == 1 ? '' : 's'} left',
+            style: const TextStyle(fontSize: 11, color: Colors.black38),
+          ),
+      ]),
+      const SizedBox(height: 6),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(50),
+        child: LinearProgressIndicator(
+          value: progress,
+          minHeight: 6,
+          backgroundColor: accentColor.withOpacity(0.12),
+          valueColor: AlwaysStoppedAnimation<Color>(accentColor),
+        ),
+      ),
+    ]);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO-REVOKED BANNER
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _AutoRevokedBanner extends StatelessWidget {
+  final String hostelName;
+  const _AutoRevokedBanner({required this.hostelName});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _kRed.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kRed.withOpacity(0.25)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+              color: _kRed.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(10)),
+          child: const Icon(Icons.timer_off_rounded, color: _kRed, size: 18),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Booking Automatically Cancelled',
+                style: TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w800, color: _kRed)),
+            const SizedBox(height: 4),
+            Text(
+              'Your booking for $hostelName was cancelled because the balance payment deadline passed without full payment.',
+              style: TextStyle(
+                  fontSize: 12, color: _kRed.withOpacity(0.8), height: 1.4),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'You can search for another available room.',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: _kRed.withOpacity(0.6),
+                  fontWeight: FontWeight.w500),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// MOVE-IN PROMPT CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MoveInPromptCard extends StatefulWidget {
+  final String bookingId;
+  final VoidCallback onConfirmed;
+
+  const _MoveInPromptCard({
+    required this.bookingId,
+    required this.onConfirmed,
+  });
+
+  @override
+  State<_MoveInPromptCard> createState() => _MoveInPromptCardState();
+}
+
+class _MoveInPromptCardState extends State<_MoveInPromptCard> {
+  bool _busy = false;
+
+  Future<void> _confirmMoveIn() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Confirm Move-In',
+            style: TextStyle(fontWeight: FontWeight.w800)),
+        content: const Text(
+          'Confirm that today is the day you entered your room and received your key. '
+          'Your rent due date will be calculated from this date and cannot be changed later.',
+          style: TextStyle(fontSize: 14, color: Colors.black54, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child:
+                const Text('Not yet', style: TextStyle(color: Colors.black45)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kOrange,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Yes, I moved in today',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _busy = true);
+    try {
+      await MoveInService.instance.confirmMoveIn(widget.bookingId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content:
+            Text('Move-in confirmed! Your payment schedule is now active.'),
+        backgroundColor: _kGreen,
+      ));
+      widget.onConfirmed();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Error: $e'),
+        backgroundColor: _kRed,
+      ));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _kOrange.withOpacity(0.3)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: _kOrange.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.key_rounded, color: _kOrange, size: 20),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text('Have you moved in?',
+                style: TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w800, color: _kDark)),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Text(
+          'Tap "Confirm Move-In" on the day you collect your key and enter the room. '
+          'This starts your payment schedule and rent due dates.',
+          style: TextStyle(
+              fontSize: 12, color: _kOrange.withOpacity(0.85), height: 1.5),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _busy ? null : _confirmMoveIn,
+            icon: _busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.check_circle_rounded, size: 18),
+            label: Text(_busy ? 'Confirming…' : 'Confirm Move-In Today',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kOrange,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// REMINDER SETTINGS CARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ReminderSettingsCard extends StatefulWidget {
+  final String bookingId;
+  final double balance;
+  final DateTime? dueDate;
+  final ReminderSettings settings;
+  final ValueChanged<ReminderSettings> onChanged;
+
+  const _ReminderSettingsCard({
+    required this.bookingId,
+    required this.balance,
+    required this.dueDate,
+    required this.settings,
+    required this.onChanged,
+  });
+
+  @override
+  State<_ReminderSettingsCard> createState() => _ReminderSettingsCardState();
+}
+
+class _ReminderSettingsCardState extends State<_ReminderSettingsCard> {
+  bool _expanded = false;
+  bool _requestingPermission = false;
+
+  Future<void> _toggleReminders(bool on) async {
+    if (on) {
+      setState(() => _requestingPermission = true);
+      // OneSignal handles the OS permission prompt
+      await OneSignal.Notifications.requestPermission(true);
+      setState(() => _requestingPermission = false);
+      final hasPermission = OneSignal.Notifications.permission;
+      if (!hasPermission && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Allow notifications to receive payment reminders.'),
+          backgroundColor: _kOrange,
+        ));
+        return;
+      }
+    }
+    widget.onChanged(widget.settings.copyWith(enabled: on));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.settings;
+    final hasDueDate = widget.dueDate != null;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+            color: s.enabled
+                ? _kPrimary.withOpacity(0.25)
+                : Colors.black.withOpacity(0.08)),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 14,
+              offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(children: [
+        // ── Header ──────────────────────────────────────────────────────────
+        GestureDetector(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color:
+                  s.enabled ? _kPrimary.withOpacity(0.04) : Colors.transparent,
+              borderRadius: BorderRadius.vertical(
+                top: const Radius.circular(20),
+                bottom: _expanded ? Radius.zero : const Radius.circular(20),
+              ),
+            ),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: s.enabled
+                      ? _kPrimary.withOpacity(0.12)
+                      : Colors.grey.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  s.enabled
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_off_rounded,
+                  color: s.enabled ? _kPrimary : Colors.grey,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Payment Reminders',
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: _kDark)),
+                      Text(
+                        s.enabled
+                            ? '${s.frequency.label} at ${_fmtTime(s.reminderHour, s.reminderMinute)}'
+                            : 'Reminders are off',
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.black45),
+                      ),
+                    ]),
+              ),
+              if (_requestingPermission)
+                const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: _kPrimary))
+              else
+                Switch.adaptive(
+                  value: s.enabled,
+                  onChanged: _toggleReminders,
+                  activeColor: _kPrimary,
+                ),
+            ]),
+          ),
+        ),
+
+        // ── Expanded settings ────────────────────────────────────────────────
+        if (_expanded) ...[
+          const Divider(height: 1, color: Color(0xFFEEF2F6)),
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (!hasDueDate) ...[
+                _InfoChip(
+                  icon: Icons.info_outline_rounded,
+                  text:
+                      'Set a balance deadline above to enable scheduled reminders.',
+                  color: _kOrange,
+                ),
+                const SizedBox(height: 14),
+              ],
+
+              // Frequency selector
+              const Text('Remind me',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _kDark)),
+              const SizedBox(height: 10),
+              ...ReminderFrequency.values.map((freq) => _FrequencyTile(
+                    freq: freq,
+                    selected: s.frequency == freq,
+                    onTap: () => widget.onChanged(s.copyWith(frequency: freq)),
+                  )),
+
+              const SizedBox(height: 16),
+
+              // Time picker
+              const Text('At what time?',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _kDark)),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: () async {
+                  final picked = await showTimePicker(
+                    context: context,
+                    initialTime: TimeOfDay(
+                        hour: s.reminderHour, minute: s.reminderMinute),
+                    builder: (ctx, child) => Theme(
+                      data: Theme.of(ctx).copyWith(
+                        colorScheme: const ColorScheme.light(
+                            primary: _kPrimary, onPrimary: Colors.white),
+                      ),
+                      child: child!,
+                    ),
+                  );
+                  if (picked != null) {
+                    widget.onChanged(s.copyWith(
+                        reminderHour: picked.hour,
+                        reminderMinute: picked.minute));
+                  }
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.access_time_rounded,
+                        color: _kPrimary, size: 18),
+                    const SizedBox(width: 10),
+                    Text(
+                      _fmtTime(s.reminderHour, s.reminderMinute),
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: _kDark),
+                    ),
+                    const Spacer(),
+                    const Icon(Icons.chevron_right_rounded,
+                        color: Colors.black26, size: 18),
+                  ]),
+                ),
+              ),
+
+              if (s.enabled && hasDueDate) ...[
+                const SizedBox(height: 16),
+                _InfoChip(
+                  icon: Icons.check_circle_outline_rounded,
+                  text:
+                      'You\'ll be reminded ${s.frequency.label.toLowerCase()} at ${_fmtTime(s.reminderHour, s.reminderMinute)} until the deadline.',
+                  color: _kGreen,
+                ),
+              ],
+            ]),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  String _fmtTime(int h, int m) {
+    final period = h < 12 ? 'AM' : 'PM';
+    final hour = h == 0
+        ? 12
+        : h > 12
+            ? h - 12
+            : h;
+    return '${hour.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')} $period';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FREQUENCY TILE
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FrequencyTile extends StatelessWidget {
+  final ReminderFrequency freq;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FrequencyTile({
+    required this.freq,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color:
+              selected ? _kPrimary.withOpacity(0.07) : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color:
+                selected ? _kPrimary.withOpacity(0.4) : const Color(0xFFE2E8F0),
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(children: [
+          Icon(
+            selected
+                ? Icons.radio_button_checked_rounded
+                : Icons.radio_button_unchecked_rounded,
+            color: selected ? _kPrimary : Colors.grey[400],
+            size: 18,
+          ),
+          const SizedBox(width: 12),
+          Text(
+            freq.label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? _kPrimary : _kDark,
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INFO CHIP
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _InfoChip extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  const _InfoChip(
+      {required this.icon, required this.text, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(icon, size: 15, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: color.withOpacity(0.85),
+                  fontWeight: FontWeight.w500,
+                  height: 1.4)),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BALANCE PAYMENT CARD  (unchanged from original)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _BalancePaymentCard extends StatefulWidget {
@@ -540,7 +1433,7 @@ class _BalancePaymentCard extends StatefulWidget {
 
 class _BalancePaymentCardState extends State<_BalancePaymentCard> {
   bool _expanded = false;
-  int _payMode = 0; // 0 = full balance, 1 = custom
+  int _payMode = 0;
   double _customAmount = 0;
   final _customCtrl = TextEditingController();
   final _momoCtrl = TextEditingController();
@@ -585,7 +1478,6 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         '0261234987',
       }.contains(_momoCtrl.text.trim().replaceAll(' ', ''));
 
-      // ── Read booking for commission fields ──────────────────────────────
       final bookingDoc = await FirebaseFirestore.instance
           .collection('bookings')
           .doc(widget.bookingId)
@@ -606,11 +1498,9 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
       final newBalance =
           (widget.totalAmount - newTotalPaid).clamp(0.0, widget.totalAmount);
 
-      // ── Test mode: skip backend entirely ───────────────────────────────
       if (isTest) {
         await Future.delayed(const Duration(seconds: 2));
       } else {
-        // ── Charge via backend ──────────────────────────────────────────
         final chargeRes = await http.post(
           Uri.parse('$_kBackendUrl/charge-momo'),
           headers: {'Content-Type': 'application/json'},
@@ -628,7 +1518,6 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         final chargeData = jsonDecode(chargeRes.body);
         if (chargeData['error'] != null) throw Exception(chargeData['error']);
 
-        // ── Poll for confirmation ─────────────────────────────────────────
         bool confirmed = false;
         for (int i = 0; i < 12; i++) {
           await Future.delayed(const Duration(seconds: 5));
@@ -652,13 +1541,12 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         }
       }
 
-      // ── Update Firestore ────────────────────────────────────────────────
-      final bookingRef = FirebaseFirestore.instance
+      final bookingRef2 = FirebaseFirestore.instance
           .collection('bookings')
           .doc(widget.bookingId);
 
       await FirebaseFirestore.instance.runTransaction((txn) async {
-        txn.update(bookingRef, {
+        txn.update(bookingRef2, {
           'amount_paid': newTotalPaid,
           'balance': newBalance,
           'payment_status': isFinalPayment ? 'fully_paid' : 'deposit_paid',
@@ -671,8 +1559,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         });
       });
 
-      // ── Record in payments subcollection (outside transaction) ──────────
-      await bookingRef.collection('payments').add({
+      await bookingRef2.collection('payments').add({
         'amount': _amountToPay,
         'commission_taken': commissionThisPayment,
         'landlord_received': landlordGets,
@@ -689,6 +1576,11 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         'is_test': isTest,
         'paid_at': FieldValue.serverTimestamp(),
       });
+
+      // Cancel reminders if fully paid
+      if (isFinalPayment) {
+        await BalanceReminderService.instance.cancelReminders(widget.bookingId);
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -727,7 +1619,6 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         ],
       ),
       child: Column(children: [
-        // ── Header — always visible ───────────────────────────────────────
         GestureDetector(
           onTap: () => setState(() => _expanded = !_expanded),
           child: Container(
@@ -786,14 +1677,11 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
             ]),
           ),
         ),
-
-        // ── Expandable body ───────────────────────────────────────────────
         if (_expanded) ...[
           Padding(
             padding: const EdgeInsets.all(18),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // Pay mode selector
               const Text('How much to pay?',
                   style: TextStyle(
                       fontSize: 13,
@@ -879,8 +1767,6 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
                   ),
                 ),
               ]),
-
-              // Custom amount field
               if (_payMode == 1) ...[
                 const SizedBox(height: 14),
                 TextField(
@@ -910,10 +1796,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
                   ),
                 ),
               ],
-
               const SizedBox(height: 16),
-
-              // MoMo provider
               const Text('Mobile Money Network',
                   style: TextStyle(
                       fontSize: 13,
@@ -977,10 +1860,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
                   ),
                 ),
               ]),
-
               const SizedBox(height: 14),
-
-              // MoMo number field
               TextField(
                 controller: _momoCtrl,
                 keyboardType: TextInputType.phone,
@@ -1002,10 +1882,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
                           const BorderSide(color: _kPrimary, width: 1.5)),
                 ),
               ),
-
               const SizedBox(height: 20),
-
-              // Summary strip
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
@@ -1042,10 +1919,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
                   ]),
                 ]),
               ),
-
               const SizedBox(height: 16),
-
-              // Pay button
               GestureDetector(
                 onTap: _busy ? null : _pay,
                 child: AnimatedContainer(
@@ -1200,4 +2074,14 @@ class _PayStatusBox extends StatelessWidget {
       ]),
     );
   }
+}
+
+// ── Extension to convert BorderSide to a Border usable in BoxDecoration ────
+extension _BorderSideX on BorderSide {
+  Paint toPaint() => Paint()
+    ..color = color
+    ..strokeWidth = width
+    ..style = PaintingStyle.stroke;
+
+  Border asBorder() => Border.all(color: color, width: width);
 }

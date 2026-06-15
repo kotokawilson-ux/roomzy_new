@@ -17,6 +17,7 @@ import '../../services/booking_storage_service.dart';
 import '../../models/models.dart';
 import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
+import '../../services/move_in_service.dart';
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -1682,6 +1683,147 @@ class _BookingSheet extends StatefulWidget {
   State<_BookingSheet> createState() => _BookingSheetState();
 }
 
+class _StatusSheet extends StatelessWidget {
+  final bool isError;
+  final String message;
+  const _StatusSheet({required this.isError, required this.message});
+
+  // Friendly error translations
+  static String _friendly(String raw) {
+    const map = {
+      'LOW_BALANCE_OR_PAYEE_LIMIT_REACHED_OR_NOT_ALLOWED':
+          'Your Mobile Money wallet doesn\'t have enough balance, or you\'ve reached your transaction limit. Please top up and try again.',
+      'INVALID_OTP':
+          'The code you entered was incorrect or expired. Please try again.',
+      'EXPIRED_OTP':
+          'Your confirmation code has expired. Please restart the payment.',
+      'TRANSACTION_NOT_ALLOWED_FOR_USER':
+          'This transaction is not allowed for your MoMo account. Please contact your provider.',
+      'DECLINED':
+          'Payment was declined by your provider. Please try again or use a different number.',
+      'Not enough slots left':
+          'Sorry, those slots were just taken by someone else. Try fewer slots or a different room.',
+      'socket':
+          'No internet connection. Please check your network and try again.',
+      'SocketException':
+          'No internet connection. Please check your network and try again.',
+      'TimeoutException':
+          'The request timed out. Please check your connection and try again.',
+    };
+
+    for (final entry in map.entries) {
+      if (raw.contains(entry.key)) return entry.value;
+    }
+
+    // Clean up raw technical strings
+    return raw
+        .replaceAll('Exception: ', '')
+        .replaceAll('Error: ', '')
+        .replaceAll('_', ' ')
+        .trim()
+        .replaceFirstMapped(RegExp(r'^.'), (m) => m.group(0)!.toUpperCase());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isError ? _kRed : _kPrimary;
+    final bg = isError ? const Color(0xFFFEF2F2) : const Color(0xFFEFF6FF);
+    final icon = isError ? Icons.error_rounded : Icons.info_rounded;
+    final title = isError ? 'Something went wrong' : 'Heads up';
+    final friendly = _friendly(message);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.15),
+            blurRadius: 30,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Container(
+            width: 36,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 20),
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+
+          // Icon circle
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: bg,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 32),
+          ),
+          const SizedBox(height: 16),
+
+          // Title
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: _kDark,
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Message
+          Text(
+            friendly,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 14,
+              color: _kTextMuted,
+              height: 1.6,
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // CTA button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 15),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                elevation: 0,
+              ),
+              child: Text(
+                isError ? 'Try Again' : 'Got It',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BookingSheetState extends State<_BookingSheet>
     with TickerProviderStateMixin {
   final _key = GlobalKey<FormState>();
@@ -1705,9 +1847,36 @@ class _BookingSheetState extends State<_BookingSheet>
       0; // 0=details, 1=payment, 2=processing, 3=done(error path handled)
   String? _bookingId;
   String _payRef = _generateReference();
+  StreamSubscription<DocumentSnapshot>? _bookingListener;
+  bool _confirming = false;
 
   bool get _isTestNumber =>
       _kTestMomoNumbers.contains(_momo.text.trim().replaceAll(' ', ''));
+  String _normalizeMomo(String raw) {
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+    if (digits.startsWith('233')) return digits;
+    if (digits.startsWith('0')) return '233${digits.substring(1)}';
+    if (digits.isEmpty) return '';
+    return '233$digits';
+  }
+
+  String _detectProvider(String normalized) {
+    final local = normalized.startsWith('233')
+        ? '0${normalized.substring(3)}'
+        : normalized;
+    if (local.startsWith('024') ||
+        local.startsWith('054') ||
+        local.startsWith('055') ||
+        local.startsWith('059') ||
+        local.startsWith('025') ||
+        local.startsWith('053')) return 'mtn';
+    if (local.startsWith('020') || local.startsWith('050')) return 'vod';
+    if (local.startsWith('026') ||
+        local.startsWith('056') ||
+        local.startsWith('027') ||
+        local.startsWith('057')) return 'tgo';
+    return _momoProvider;
+  }
 
   double get _totalAmount => widget.room.price * _slots;
   double get _depositAmount =>
@@ -1753,6 +1922,9 @@ class _BookingSheetState extends State<_BookingSheet>
       _email.text = user!.email!;
     }
 
+// Check for existing pending booking for this room
+    _checkExistingBooking();
+
     _stepAnim = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 320));
     _fadeAnim = CurvedAnimation(parent: _stepAnim, curve: Curves.easeOut);
@@ -1761,8 +1933,111 @@ class _BookingSheetState extends State<_BookingSheet>
     _stepAnim.forward();
   }
 
+  void _showResumeDialog(String existingBookingId) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(children: [
+          Icon(Icons.history_rounded, color: _kPrimary, size: 22),
+          SizedBox(width: 10),
+          Text('Resume Booking?',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        ]),
+        content: const Text(
+          'You have an incomplete booking for this room. Would you like to continue where you left off or start a new one?',
+          style: TextStyle(fontSize: 14, color: _kTextMuted, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              // Clear bookingId to start fresh
+              setState(() {
+                _bookingId = null;
+                _name.clear();
+                _phone.clear();
+                _momo.clear();
+                _school.clear();
+                _schoolId.clear();
+                _notes.clear();
+                _slots = 1;
+                _momoProvider = 'mtn';
+                _notStudent = false;
+              });
+            },
+            child:
+                const Text('Start Fresh', style: TextStyle(color: _kTextMuted)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              // Jump straight to payment step since details already saved
+              _goToStep(1);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kPrimary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: const Text('Resume',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _checkExistingBooking() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('bookings')
+          .where('room_id', isEqualTo: widget.room.id)
+          .where('user_id', isEqualTo: user.uid)
+          .where('status', isEqualTo: 'pending')
+          .where('payment_status', isEqualTo: 'pending')
+          .limit(1)
+          .get();
+
+      if (snap.docs.isEmpty) return;
+
+      final doc = snap.docs.first;
+      final data = doc.data();
+
+      // Pre-fill fields from existing booking
+      if (!mounted) return;
+      setState(() {
+        _bookingId = doc.id;
+        _name.text = data['name'] ?? '';
+        _phone.text = data['phone'] ?? '';
+        _momo.text = data['momo_number'] ?? '';
+        _school.text = data['school'] ?? '';
+        _schoolId.text = data['school_id'] ?? '';
+        _notes.text = data['notes'] ?? '';
+        _slots = (data['slots_booked'] as num?)?.toInt() ?? 1;
+        _momoProvider = data['momo_provider'] ?? 'mtn';
+        _notStudent = data['not_student'] ?? false;
+      });
+
+      // Show resume dialog
+      if (!mounted) return;
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (!mounted) return;
+      _showResumeDialog(doc.id);
+    } catch (e) {
+      debugPrint('Error checking existing booking: $e');
+    }
+  }
+
   @override
   void dispose() {
+    _bookingListener?.cancel();
     _stepAnim.dispose();
     for (final c in [
       _name,
@@ -1784,6 +2059,55 @@ class _BookingSheetState extends State<_BookingSheet>
     HapticFeedback.selectionClick();
   }
 
+  Future<bool> _isBookingStillPayable() async {
+    if (_bookingId == null) return true;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(_bookingId)
+          .get();
+      if (!snap.exists) return true;
+      final data = snap.data()!;
+      final paymentStatus = data['payment_status'] as String?;
+      final status = data['status'] as String?;
+
+      if (paymentStatus == 'fully_paid') return false;
+      if (paymentStatus == 'deposit_paid' && status == 'confirmed') {
+        final paymentCount = (data['payment_count'] as num?)?.toInt() ?? 0;
+        if (paymentCount > 0) return true;
+        return false;
+      }
+      return true;
+    } catch (e) {
+      debugPrint('Error checking booking payability: $e');
+      return true;
+    }
+  }
+
+  void _startBookingListener() {
+    _bookingListener?.cancel();
+    _bookingListener = FirebaseFirestore.instance
+        .collection('bookings')
+        .doc(_bookingId)
+        .snapshots()
+        .listen((snap) async {
+      if (!snap.exists || !mounted) return;
+      final data = snap.data()!;
+      final paymentStatus = data['payment_status'] as String?;
+
+      if (paymentStatus == 'deposit_paid' || paymentStatus == 'fully_paid') {
+        _bookingListener?.cancel();
+        if (!mounted) return;
+
+        await BookingStorageService.saveBookingId(_bookingId!);
+        HapticFeedback.heavyImpact();
+        widget.onSuccess(_bookingId!, _slots);
+      }
+    }, onError: (e) {
+      debugPrint('Booking listener error: $e');
+    });
+  }
+
   // ── Form → save pending booking ───────────────────────────────────────────
   Future<void> _proceedToPayment() async {
     if (!_key.currentState!.validate()) {
@@ -1792,8 +2116,8 @@ class _BookingSheetState extends State<_BookingSheet>
     }
     setState(() => _busy = true);
     try {
-      // ── Step 1: Fetch commission rate ──────────────────────────────────────
       String landlordId = '';
+      String hostelDurationType = 'per year'; // ← ADD THIS LINE
       double commissionRate = 5.0; // fallback default
 
       try {
@@ -1803,7 +2127,8 @@ class _BookingSheetState extends State<_BookingSheet>
             .doc(widget.hostel.id)
             .get();
         landlordId = hostelDoc.data()?['landlord_id']?.toString() ?? '';
-
+        hostelDurationType =
+            hostelDoc.data()?['duration_type']?.toString() ?? 'per year';
         if (landlordId.isNotEmpty) {
           // Try landlord-specific rate first
           final landlordDoc = await FirebaseFirestore.instance
@@ -1843,7 +2168,8 @@ class _BookingSheetState extends State<_BookingSheet>
 
       // ── Step 2: Calculate commission fields ────────────────────────────────
       final commissionOwed = _totalAmount * (commissionRate / 100);
-
+      final normalizedDurationType =
+          MoveInService.instance.normalizeDurationType(hostelDurationType);
       // ── Step 3: Save booking with all commission fields ────────────────────
       final docRef =
           await FirebaseFirestore.instance.collection('bookings').add({
@@ -1879,7 +2205,11 @@ class _BookingSheetState extends State<_BookingSheet>
         'deposit_amount': _depositAmount,
         'amount_paid': 0.0,
         'balance': _totalAmount,
-
+        // ── Move-in / payment schedule ──────────────────────────────────────
+        'duration_type': normalizedDurationType,
+        'move_in_date': null,
+        'payment_schedule': <Map<String, dynamic>>[],
+        'balance_due_date': null,
         // ── Commission snapshot ─────────────────────────────────────────────
         // Locked at booking time — never changes even if rate is renegotiated
         'commission_rate': commissionRate,
@@ -1950,9 +2280,33 @@ class _BookingSheetState extends State<_BookingSheet>
 
   // ── Initiate Paystack payment ─────────────────────────────────────────────
   Future<void> _initiatePayment() async {
+    setState(() => _busy = true);
+
+    final stillPayable = await _isBookingStillPayable();
+    if (!stillPayable) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _showSnack(
+        'This booking has already been paid for. Refresh your bookings page to see the confirmation.',
+        isError: false,
+      );
+      return;
+    }
+// ── Update booking with MoMo details before charging ──
+    if (_bookingId != null) {
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(_bookingId)
+          .update({
+        'momo_number': _momo.text.trim(),
+        'momo_provider': _momoProvider,
+        'momo_type': _momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash',
+      });
+    }
+
     _payRef = _generateReference();
     _goToStep(2);
-    setState(() => _busy = true);
+    _startBookingListener();
 
     try {
       if (_isTestNumber) {
@@ -2008,8 +2362,10 @@ class _BookingSheetState extends State<_BookingSheet>
         throw Exception(chargeData['message'] ?? 'Payment failed. Try again.');
       }
     } catch (e) {
+      _bookingListener?.cancel();
       if (!mounted) return;
       _payRef = _generateReference();
+      setState(() => _confirming = false);
       _goToStep(1);
       _showSnack('Payment error: $e', isError: true);
     } finally {
@@ -2022,10 +2378,9 @@ class _BookingSheetState extends State<_BookingSheet>
 
     final raw = gatewayResponse ?? message ?? 'Unknown error';
 
-    // Friendly translations for common Paystack/MTN/Vodafone codes
     final friendlyMessages = <String, String>{
       'LOW_BALANCE_OR_PAYEE_LIMIT_REACHED_OR_NOT_ALLOWED':
-          'Your Mobile Money wallet doesn\'t have enough balance to complete this payment, or you\'ve reached your transaction limit. Please top up your wallet and try again.',
+          'Your Mobile Money wallet doesn\'t have enough balance, or you\'ve reached your transaction limit. Please top up and try again.',
       'INVALID_OTP':
           'The code you entered was incorrect or has expired. Please try again with a new code.',
       'EXPIRED_OTP': 'The code has expired. Please try again to get a new one.',
@@ -2037,47 +2392,96 @@ class _BookingSheetState extends State<_BookingSheet>
 
     final friendly = friendlyMessages[raw] ??
         raw.replaceAll('_', ' ').toLowerCase().replaceFirstMapped(
-              RegExp(r'^.'),
-              (m) => m.group(0)!.toUpperCase(),
-            );
+            RegExp(r'^.'), (m) => m.group(0)!.toUpperCase());
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: _kRed.withOpacity(0.1),
-            shape: BoxShape.circle,
-          ),
-          child:
-              const Icon(Icons.error_outline_rounded, color: _kRed, size: 32),
-        ),
-        title: const Text(
-          'Payment Failed',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
-        content: Text(
-          friendly,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 14, color: _kTextMuted, height: 1.5),
-        ),
-        actionsAlignment: MainAxisAlignment.center,
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kPrimary,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(50)),
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 24),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [
+            BoxShadow(
+              color: _kRed.withOpacity(0.15),
+              blurRadius: 30,
+              offset: const Offset(0, -4),
             ),
-            child: const Text('Try Again',
-                style: TextStyle(fontWeight: FontWeight.w700)),
-          ),
-        ],
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            // Icon
+            Container(
+              width: 68,
+              height: 68,
+              decoration: BoxDecoration(
+                color: _kRed.withOpacity(0.08),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.error_rounded, color: _kRed, size: 34),
+            ),
+            const SizedBox(height: 16),
+
+            // Title
+            const Text(
+              'Payment Failed',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: _kDark,
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Message
+            Text(
+              friendly,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 14,
+                color: _kTextMuted,
+                height: 1.6,
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Try Again button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kPrimary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 15),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                child: const Text(
+                  'Try Again',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2099,16 +2503,23 @@ class _BookingSheetState extends State<_BookingSheet>
         return;
       }
       if (status == 'failed') {
-        if (!mounted) return;
-        _goToStep(1);
-        _showPaymentFailedDialog(data['gateway_response'], data['message']);
-        return;
+        // Only stop on failed after at least 30 seconds (6 attempts)
+        // MTN sometimes sends failed then corrects itself
+        if (i >= 6) {
+          _bookingListener?.cancel();
+          if (!mounted) return;
+          _goToStep(1);
+          _showPaymentFailedDialog(data['gateway_response'], data['message']);
+          return;
+        }
+        // Otherwise keep polling — MTN may still confirm
+        continue;
       }
     }
     if (!mounted) return;
-    _goToStep(1);
-    _showSnack('Payment is taking long. Check your phone for the MoMo prompt.',
-        isError: false);
+    // Don't go back to step 1 — the booking listener is still active
+    // and will auto-confirm once the webhook updates Firestore.
+    setState(() => _confirming = true);
   }
 
   Future<void> _onPaymentSuccess(String reference) async {
@@ -2280,6 +2691,18 @@ class _BookingSheetState extends State<_BookingSheet>
 
   Future<void> _confirmManualPayment() async {
     setState(() => _busy = true);
+
+    final stillPayable = await _isBookingStillPayable();
+    if (!stillPayable) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _showSnack(
+        'This booking has already been paid for. Refresh your bookings page to see the confirmation.',
+        isError: false,
+      );
+      return;
+    }
+
     try {
       final ref = _generateReference();
       await FirebaseFirestore.instance
@@ -2334,18 +2757,14 @@ class _BookingSheetState extends State<_BookingSheet>
 
   void _showSnack(String msg, {required bool isError}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Row(children: [
-        Icon(isError ? Icons.error_outline : Icons.info_outline,
-            color: Colors.white, size: 18),
-        const SizedBox(width: 10),
-        Flexible(child: Text(msg, style: const TextStyle(fontSize: 13))),
-      ]),
-      backgroundColor: isError ? _kRed : _kOrange,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16),
-    ));
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _StatusSheet(
+        isError: isError,
+        message: msg,
+      ),
+    );
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -2736,10 +3155,25 @@ class _BookingSheetState extends State<_BookingSheet>
           ctrl: _momo,
           icon: Icons.phone_android_rounded,
           kb: TextInputType.phone,
-          hint: '024XXXXXXX or 050XXXXXXX',
-          onChanged: (_) => setState(() {}),
-          validator: (v) =>
-              v!.trim().length < 10 ? 'Enter a valid MoMo number' : null,
+          hint: 'e.g. 0244123456 → auto-formatted to 233244123456',
+          onChanged: (v) {
+            final normalized = _normalizeMomo(v);
+            if (normalized != v) {
+              _momo.value = TextEditingValue(
+                text: normalized,
+                selection: TextSelection.collapsed(offset: normalized.length),
+              );
+            }
+            final detected = _detectProvider(normalized);
+            setState(() => _momoProvider = detected);
+          },
+          validator: (v) {
+            final digits = (v ?? '').replaceAll(RegExp(r'\D'), '');
+            if (!digits.startsWith('233') || digits.length != 12) {
+              return 'Enter a valid Ghanaian MoMo number';
+            }
+            return null;
+          },
         ),
         if (isTest)
           _InfoBanner(
@@ -2849,15 +3283,23 @@ class _BookingSheetState extends State<_BookingSheet>
           _ProcessingRing(),
           const SizedBox(height: 32),
           Text(
-            _isTestNumber ? 'Simulating Payment…' : 'Processing Payment…',
+            _confirming
+                ? 'Still Confirming…'
+                : _isTestNumber
+                    ? 'Simulating Payment…'
+                    : 'Processing Payment…',
             style: const TextStyle(
                 fontSize: 20, fontWeight: FontWeight.w800, color: _kDark),
           ),
           const SizedBox(height: 12),
           Text(
-            _isTestNumber
-                ? 'Hang tight — confirming your booking in test mode.'
-                : 'Check your ${_momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash'} phone\nand approve the payment prompt.',
+            _confirming
+                ? 'Your payment is being confirmed. This can take a moment — '
+                    'we\'ll update this automatically as soon as it\'s done. '
+                    'Please don\'t close this screen.'
+                : _isTestNumber
+                    ? 'Hang tight — confirming your booking in test mode.'
+                    : 'Check your ${_momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash'} phone\nand approve the payment prompt.',
             textAlign: TextAlign.center,
             style:
                 const TextStyle(fontSize: 14, color: _kTextMuted, height: 1.6),

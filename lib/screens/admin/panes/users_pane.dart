@@ -122,10 +122,7 @@ class _UsersPaneState extends State<UsersPane>
 
                     final allDocs = usersSnap.data?.docs ?? [];
                     final landlordDocs = landlordsSnap.data?.docs ?? [];
-                    print('🏠 landlordDocs count: ${landlordDocs.length}');
-                    print(
-                        '🏠 landlordsSnap state: ${landlordsSnap.connectionState}');
-                    print('🏠 landlordsSnap error: ${landlordsSnap.error}');
+
                     // Split users by role
                     var admins = allDocs
                         .where((d) =>

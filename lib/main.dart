@@ -10,6 +10,7 @@ import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'services/auth_service.dart';
 import 'services/notification_service.dart'; // ← new
+import 'services/balance_reminder_service.dart';
 
 // ── Global navigator key — shared with NotificationService so it can
 //    call go_router navigation when the user taps a notification.
@@ -50,7 +51,7 @@ Future<void> main() async {
   );
 }
 
-class RoomzyFindApp extends StatelessWidget {
+class RoomzyFindApp extends StatefulWidget {
   const RoomzyFindApp({
     super.key,
     required this.router,
@@ -61,13 +62,51 @@ class RoomzyFindApp extends StatelessWidget {
   final GlobalKey<NavigatorState> navigatorKey;
 
   @override
+  State<RoomzyFindApp> createState() => _RoomzyFindAppState();
+}
+
+class _RoomzyFindAppState extends State<RoomzyFindApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+
+    final auth = context.read<AuthService>();
+    final userId = auth.currentUser?.id ?? '';
+    final playerId = NotificationService.instance.currentPlayerId;
+
+    if (userId.isEmpty) return;
+
+    // Existing: auto-revoke overdue bookings
+    BalanceReminderService.instance.checkAndRevokeOverdue(userId: userId);
+
+    // New: nudge students who haven't logged their move-in date yet
+    BalanceReminderService.instance.checkAndNudgeMoveIn(
+      userId: userId,
+      oneSignalPlayerId: playerId,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     // context.read — NOT context.watch — so rebuilds don't affect the router
     return MaterialApp.router(
       title: 'RoomzyFind',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      routerConfig: router,
+      routerConfig: widget.router,
       scrollBehavior: _AppScrollBehavior(),
       builder: _responsiveBuilder,
     );

@@ -1004,6 +1004,7 @@ class _RoomCard extends StatelessWidget {
                 _InfoRow(label: 'Hostel', value: hostelName),
                 _InfoRow(label: 'Type', value: type),
                 _InfoRow(label: 'Capacity', value: capacity),
+                _SlotBar(d: d), // ← add this
                 _InfoRow(label: 'Price', value: price),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4),
@@ -1068,6 +1069,68 @@ class _RoomCard extends StatelessWidget {
   }
 }
 
+class _SlotBar extends StatelessWidget {
+  const _SlotBar({required this.d});
+  final Map<String, dynamic> d;
+
+  @override
+  Widget build(BuildContext context) {
+    final booked = (d['booked'] ?? 0) as num;
+    final cap = (d['capacity'] ?? 1) as num;
+    final slotsLeft = (cap - booked).clamp(0, cap).toInt();
+    final progress = cap > 0 ? (booked / cap).clamp(0.0, 1.0) : 0.0;
+    final isFull = booked >= cap;
+    final barColor = isFull
+        ? Colors.red
+        : progress > 0.6
+            ? Colors.orange
+            : Colors.green;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const SizedBox(
+              width: 72,
+              child: Text('Slots:',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: kTextLight)),
+            ),
+            Expanded(
+              child: Text(
+                isFull
+                    ? 'All $cap slot${cap == 1 ? '' : 's'} booked'
+                    : '$booked of $cap slot${cap == 1 ? '' : 's'} booked · $slotsLeft left',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isFull ? Colors.red : kTextDark),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ]),
+          const SizedBox(height: 5),
+          Padding(
+            padding: const EdgeInsets.only(left: 72),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 6,
+                backgroundColor: Colors.grey.shade200,
+                valueColor: AlwaysStoppedAnimation<Color>(barColor),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // HOSTEL DIALOG
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1206,7 +1269,8 @@ class _HostelDialogState extends State<_HostelDialog> {
 
     try {
       if (_isEdit) {
-        await db.collection('hostels').doc(widget.doc!.id).update(data);
+        // Inside _save() — WRONG
+        _depositValue.addListener(() => setState(() {}));
         // ✅ LOG HOSTEL UPDATE
         await ActivityLogger.log(
           action: 'Updated Hostel',
@@ -1501,11 +1565,17 @@ class _RoomDialogState extends State<_RoomDialog> {
 
   static const _types = [
     'Single',
+    'Single Ensuite',
     'Double',
+    'Double Ensuite',
     'Triple',
+    'Triple Ensuite',
     'Quad',
+    'Studio',
     'Suite',
-    'Studio'
+    'Dormitory',
+    'Chamber and Hall',
+    'Other',
   ];
 
   @override
@@ -1557,7 +1627,7 @@ class _RoomDialogState extends State<_RoomDialog> {
 
     try {
       if (_isEdit) {
-        await db.collection('hostels').doc(widget.doc!.id).update(data);
+        await db.collection('rooms').doc(widget.doc!.id).update(data);
         // ✅ LOG ROOM UPDATE
         await ActivityLogger.log(
           action: 'Updated Room',

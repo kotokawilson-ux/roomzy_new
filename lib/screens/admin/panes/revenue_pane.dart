@@ -1,6 +1,6 @@
 // lib/screens/admin/panes/revenue_pane.dart
 // ─────────────────────────────────────────────────────────────────────────────
-// RoomzyFind — Revenue & Platform Settings Pane
+// RoomzyFind — Revenue & Platform Settings Pane (Responsive)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:convert';
@@ -9,22 +9,36 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:http/http.dart' as http;
 
-// ── Colour tokens (matching admin_theme.dart) ─────────────────────────────
+// ── Colour tokens ─────────────────────────────────────────────────────────────
 const _kGreen = Color(0xFF1B4332);
 const _kGreenAccent = Color(0xFF2D6A4F);
+const _kGreenLight = Color(0xFF4ADE80);
 const _kCream = Color(0xFFF5F5F0);
 const _kSurface = Color(0xFFFFFFFF);
+const _kBg = Color(0xFFF8FAFC);
 const _kBorder = Color(0xFFE5E7EB);
 const _kTextDark = Color(0xFF1F2937);
+const _kTextMid = Color(0xFF374151);
 const _kTextLight = Color(0xFF6B7280);
 const _kTextMuted = Color(0xFF9CA3AF);
+const _kBlue = Color(0xFF2563EB);
+const _kOrange = Color(0xFFEA580C);
+const _kPurple = Color(0xFF7C3AED);
 
 const _kBackendUrl = 'https://roomzy-backend-eight.vercel.app/api';
 
 final _db = FirebaseFirestore.instance;
 final _fmt = NumberFormat('#,##0.00');
+
+// ── Responsive breakpoints ─────────────────────────────────────────────────
+bool _isMobile(BuildContext ctx) => MediaQuery.of(ctx).size.width < 600;
+bool _isTablet(BuildContext ctx) {
+  final w = MediaQuery.of(ctx).size.width;
+  return w >= 600 && w < 960;
+}
+
+bool _isDesktop(BuildContext ctx) => MediaQuery.of(ctx).size.width >= 960;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REVENUE PANE
@@ -40,7 +54,7 @@ class RevenuePane extends StatefulWidget {
 class _RevenuePaneState extends State<RevenuePane>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
-  String _period = 'all'; // 'today' | 'week' | 'month' | 'all'
+  String _period = 'all';
 
   @override
   void initState() {
@@ -56,17 +70,14 @@ class _RevenuePaneState extends State<RevenuePane>
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= 700;
+    final mobile = _isMobile(context);
 
     return Column(
       children: [
-        // ── Header ──────────────────────────────────────────────────────────
         _PageHeader(
           period: _period,
           onPeriodChanged: (p) => setState(() => _period = p),
         ),
-
-        // ── Tab bar ──────────────────────────────────────────────────────────
         Container(
           color: _kSurface,
           child: TabBar(
@@ -78,32 +89,30 @@ class _RevenuePaneState extends State<RevenuePane>
             indicatorColor: _kGreenAccent,
             indicatorWeight: 2,
             dividerColor: _kBorder,
-            labelStyle:
-                const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-            unselectedLabelStyle: const TextStyle(fontSize: 13),
-            tabs: const [
+            labelStyle: TextStyle(
+                fontSize: mobile ? 12 : 13, fontWeight: FontWeight.w600),
+            unselectedLabelStyle: TextStyle(fontSize: mobile ? 12 : 13),
+            tabs: [
               Tab(
-                icon: Icon(Icons.bar_chart_rounded, size: 16),
+                icon: Icon(Icons.bar_chart_rounded, size: mobile ? 14 : 16),
                 text: 'Overview',
               ),
               Tab(
-                icon: Icon(Icons.people_alt_outlined, size: 16),
+                icon: Icon(Icons.people_alt_outlined, size: mobile ? 14 : 16),
                 text: 'Per Landlord',
               ),
               Tab(
-                icon: Icon(Icons.tune_rounded, size: 16),
-                text: 'Commission Settings',
+                icon: Icon(Icons.tune_rounded, size: mobile ? 14 : 16),
+                text: 'Commission',
               ),
             ],
           ),
         ),
-
-        // ── Body ─────────────────────────────────────────────────────────────
         Expanded(
           child: TabBarView(
             controller: _tabs,
             children: [
-              _OverviewTab(period: _period, isWide: isWide),
+              _OverviewTab(period: _period),
               _LandlordRevenueTab(period: _period),
               const _CommissionSettingsTab(),
             ],
@@ -115,7 +124,7 @@ class _RevenuePaneState extends State<RevenuePane>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PAGE HEADER
+// PAGE HEADER — stacks on mobile, row on wider screens
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _PageHeader extends StatelessWidget {
@@ -125,80 +134,103 @@ class _PageHeader extends StatelessWidget {
 
   static const _periods = [
     ('today', 'Today'),
-    ('week', 'This Week'),
-    ('month', 'This Month'),
-    ('all', 'All Time'),
+    ('week', 'Week'),
+    ('month', 'Month'),
+    ('all', 'All'),
   ];
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: _kSurface,
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+    final mobile = _isMobile(context);
+
+    final titleRow = Row(
+      children: [
+        Container(
+          width: mobile ? 34 : 40,
+          height: mobile ? 34 : 40,
+          decoration: BoxDecoration(
+            color: _kGreenAccent.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(Icons.show_chart_rounded,
+              color: _kGreenAccent, size: mobile ? 17 : 20),
+        ),
+        const SizedBox(width: 10),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Revenue',
+                style: TextStyle(
+                    fontSize: mobile ? 16 : 18,
+                    fontWeight: FontWeight.w800,
+                    color: _kTextDark)),
+            Text('Commission & analytics',
+                style:
+                    TextStyle(fontSize: mobile ? 11 : 12, color: _kTextLight)),
+          ],
+        ),
+      ],
+    );
+
+    final periodRow = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       child: Row(
-        children: [
-          // Icon + title
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: _kGreenAccent.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.show_chart_rounded,
-                color: _kGreenAccent, size: 20),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Revenue',
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: _kTextDark)),
-                Text('Commission earnings & platform analytics',
-                    style: TextStyle(fontSize: 12, color: _kTextLight)),
-              ],
-            ),
-          ),
-          // Period filter
-          Wrap(
-            spacing: 6,
-            children: _periods.map((p) {
-              final selected = period == p.$1;
-              return GestureDetector(
-                onTap: () => onPeriodChanged(p.$1),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
+        children: _periods.map((p) {
+          final selected = period == p.$1;
+          return Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: GestureDetector(
+              onTap: () => onPeriodChanged(p.$1),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: EdgeInsets.symmetric(
+                    horizontal: mobile ? 10 : 12, vertical: mobile ? 5 : 6),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? _kGreenAccent
+                      : _kGreenAccent.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
                     color: selected
                         ? _kGreenAccent
-                        : _kGreenAccent.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: selected
-                          ? _kGreenAccent
-                          : _kGreenAccent.withOpacity(0.2),
-                    ),
-                  ),
-                  child: Text(
-                    p.$2,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: selected ? Colors.white : _kGreenAccent,
-                    ),
+                        : _kGreenAccent.withOpacity(0.2),
                   ),
                 ),
-              );
-            }).toList(),
-          ),
-        ],
+                child: Text(
+                  p.$2,
+                  style: TextStyle(
+                    fontSize: mobile ? 11 : 12,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : _kGreenAccent,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
       ),
+    );
+
+    return Container(
+      color: _kSurface,
+      padding: EdgeInsets.fromLTRB(mobile ? 14 : 20, mobile ? 14 : 20,
+          mobile ? 14 : 20, mobile ? 10 : 12),
+      child: mobile
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                titleRow,
+                const SizedBox(height: 12),
+                periodRow,
+              ],
+            )
+          : Row(
+              children: [
+                titleRow,
+                const Spacer(),
+                periodRow,
+              ],
+            ),
     );
   }
 }
@@ -208,9 +240,8 @@ class _PageHeader extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _OverviewTab extends StatelessWidget {
-  const _OverviewTab({required this.period, required this.isWide});
+  const _OverviewTab({required this.period});
   final String period;
-  final bool isWide;
 
   @override
   Widget build(BuildContext context) {
@@ -228,14 +259,12 @@ class _OverviewTab extends StatelessWidget {
         final docs = snap.data?.docs ?? [];
         final filtered = _filterByPeriod(docs, period);
 
-        // Compute stats
         double totalPaid = 0;
         double totalCommission = 0;
         double totalLandlordPayout = 0;
         int totalBookings = filtered.length;
         int fullyPaid = 0;
         int depositOnly = 0;
-
         final Map<String, double> monthlyCommission = {};
 
         for (final doc in filtered) {
@@ -246,11 +275,9 @@ class _OverviewTab extends StatelessWidget {
           totalPaid += amountPaid;
           totalCommission += commission;
           totalLandlordPayout += amountPaid - commission;
-
           if (d['payment_status'] == 'fully_paid') fullyPaid++;
           if (d['payment_status'] == 'deposit_paid') depositOnly++;
 
-          // Monthly breakdown
           final paidAt = d['paid_at'];
           if (paidAt is Timestamp) {
             final month = DateFormat('MMM yyyy').format(paidAt.toDate());
@@ -259,120 +286,342 @@ class _OverviewTab extends StatelessWidget {
           }
         }
 
+        final mobile = _isMobile(context);
+        final tablet = _isTablet(context);
+        final hPad = mobile ? 14.0 : 20.0;
+
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(hPad),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Stat chips ───────────────────────────────────────────────
-              isWide
-                  ? Row(children: [
-                      Expanded(
-                          child: _StatCard(
-                        icon: Icons.account_balance_wallet_rounded,
-                        label: 'Platform Revenue',
-                        value: 'GHS ${_fmt.format(totalCommission)}',
-                        sub: 'Commission earned',
-                        color: _kGreenAccent,
-                      )),
-                      const SizedBox(width: 14),
-                      Expanded(
-                          child: _StatCard(
-                        icon: Icons.receipt_long_rounded,
-                        label: 'Total Processed',
-                        value: 'GHS ${_fmt.format(totalPaid)}',
-                        sub: 'Student payments',
-                        color: const Color(0xFF2563EB),
-                      )),
-                      const SizedBox(width: 14),
-                      Expanded(
-                          child: _StatCard(
-                        icon: Icons.send_rounded,
-                        label: 'Landlord Payouts',
-                        value: 'GHS ${_fmt.format(totalLandlordPayout)}',
-                        sub: 'After commission deduction',
-                        color: const Color(0xFF7C3AED),
-                      )),
-                      const SizedBox(width: 14),
-                      Expanded(
-                          child: _StatCard(
-                        icon: Icons.calendar_month_rounded,
-                        label: 'Bookings',
-                        value: '$totalBookings',
-                        sub: '$fullyPaid full · $depositOnly deposit',
-                        color: const Color(0xFFEA580C),
-                      )),
-                    ])
-                  : Column(children: [
-                      _StatCard(
-                        icon: Icons.account_balance_wallet_rounded,
-                        label: 'Platform Revenue',
-                        value: 'GHS ${_fmt.format(totalCommission)}',
-                        sub: 'Commission earned',
-                        color: _kGreenAccent,
-                      ),
-                      const SizedBox(height: 12),
-                      _StatCard(
-                        icon: Icons.receipt_long_rounded,
-                        label: 'Total Processed',
-                        value: 'GHS ${_fmt.format(totalPaid)}',
-                        sub: 'Student payments',
-                        color: const Color(0xFF2563EB),
-                      ),
-                      const SizedBox(height: 12),
-                      _StatCard(
-                        icon: Icons.send_rounded,
-                        label: 'Landlord Payouts',
-                        value: 'GHS ${_fmt.format(totalLandlordPayout)}',
-                        sub: '95% of payments',
-                        color: const Color(0xFF7C3AED),
-                      ),
-                      const SizedBox(height: 12),
-                      _StatCard(
-                        icon: Icons.calendar_month_rounded,
-                        label: 'Bookings',
-                        value: '$totalBookings',
-                        sub: '$fullyPaid full · $depositOnly deposit',
-                        color: const Color(0xFFEA580C),
-                      ),
-                    ]),
+              // ── Stat grid ─────────────────────────────────────────────────
+              _StatGrid(
+                mobile: mobile,
+                tablet: tablet,
+                items: [
+                  _StatItem(
+                    icon: Icons.account_balance_wallet_rounded,
+                    label: 'Platform Revenue',
+                    value: 'GHS ${_fmt.format(totalCommission)}',
+                    sub: 'Commission earned',
+                    color: _kGreenAccent,
+                  ),
+                  _StatItem(
+                    icon: Icons.receipt_long_rounded,
+                    label: 'Total Processed',
+                    value: 'GHS ${_fmt.format(totalPaid)}',
+                    sub: 'Student payments',
+                    color: _kBlue,
+                  ),
+                  _StatItem(
+                    icon: Icons.send_rounded,
+                    label: 'Landlord Payouts',
+                    value: 'GHS ${_fmt.format(totalLandlordPayout)}',
+                    sub: 'After commission',
+                    color: _kPurple,
+                  ),
+                  _StatItem(
+                    icon: Icons.calendar_month_rounded,
+                    label: 'Bookings',
+                    value: '$totalBookings',
+                    sub: '$fullyPaid full · $depositOnly deposit',
+                    color: _kOrange,
+                  ),
+                ],
+              ),
 
-              const SizedBox(height: 24),
+              SizedBox(height: mobile ? 16 : 24),
 
-              // ── Split visual ─────────────────────────────────────────────
+              // ── Split visual ───────────────────────────────────────────────
               _SplitVisual(
-                  totalPaid: totalPaid,
-                  commission: totalCommission,
-                  landlordPayout: totalLandlordPayout),
+                totalPaid: totalPaid,
+                commission: totalCommission,
+                landlordPayout: totalLandlordPayout,
+              ),
 
-              const SizedBox(height: 24),
+              SizedBox(height: mobile ? 16 : 24),
 
-              // ── Monthly breakdown ────────────────────────────────────────
+              // ── Monthly chart ──────────────────────────────────────────────
               if (monthlyCommission.isNotEmpty) ...[
                 _SectionHead(
-                    icon: Icons.bar_chart_rounded,
-                    title: 'Monthly Commission Breakdown'),
-                const SizedBox(height: 12),
+                    icon: Icons.bar_chart_rounded, title: 'Monthly Commission'),
+                SizedBox(height: mobile ? 10 : 12),
                 _MonthlyChart(data: monthlyCommission),
-                const SizedBox(height: 24),
+                SizedBox(height: mobile ? 16 : 24),
               ],
 
-              // ── Recent confirmed bookings ────────────────────────────────
+              // ── Transactions ───────────────────────────────────────────────
               _SectionHead(
                   icon: Icons.history_rounded, title: 'Recent Transactions'),
-              const SizedBox(height: 12),
+              SizedBox(height: mobile ? 10 : 12),
               if (filtered.isEmpty)
                 _EmptyState(
                     icon: Icons.receipt_long_outlined,
                     message: 'No confirmed bookings for this period')
               else
-                _TransactionsTable(docs: filtered.take(20).toList()),
+                mobile
+                    ? _TransactionCards(docs: filtered.take(20).toList())
+                    : _TransactionsTable(docs: filtered.take(20).toList()),
             ],
           ),
         );
       },
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESPONSIVE STAT GRID
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StatItem {
+  final IconData icon;
+  final String label;
+  final String value;
+  final String sub;
+  final Color color;
+  const _StatItem(
+      {required this.icon,
+      required this.label,
+      required this.value,
+      required this.sub,
+      required this.color});
+}
+
+class _StatGrid extends StatelessWidget {
+  const _StatGrid({
+    required this.mobile,
+    required this.tablet,
+    required this.items,
+  });
+  final bool mobile;
+  final bool tablet;
+  final List<_StatItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    // Mobile: 2-column grid, Tablet: 2-column, Desktop: 4-column
+    final cols = mobile ? 2 : (tablet ? 2 : 4);
+    final gap = mobile ? 10.0 : 14.0;
+
+    final rows = <List<_StatItem>>[];
+    for (var i = 0; i < items.length; i += cols) {
+      rows.add(items.sublist(i, (i + cols).clamp(0, items.length)));
+    }
+
+    return Column(
+      children: rows.asMap().entries.map((e) {
+        final rowItems = e.value;
+        return Padding(
+          padding: EdgeInsets.only(bottom: e.key < rows.length - 1 ? gap : 0),
+          child: Row(
+            children: rowItems.asMap().entries.map((entry) {
+              return Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(left: entry.key > 0 ? gap : 0),
+                  child: _StatCard(item: entry.value, mobile: mobile),
+                ),
+              );
+            }).toList(),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  const _StatCard({required this.item, required this.mobile});
+  final _StatItem item;
+  final bool mobile;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: EdgeInsets.all(mobile ? 12 : 16),
+        decoration: BoxDecoration(
+          color: _kSurface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _kBorder),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 3)),
+          ],
+        ),
+        child: mobile
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: item.color.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(item.icon, color: item.color, size: 16),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(item.value,
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: _kTextDark)),
+                  const SizedBox(height: 2),
+                  Text(item.label,
+                      style: TextStyle(fontSize: 10, color: _kTextLight),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                  Text(item.sub,
+                      style: TextStyle(fontSize: 9, color: _kTextMuted),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ],
+              )
+            : Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: item.color.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(item.icon, color: item.color, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(item.label,
+                              style: const TextStyle(
+                                  fontSize: 11, color: _kTextLight)),
+                          const SizedBox(height: 2),
+                          Text(item.value,
+                              style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                  color: _kTextDark)),
+                          Text(item.sub,
+                              style: const TextStyle(
+                                  fontSize: 10, color: _kTextMuted)),
+                        ]),
+                  ),
+                ],
+              ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSACTION CARDS (mobile only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TransactionCards extends StatelessWidget {
+  const _TransactionCards({required this.docs});
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: docs.asMap().entries.map((entry) {
+        final d = entry.value.data();
+        final amountPaid = (d['amount_paid'] as num?)?.toDouble() ?? 0;
+        final commission = (d['commission_collected'] as num?)?.toDouble() ??
+            (amountPaid * 0.05);
+        final paidAt = d['paid_at'];
+        final dateStr = paidAt is Timestamp
+            ? DateFormat('dd MMM yyyy').format(paidAt.toDate())
+            : '—';
+        final paymentStatus = d['payment_status']?.toString() ?? '';
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _kSurface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _kBorder),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.03),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2)),
+            ],
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          d['name']?.toString() ?? '—',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: _kTextDark),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          d['hostel_name']?.toString() ?? '—',
+                          style:
+                              const TextStyle(fontSize: 11, color: _kTextMuted),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _PaymentStatusBadge(status: paymentStatus),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  _TxnStat(
+                      label: 'Paid',
+                      value: 'GHS ${_fmt.format(amountPaid)}',
+                      color: _kTextDark),
+                  const SizedBox(width: 16),
+                  _TxnStat(
+                      label: 'Commission',
+                      value: 'GHS ${_fmt.format(commission)}',
+                      color: _kGreenAccent),
+                  const Spacer(),
+                  Text(dateStr,
+                      style: const TextStyle(fontSize: 10, color: _kTextMuted)),
+                ],
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _TxnStat extends StatelessWidget {
+  const _TxnStat(
+      {required this.label, required this.value, required this.color});
+  final String label, value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 10, color: _kTextMuted)),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+        ],
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -398,7 +647,6 @@ class _LandlordRevenueTab extends StatelessWidget {
 
         final docs = _filterByPeriod(snap.data?.docs ?? [], period);
 
-        // Group by landlord
         final Map<String, _LandlordRevData> landlords = {};
         for (final doc in docs) {
           final d = doc.data();
@@ -422,16 +670,18 @@ class _LandlordRevenueTab extends StatelessWidget {
         final sorted = landlords.values.toList()
           ..sort((a, b) => b.totalPaid.compareTo(a.totalPaid));
 
+        final mobile = _isMobile(context);
+
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(mobile ? 14 : 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _SectionHead(
                   icon: Icons.people_alt_rounded, title: 'Revenue by Landlord'),
-              const SizedBox(height: 12),
+              SizedBox(height: mobile ? 10 : 12),
               if (sorted.isEmpty)
-                _EmptyState(
+                const _EmptyState(
                     icon: Icons.people_outline,
                     message: 'No data for this period')
               else
@@ -462,6 +712,8 @@ class _LandlordRevenueCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final mobile = _isMobile(context);
+
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       future: _db.collection('landlords').doc(data.landlordId).get(),
       builder: (context, snap) {
@@ -473,7 +725,7 @@ class _LandlordRevenueCard extends StatelessWidget {
 
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(mobile ? 14 : 16),
           decoration: BoxDecoration(
             color: _kSurface,
             borderRadius: BorderRadius.circular(14),
@@ -488,10 +740,9 @@ class _LandlordRevenueCard extends StatelessWidget {
           child: Column(
             children: [
               Row(children: [
-                // Avatar
                 Container(
-                  width: 42,
-                  height: 42,
+                  width: mobile ? 36 : 42,
+                  height: mobile ? 36 : 42,
                   decoration: BoxDecoration(
                     color: _kGreenAccent.withOpacity(0.10),
                     shape: BoxShape.circle,
@@ -501,66 +752,64 @@ class _LandlordRevenueCard extends StatelessWidget {
                       landlordName.isNotEmpty
                           ? landlordName[0].toUpperCase()
                           : '?',
-                      style: const TextStyle(
-                          fontSize: 16,
+                      style: TextStyle(
+                          fontSize: mobile ? 14 : 16,
                           fontWeight: FontWeight.w700,
                           color: _kGreenAccent),
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(landlordName,
-                          style: const TextStyle(
-                              fontSize: 14,
+                          style: TextStyle(
+                              fontSize: mobile ? 13 : 14,
                               fontWeight: FontWeight.w700,
-                              color: _kTextDark)),
+                              color: _kTextDark),
+                          overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 2),
                       Row(children: [
                         Text(
                             '${data.bookings} booking${data.bookings != 1 ? 's' : ''}',
                             style: const TextStyle(
-                                fontSize: 12, color: _kTextLight)),
-                        const SizedBox(width: 8),
+                                fontSize: 11, color: _kTextLight)),
+                        const SizedBox(width: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
                             color: hasSubaccount
                                 ? _kGreenAccent.withOpacity(0.1)
-                                : Colors.orange.withOpacity(0.1),
+                                : _kOrange.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
-                            hasSubaccount ? 'Payout Active' : 'No Payout Setup',
+                            hasSubaccount ? 'Payout Active' : 'No Payout',
                             style: TextStyle(
                                 fontSize: 9,
                                 fontWeight: FontWeight.w700,
-                                color: hasSubaccount
-                                    ? _kGreenAccent
-                                    : Colors.orange),
+                                color:
+                                    hasSubaccount ? _kGreenAccent : _kOrange),
                           ),
                         ),
                       ]),
                     ],
                   ),
                 ),
-                // Total
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   Text('GHS ${_fmt.format(data.totalPaid)}',
-                      style: const TextStyle(
-                          fontSize: 15,
+                      style: TextStyle(
+                          fontSize: mobile ? 14 : 15,
                           fontWeight: FontWeight.w800,
                           color: _kTextDark)),
-                  const Text('total collected',
+                  const Text('collected',
                       style: TextStyle(fontSize: 10, color: _kTextMuted)),
                 ]),
               ]),
-              const SizedBox(height: 14),
-              // Progress bar row
+              const SizedBox(height: 12),
               Row(children: [
                 Expanded(
                   child: Column(
@@ -569,9 +818,9 @@ class _LandlordRevenueCard extends StatelessWidget {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('Landlord gets',
-                              style: const TextStyle(
-                                  fontSize: 11, color: _kTextLight)),
+                          const Text('Landlord gets',
+                              style:
+                                  TextStyle(fontSize: 11, color: _kTextLight)),
                           Text('GHS ${_fmt.format(data.landlordPayout)}',
                               style: const TextStyle(
                                   fontSize: 11,
@@ -588,14 +837,14 @@ class _LandlordRevenueCard extends StatelessWidget {
                               : 0,
                           minHeight: 6,
                           backgroundColor: _kBorder,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                              Color(0xFF2563EB)),
+                          valueColor:
+                              const AlwaysStoppedAnimation<Color>(_kBlue),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 14),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   const Text('Commission',
                       style: TextStyle(fontSize: 11, color: _kTextLight)),
@@ -660,23 +909,19 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
       setState(() => _error = 'Enter a valid percentage between 0 and 50.');
       return;
     }
-
     setState(() {
       _saving = true;
       _error = null;
       _success = null;
     });
-
     try {
       await _db.collection('settings').doc('platform').set({
         'commission_percent': val,
         'updated_at': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-
       setState(() {
         _currentGlobal = val;
-        _success =
-            'Global commission updated to ${val.toStringAsFixed(0)}%. New bookings will use this rate.';
+        _success = 'Global commission updated to ${val.toStringAsFixed(0)}%.';
       });
     } catch (e) {
       setState(() => _error = 'Failed to save: $e');
@@ -698,35 +943,37 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
           child: CircularProgressIndicator(color: _kGreenAccent));
     }
 
+    final mobile = _isMobile(context);
+    final hPad = mobile ? 14.0 : 20.0;
+
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(hPad),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Global commission ────────────────────────────────────────────
+          // ── Global rate ──────────────────────────────────────────────────
           _SectionHead(
               icon: Icons.percent_rounded, title: 'Global Commission Rate'),
           const SizedBox(height: 4),
           const Text(
-            'This is the default commission RoomzyFind takes from every payment. It applies to all landlords unless overridden individually.',
+            'Default commission on every payment. Overridable per landlord.',
             style: TextStyle(fontSize: 12, color: _kTextLight, height: 1.5),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: mobile ? 14 : 16),
 
-          // Current rate display
+          // Current rate hero
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: EdgeInsets.all(mobile ? 16 : 20),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
+              gradient: const LinearGradient(
                 colors: [_kGreen, _kGreenAccent],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Row(children: [
-              Expanded(
-                child: Column(
+            child: mobile
+                ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text('Current Rate',
@@ -736,35 +983,59 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
                       Text(
                         '${_currentGlobal.toStringAsFixed(0)}%',
                         style: const TextStyle(
-                            fontSize: 40,
+                            fontSize: 36,
                             fontWeight: FontWeight.w900,
                             color: Colors.white),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 6),
                       Text(
-                        'Student pays GHS 1000 → Landlord gets GHS ${(1000 * (1 - _currentGlobal / 100)).toStringAsFixed(0)} · RoomzyFind keeps GHS ${(1000 * _currentGlobal / 100).toStringAsFixed(0)}',
+                        'GHS 1000 → Landlord GHS ${(1000 * (1 - _currentGlobal / 100)).toStringAsFixed(0)} · RoomzyFind GHS ${(1000 * _currentGlobal / 100).toStringAsFixed(0)}',
                         style: const TextStyle(
                             color: Colors.white60, fontSize: 11),
                       ),
-                    ]),
-              ),
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.percent_rounded,
-                    color: Colors.white, size: 30),
-              ),
-            ]),
+                    ],
+                  )
+                : Row(children: [
+                    Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Current Rate',
+                                style: TextStyle(
+                                    color: Colors.white70, fontSize: 12)),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${_currentGlobal.toStringAsFixed(0)}%',
+                              style: const TextStyle(
+                                  fontSize: 40,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.white),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Student pays GHS 1000 → Landlord gets GHS ${(1000 * (1 - _currentGlobal / 100)).toStringAsFixed(0)} · RoomzyFind keeps GHS ${(1000 * _currentGlobal / 100).toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                  color: Colors.white60, fontSize: 11),
+                            ),
+                          ]),
+                    ),
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.percent_rounded,
+                          color: Colors.white, size: 30),
+                    ),
+                  ]),
           ),
-          const SizedBox(height: 20),
+          SizedBox(height: mobile ? 14 : 20),
 
-          // Edit rate
+          // Edit rate card
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(mobile ? 14 : 16),
             decoration: BoxDecoration(
               color: _kSurface,
               borderRadius: BorderRadius.circular(14),
@@ -787,14 +1058,14 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
                       inputFormatters: [
                         FilteringTextInputFormatter.allow(RegExp(r'^\d{0,2}$'))
                       ],
-                      style: const TextStyle(
-                          fontSize: 24,
+                      style: TextStyle(
+                          fontSize: mobile ? 20 : 24,
                           fontWeight: FontWeight.w800,
                           color: _kTextDark),
                       decoration: InputDecoration(
                         suffixText: '%',
-                        suffixStyle: const TextStyle(
-                            fontSize: 20,
+                        suffixStyle: TextStyle(
+                            fontSize: mobile ? 16 : 20,
                             fontWeight: FontWeight.w700,
                             color: _kTextLight),
                         hintText: '5',
@@ -815,7 +1086,7 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   SizedBox(
                     height: 52,
                     child: ElevatedButton.icon(
@@ -829,13 +1100,13 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
                           : const Icon(Icons.save_rounded,
                               size: 16, color: Colors.white),
                       label: Text(
-                        _saving ? 'Saving…' : 'Save Rate',
+                        _saving ? 'Saving…' : 'Save',
                         style: const TextStyle(
                             color: Colors.white, fontWeight: FontWeight.w600),
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _kGreenAccent,
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10)),
                         elevation: 0,
@@ -861,18 +1132,17 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
             ),
           ),
 
-          const SizedBox(height: 24),
+          SizedBox(height: mobile ? 20 : 24),
 
           // ── Per-landlord overrides ───────────────────────────────────────
           _SectionHead(
-              icon: Icons.people_alt_rounded,
-              title: 'Per-Landlord Commission Overrides'),
+              icon: Icons.people_alt_rounded, title: 'Per-Landlord Overrides'),
           const SizedBox(height: 4),
           const Text(
-            'Set a custom commission rate for a specific landlord. Leave blank to use the global rate.',
+            'Set a custom rate for a specific landlord. Leave blank to use the global rate.',
             style: TextStyle(fontSize: 12, color: _kTextLight, height: 1.5),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: mobile ? 12 : 16),
 
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream:
@@ -899,30 +1169,26 @@ class _CommissionSettingsTabState extends State<_CommissionSettingsTab> {
             },
           ),
 
-          const SizedBox(height: 24),
+          SizedBox(height: mobile ? 16 : 24),
 
-          // ── Info note ────────────────────────────────────────────────────
+          // Info note
           Container(
-            padding: const EdgeInsets.all(14),
+            padding: EdgeInsets.all(mobile ? 12 : 14),
             decoration: BoxDecoration(
               color: const Color(0xFFFFF7ED),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: const Color(0xFFFED7AA)),
             ),
-            child: const Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.info_outline_rounded,
-                      size: 16, color: Color(0xFFEA580C)),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Changing the commission rate updates future bookings only. Existing confirmed bookings are not affected. The new rate is stored in Firestore and read by the backend when processing each payment.',
-                      style: TextStyle(
-                          fontSize: 12, color: Color(0xFFEA580C), height: 1.5),
-                    ),
-                  ),
-                ]),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.info_outline_rounded, size: 15, color: _kOrange),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Rate changes apply to future bookings only. Existing bookings snapshot the rate at creation time and are not affected.',
+                  style: TextStyle(fontSize: 12, color: _kOrange, height: 1.5),
+                ),
+              ),
+            ]),
           ),
         ],
       ),
@@ -968,17 +1234,13 @@ class _LandlordCommissionRowState extends State<_LandlordCommissionRow> {
     if (val == null) return;
     setState(() => _saving = true);
     try {
-      // Update Firestore (used for display + per-booking snapshots)
       await _db.collection('landlords').doc(widget.doc.id).update({
         'commission_percent': val,
         'updated_at': FieldValue.serverTimestamp(),
       });
-
-      // Update the Paystack subaccount's default split rate too
       try {
         await http.post(
-          Uri.parse(
-              'https://roomzy-backend-eight.vercel.app/api/update-subaccount-rate'),
+          Uri.parse('$_kBackendUrl/update-subaccount-rate'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
             'landlordId': widget.doc.id,
@@ -988,7 +1250,6 @@ class _LandlordCommissionRowState extends State<_LandlordCommissionRow> {
       } catch (e) {
         debugPrint('Subaccount rate sync failed (non-fatal): $e');
       }
-
       setState(() => _saved = true);
       await Future.delayed(const Duration(seconds: 2));
       if (mounted) setState(() => _saved = false);
@@ -1005,20 +1266,21 @@ class _LandlordCommissionRowState extends State<_LandlordCommissionRow> {
     final hasSubaccount =
         d['paystack_subaccount']?.toString().isNotEmpty == true;
     final customRate = (d['commission_percent'] as num?)?.toDouble();
+    final mobile = _isMobile(context);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: EdgeInsets.symmetric(
+          horizontal: mobile ? 12 : 14, vertical: mobile ? 10 : 12),
       decoration: BoxDecoration(
         color: _kSurface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _kBorder),
       ),
       child: Row(children: [
-        // Avatar
         Container(
-          width: 36,
-          height: 36,
+          width: mobile ? 32 : 36,
+          height: mobile ? 32 : 36,
           decoration: BoxDecoration(
             color: _kGreenAccent.withOpacity(0.10),
             shape: BoxShape.circle,
@@ -1026,55 +1288,47 @@ class _LandlordCommissionRowState extends State<_LandlordCommissionRow> {
           child: Center(
             child: Text(
               name.isNotEmpty ? name[0].toUpperCase() : '?',
-              style: const TextStyle(
-                  fontSize: 14,
+              style: TextStyle(
+                  fontSize: mobile ? 12 : 14,
                   fontWeight: FontWeight.w700,
                   color: _kGreenAccent),
             ),
           ),
         ),
-        const SizedBox(width: 12),
-
-        // Name + status
+        const SizedBox(width: 10),
         Expanded(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(name,
-                style: const TextStyle(
-                    fontSize: 13,
+                style: TextStyle(
+                    fontSize: mobile ? 12 : 13,
                     fontWeight: FontWeight.w600,
                     color: _kTextDark),
                 overflow: TextOverflow.ellipsis),
             Text(
               customRate != null
                   ? 'Custom: ${customRate.toStringAsFixed(0)}%'
-                  : 'Using global: ${widget.globalRate.toStringAsFixed(0)}%',
+                  : 'Global: ${widget.globalRate.toStringAsFixed(0)}%',
               style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 10,
                   color: customRate != null ? _kGreenAccent : _kTextMuted),
             ),
           ]),
         ),
-
-        // Payout badge
-        if (!hasSubaccount)
+        if (!hasSubaccount && !mobile)
           Container(
             margin: const EdgeInsets.only(right: 8),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: Colors.orange.withOpacity(0.1),
+              color: _kOrange.withOpacity(0.1),
               borderRadius: BorderRadius.circular(20),
             ),
             child: const Text('No Payout',
                 style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.orange)),
+                    fontSize: 9, fontWeight: FontWeight.w700, color: _kOrange)),
           ),
-
-        // Rate input
         SizedBox(
-          width: 60,
+          width: mobile ? 52 : 60,
           child: TextField(
             controller: _ctrl,
             keyboardType: TextInputType.number,
@@ -1082,14 +1336,16 @@ class _LandlordCommissionRowState extends State<_LandlordCommissionRow> {
               FilteringTextInputFormatter.allow(RegExp(r'^\d{0,2}$'))
             ],
             textAlign: TextAlign.center,
-            style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w700, color: _kTextDark),
+            style: TextStyle(
+                fontSize: mobile ? 12 : 13,
+                fontWeight: FontWeight.w700,
+                color: _kTextDark),
             decoration: InputDecoration(
               suffixText: '%',
-              suffixStyle: const TextStyle(fontSize: 11, color: _kTextLight),
+              suffixStyle: const TextStyle(fontSize: 10, color: _kTextLight),
               hintText: '${widget.globalRate.toStringAsFixed(0)}',
               contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  EdgeInsets.symmetric(horizontal: mobile ? 6 : 8, vertical: 8),
               border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
                   borderSide: const BorderSide(color: _kBorder)),
@@ -1106,8 +1362,6 @@ class _LandlordCommissionRowState extends State<_LandlordCommissionRow> {
           ),
         ),
         const SizedBox(width: 8),
-
-        // Save button
         GestureDetector(
           onTap: _saving ? null : _save,
           child: AnimatedContainer(
@@ -1153,9 +1407,10 @@ class _SplitVisual extends StatelessWidget {
   Widget build(BuildContext context) {
     final commissionPct = totalPaid > 0 ? commission / totalPaid : 0.05;
     final landlordPct = 1 - commissionPct;
+    final mobile = _isMobile(context);
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(mobile ? 14 : 20),
       decoration: BoxDecoration(
         color: _kSurface,
         borderRadius: BorderRadius.circular(16),
@@ -1165,7 +1420,7 @@ class _SplitVisual extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Row(children: [
-            Icon(Icons.pie_chart_outline_rounded, size: 16, color: _kTextLight),
+            Icon(Icons.pie_chart_outline_rounded, size: 15, color: _kTextLight),
             SizedBox(width: 8),
             Text('Payment Split',
                 style: TextStyle(
@@ -1173,24 +1428,22 @@ class _SplitVisual extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                     color: _kTextDark)),
           ]),
-          const SizedBox(height: 16),
-
-          // Bar
+          const SizedBox(height: 14),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: SizedBox(
-              height: 24,
+              height: mobile ? 20 : 24,
               child: Row(children: [
                 Flexible(
                   flex: (landlordPct * 100).round(),
                   child: Container(
-                    color: const Color(0xFF2563EB),
+                    color: _kBlue,
                     child: Center(
                       child: Text(
                         '${(landlordPct * 100).toStringAsFixed(0)}%',
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: Colors.white,
-                            fontSize: 11,
+                            fontSize: mobile ? 10 : 11,
                             fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -1203,9 +1456,9 @@ class _SplitVisual extends StatelessWidget {
                     child: Center(
                       child: Text(
                         '${(commissionPct * 100).toStringAsFixed(0)}%',
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: Colors.white,
-                            fontSize: 11,
+                            fontSize: mobile ? 10 : 11,
                             fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -1215,17 +1468,33 @@ class _SplitVisual extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-
-          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-            _LegendItem(
-                color: const Color(0xFF2563EB),
-                label: 'Landlord Payout',
-                value: 'GHS ${_fmt.format(landlordPayout)}'),
-            _LegendItem(
-                color: _kGreenAccent,
-                label: 'Platform Commission',
-                value: 'GHS ${_fmt.format(commission)}'),
-          ]),
+          mobile
+              ? Column(
+                  children: [
+                    _LegendItem(
+                        color: _kBlue,
+                        label: 'Landlord Payout',
+                        value: 'GHS ${_fmt.format(landlordPayout)}'),
+                    const SizedBox(height: 8),
+                    _LegendItem(
+                        color: _kGreenAccent,
+                        label: 'Platform Commission',
+                        value: 'GHS ${_fmt.format(commission)}'),
+                  ],
+                )
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _LegendItem(
+                        color: _kBlue,
+                        label: 'Landlord Payout',
+                        value: 'GHS ${_fmt.format(landlordPayout)}'),
+                    _LegendItem(
+                        color: _kGreenAccent,
+                        label: 'Platform Commission',
+                        value: 'GHS ${_fmt.format(commission)}'),
+                  ],
+                ),
         ],
       ),
     );
@@ -1258,7 +1527,7 @@ class _LegendItem extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MONTHLY CHART (simple bar chart)
+// MONTHLY CHART
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _MonthlyChart extends StatelessWidget {
@@ -1274,10 +1543,12 @@ class _MonthlyChart extends StatelessWidget {
         return af.compareTo(bf);
       });
 
+    if (entries.isEmpty) return const SizedBox.shrink();
     final maxVal = entries.map((e) => e.value).reduce((a, b) => a > b ? a : b);
+    final mobile = _isMobile(context);
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(mobile ? 12 : 16),
       decoration: BoxDecoration(
         color: _kSurface,
         borderRadius: BorderRadius.circular(14),
@@ -1286,30 +1557,33 @@ class _MonthlyChart extends StatelessWidget {
       child: Column(
         children: [
           SizedBox(
-            height: 120,
+            height: mobile ? 90 : 120,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: entries.map((e) {
                 final pct = maxVal > 0 ? e.value / maxVal : 0.0;
+                final barH =
+                    ((mobile ? 60 : 80) * pct).clamp(4.0, mobile ? 60.0 : 80.0);
                 return Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    padding: EdgeInsets.symmetric(horizontal: mobile ? 2 : 4),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
-                        Text(
-                          'GHS ${_fmt.format(e.value)}',
-                          style: const TextStyle(
-                              fontSize: 8,
-                              color: _kTextMuted,
-                              fontWeight: FontWeight.w600),
-                          textAlign: TextAlign.center,
-                        ),
+                        if (!mobile)
+                          Text(
+                            'GHS ${_fmt.format(e.value)}',
+                            style: const TextStyle(
+                                fontSize: 8,
+                                color: _kTextMuted,
+                                fontWeight: FontWeight.w600),
+                            textAlign: TextAlign.center,
+                          ),
                         const SizedBox(height: 4),
                         AnimatedContainer(
                           duration: const Duration(milliseconds: 600),
                           curve: Curves.easeOutCubic,
-                          height: (80 * pct).clamp(4.0, 80.0),
+                          height: barH,
                           decoration: BoxDecoration(
                             color: _kGreenAccent,
                             borderRadius: BorderRadius.circular(4),
@@ -1327,7 +1601,7 @@ class _MonthlyChart extends StatelessWidget {
             children: entries.map((e) {
               return Expanded(
                 child: Text(
-                  e.key.split(' ').first, // Just "Jan", "Feb" etc
+                  e.key.split(' ').first,
                   style: const TextStyle(fontSize: 9, color: _kTextMuted),
                   textAlign: TextAlign.center,
                 ),
@@ -1341,7 +1615,7 @@ class _MonthlyChart extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRANSACTIONS TABLE
+// TRANSACTIONS TABLE (tablet/desktop)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _TransactionsTable extends StatelessWidget {
@@ -1358,7 +1632,6 @@ class _TransactionsTable extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Header
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
@@ -1401,21 +1674,17 @@ class _TransactionsTable extends StatelessWidget {
                       textAlign: TextAlign.right)),
             ]),
           ),
-
-          // Rows
           ...docs.asMap().entries.map((entry) {
             final i = entry.key;
-            final doc = entry.value;
-            final d = doc.data();
+            final d = entry.value.data();
             final amountPaid = (d['amount_paid'] as num?)?.toDouble() ?? 0;
             final commission =
                 (d['commission_collected'] as num?)?.toDouble() ??
                     (amountPaid * 0.05);
             final paidAt = d['paid_at'];
-            String dateStr = '—';
-            if (paidAt is Timestamp) {
-              dateStr = DateFormat('dd MMM').format(paidAt.toDate());
-            }
+            final dateStr = paidAt is Timestamp
+                ? DateFormat('dd MMM').format(paidAt.toDate())
+                : '—';
 
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
@@ -1492,33 +1761,6 @@ class _TransactionsTable extends StatelessWidget {
   }
 }
 
-class _PaymentStatusBadge extends StatelessWidget {
-  const _PaymentStatusBadge({required this.status});
-  final String status;
-
-  @override
-  Widget build(BuildContext context) {
-    if (status.isEmpty) return const SizedBox.shrink();
-    final (label, color) = switch (status) {
-      'fully_paid' => ('Fully Paid', _kGreenAccent),
-      'deposit_paid' => ('Deposit Paid', Color(0xFFEA580C)),
-      _ => ('Pending', Color(0xFF9CA3AF)),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Text(
-        label,
-        style:
-            TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color),
-      ),
-    );
-  }
-}
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1526,7 +1768,6 @@ class _PaymentStatusBadge extends StatelessWidget {
 List<QueryDocumentSnapshot<Map<String, dynamic>>> _filterByPeriod(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, String period) {
   if (period == 'all') return docs;
-
   final now = DateTime.now();
   final DateTime cutoff;
   switch (period) {
@@ -1542,7 +1783,6 @@ List<QueryDocumentSnapshot<Map<String, dynamic>>> _filterByPeriod(
     default:
       return docs;
   }
-
   return docs.where((doc) {
     final d = doc.data();
     final ts = d['paid_at'] ?? d['booked_at'];
@@ -1552,66 +1792,8 @@ List<QueryDocumentSnapshot<Map<String, dynamic>>> _filterByPeriod(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED SMALL WIDGETS
+// SHARED WIDGETS
 // ─────────────────────────────────────────────────────────────────────────────
-
-class _StatCard extends StatelessWidget {
-  const _StatCard({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.sub,
-    required this.color,
-  });
-  final IconData icon;
-  final String label;
-  final String value;
-  final String sub;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _kSurface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _kBorder),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withOpacity(0.04),
-                blurRadius: 8,
-                offset: const Offset(0, 3)),
-          ],
-        ),
-        child: Row(children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(label,
-                  style: const TextStyle(fontSize: 11, color: _kTextLight)),
-              const SizedBox(height: 2),
-              Text(value,
-                  style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: _kTextDark)),
-              Text(sub,
-                  style: const TextStyle(fontSize: 10, color: _kTextMuted)),
-            ]),
-          ),
-        ]),
-      );
-}
 
 class _SectionHead extends StatelessWidget {
   const _SectionHead({required this.icon, required this.title});
@@ -1620,11 +1802,11 @@ class _SectionHead extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-        Icon(icon, size: 16, color: _kGreenAccent),
+        Icon(icon, size: 15, color: _kGreenAccent),
         const SizedBox(width: 8),
         Text(title,
             style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w800, color: _kTextDark)),
+                fontSize: 13, fontWeight: FontWeight.w800, color: _kTextDark)),
         const SizedBox(width: 10),
         const Expanded(child: Divider(color: _kBorder, height: 1)),
       ]);
@@ -1646,7 +1828,7 @@ class _AlertBanner extends StatelessWidget {
           border: Border.all(color: color.withOpacity(0.25)),
         ),
         child: Row(children: [
-          Icon(icon, size: 15, color: color),
+          Icon(icon, size: 14, color: color),
           const SizedBox(width: 8),
           Expanded(
               child:
@@ -1665,11 +1847,39 @@ class _EmptyState extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 48),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 48, color: _kTextMuted.withOpacity(0.4)),
+            Icon(icon, size: 44, color: _kTextMuted.withOpacity(0.4)),
             const SizedBox(height: 12),
             Text(message,
                 style: const TextStyle(fontSize: 13, color: _kTextLight)),
           ]),
         ),
       );
+}
+
+class _PaymentStatusBadge extends StatelessWidget {
+  const _PaymentStatusBadge({required this.status});
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    if (status.isEmpty) return const SizedBox.shrink();
+    final (label, color) = switch (status) {
+      'fully_paid' => ('Fully Paid', _kGreenAccent),
+      'deposit_paid' => ('Deposit', _kOrange),
+      _ => ('Pending', _kTextMuted),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style:
+            TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color),
+      ),
+    );
+  }
 }

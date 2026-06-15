@@ -819,6 +819,8 @@ class _ActionBtn extends StatelessWidget {
   }
 
   Future<void> _deleteBooking(BuildContext ctx) async {
+    final messenger = ScaffoldMessenger.of(ctx);
+
     final confirm = await showDialog<bool>(
       context: ctx,
       builder: (_) => _ConfirmDialog(
@@ -829,18 +831,17 @@ class _ActionBtn extends StatelessWidget {
         confirmColor: _kRed,
       ),
     );
-    if (confirm != true || !ctx.mounted) return;
+    if (confirm != true) return;
+
     try {
       final roomId = (data['room_id'] ?? data['roomId'])?.toString();
       final slots = (data['slots_booked'] ?? 1) as int;
       final status = (data['status'] ?? 'booked') as String;
 
-      // Restore slot only if booking was confirmed
       if (roomId != null && roomId.isNotEmpty && status == 'confirmed') {
         await _decrementRoomSlots(roomId, slots);
       }
 
-      // Delete payments subcollection first to avoid ghost documents
       final paymentsSnap = await _db
           .collection('bookings')
           .doc(docId)
@@ -851,9 +852,25 @@ class _ActionBtn extends StatelessWidget {
       }
 
       await _db.collection('bookings').doc(docId).delete();
-      if (ctx.mounted) _showSnack(ctx, 'Booking deleted', _kRed);
+      messenger.showSnackBar(SnackBar(
+        content: const Text('Booking deleted',
+            style: TextStyle(fontWeight: FontWeight.w600)),
+        backgroundColor: _kRed,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 3),
+      ));
     } catch (e) {
-      if (ctx.mounted) _showSnack(ctx, 'Error: $e', _kRed);
+      messenger.showSnackBar(SnackBar(
+        content: Text('Error: $e',
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        backgroundColor: _kRed,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 3),
+      ));
     }
   }
 
@@ -1004,6 +1021,124 @@ class _DetailSheetState extends State<_DetailSheet> {
             behavior: SnackBarBehavior.floating));
       }
     }
+  }
+
+  Future<void> _setDueDate(BuildContext ctx, Map<String, dynamic> d) async {
+    final picked = await showDatePicker(
+      context: ctx,
+      initialDate: DateTime.now().add(const Duration(days: 7)),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      helpText: 'Set Balance Payment Deadline',
+      builder: (c, child) => Theme(
+        data: Theme.of(c).copyWith(
+          colorScheme: const ColorScheme.light(
+              primary: _kPrimary, onPrimary: Colors.white),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked == null) return;
+
+    try {
+      await _db.collection('bookings').doc(widget.docId).update({
+        'balance_due_date': Timestamp.fromDate(picked),
+      });
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+          content: const Text('Due date set'),
+          backgroundColor: _kGreen,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(16),
+        ));
+      }
+    } catch (e) {
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: _kRed,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
+  Future<void> _setMoveInDate(BuildContext ctx, Map<String, dynamic> d) async {
+    final picked = await showDatePicker(
+      context: ctx,
+      initialDate: DateTime.now(),
+      firstDate:
+          DateTime.now().subtract(const Duration(days: 30)), // allow backdating
+      lastDate: DateTime.now(),
+      helpText: 'Set Move-In Date',
+      builder: (c, child) => Theme(
+        data: Theme.of(c).copyWith(
+          colorScheme: const ColorScheme.light(
+              primary: _kPrimary, onPrimary: Colors.white),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked == null) return;
+
+    try {
+      final snap = await _db.collection('bookings').doc(widget.docId).get();
+      final data = snap.data()!;
+      final durationType = data['duration_type']?.toString() ?? 'year';
+      final totalAmount = (data['amount'] as num).toDouble();
+
+      final schedule = _buildSchedule(picked, durationType, totalAmount);
+
+      await _db.collection('bookings').doc(widget.docId).update({
+        'move_in_date': Timestamp.fromDate(picked),
+        'payment_schedule': schedule,
+        'balance_due_date': schedule.first['due_date'],
+        'status': 'active',
+        'move_in_set_by': 'admin',
+      });
+
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+          content: const Text('Move-in date set — payment schedule activated'),
+          backgroundColor: _kGreen,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(16),
+        ));
+      }
+    } catch (e) {
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: _kRed,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    }
+  }
+
+  List<Map<String, dynamic>> _buildSchedule(
+    DateTime moveIn,
+    String durationType,
+    double totalAmount,
+  ) {
+    final label = switch (durationType) {
+      'year' => 'Full Year Payment',
+      'academic_year' => 'Academic Year Payment',
+      'semester' => 'Semester Payment',
+      _ => 'Month 1',
+    };
+    return [
+      {
+        'due_date': Timestamp.fromDate(moveIn),
+        'amount': totalAmount,
+        'label': label,
+        'paid': false,
+      },
+    ];
   }
 
   @override
@@ -1201,6 +1336,23 @@ class _DetailSheetState extends State<_DetailSheet> {
                                   ? 'GHS ${NumberFormat('#,##0.00').format((d['balance'] as num).toDouble())}'
                                   : '—'),
                           _DetailTile(
+                              Icons.event_rounded,
+                              'Balance Due Date',
+                              d['balance_due_date'] is Timestamp
+                                  ? _fmtDate(
+                                      (d['balance_due_date'] as Timestamp)
+                                          .toDate())
+                                  : 'Not set'),
+                          _DetailTile(
+                              Icons.key_rounded,
+                              'Move-In Date',
+                              d['move_in_date'] is Timestamp
+                                  ? _fmtDate(
+                                      (d['move_in_date'] as Timestamp).toDate())
+                                  : 'Not confirmed yet'),
+                          _DetailTile(Icons.category_rounded, 'Duration Type',
+                              d['duration_type']?.toString() ?? '—'),
+                          _DetailTile(
                               Icons.account_balance_wallet_rounded,
                               'Deposit Amount',
                               d['deposit_amount'] != null
@@ -1242,6 +1394,31 @@ class _DetailSheetState extends State<_DetailSheet> {
                         // ── Payment timeline ────────────────────────────────────
                         _PaymentTimeline(docId: widget.docId),
                         const SizedBox(height: 24),
+                        Row(children: [
+                          Expanded(
+                            child: _BigActionBtn(
+                              label: 'Set Due Date',
+                              icon: Icons.event_rounded,
+                              color: _kBlue,
+                              onTap: () => _setDueDate(context, d),
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 10),
+                        // ── NEW: Set Move-In Date (only when not yet active) ────────────────
+                        if (status == 'confirmed' || status == 'booked')
+                          Row(children: [
+                            Expanded(
+                              child: _BigActionBtn(
+                                label: 'Set Move-In Date',
+                                icon: Icons.key_rounded,
+                                color: _kOrange,
+                                onTap: () => _setMoveInDate(context, d),
+                              ),
+                            ),
+                          ]),
+                        if (status == 'confirmed' || status == 'booked')
+                          const SizedBox(height: 10),
 
                         // ── Quick-action buttons ────────────────────────────────
                         Row(children: [

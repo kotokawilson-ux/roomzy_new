@@ -868,8 +868,8 @@ class _RoomDialogState extends State<_RoomDialog> {
     'Quad',
     'Suite',
     'Studio',
-    'Dormitory'
-        'Chamber and Hall',
+    'Dormitory',
+    'Chamber and Hall',
     'Other',
   ];
 
