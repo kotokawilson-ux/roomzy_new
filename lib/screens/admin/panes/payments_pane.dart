@@ -85,25 +85,29 @@ class PaymentRecord {
     this.failureReason,
   });
 
+  // AFTER
   factory PaymentRecord.fromFirestore(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>;
+
+    // Determine status
     final raw = d['status'] as String? ?? 'pending';
     final status = PaymentStatus.values.firstWhere(
       (e) => e.name == raw,
       orElse: () => PaymentStatus.pending,
     );
+
     return PaymentRecord(
       id: doc.id,
-      tenantName: d['tenantName'] as String? ?? 'Unknown',
-      tenantEmail: d['tenantEmail'] as String? ?? '',
-      hostelName: d['hostelName'] as String? ?? '—',
-      roomNumber: d['roomNumber'] as String? ?? '—',
+      tenantName: d['name'] as String? ?? 'Unknown',
+      tenantEmail: d['email'] as String? ?? '',
+      hostelName: d['hostel_name'] as String? ?? '—',
+      roomNumber: d['room_number'] as String? ?? '—',
       amount: (d['amount'] as num?)?.toDouble() ?? 0,
       currency: d['currency'] as String? ?? 'GHS',
       status: status,
       method: d['method'] as String? ?? 'Unknown',
       reference: d['reference'] as String? ?? doc.id,
-      createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      createdAt: (d['paid_at'] as Timestamp?)?.toDate() ?? DateTime.now(),
       failureReason: d['failureReason'] as String?,
     );
   }
@@ -156,9 +160,10 @@ class _PaymentsPaneState extends State<PaymentsPane>
   }
 
   // ─── query builder ───
+  // AFTER
   Query<Map<String, dynamic>> get _query {
     Query<Map<String, dynamic>> q =
-        _db.collection('payments').orderBy('createdAt', descending: true);
+        _db.collectionGroup('payments').orderBy('paid_at', descending: true);
 
     if (_statusFilter != PaymentStatus.all) {
       q = q.where('status', isEqualTo: _statusFilter.name);
