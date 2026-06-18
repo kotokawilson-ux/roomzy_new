@@ -28,4 +28,4 @@ git remote set-url origin https://github.com/kotokawilson-ux/roomzy_new.git
 
 
 git commit -m "Fix booking status consistency across all screens"
-git push
+git pushu8-o

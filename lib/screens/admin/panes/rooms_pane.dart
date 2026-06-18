@@ -11,7 +11,7 @@ import '../../../../utils/admin_helpers.dart';
 import '../widgets/dialog_widgets.dart';
 import '../widgets/form_widgets.dart';
 import '../widgets/shared_widgets.dart';
-
+import 'package:http_parser/http_parser.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // RESPONSIVE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────

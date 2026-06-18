@@ -1265,12 +1265,16 @@ class _HostelDialogState extends State<_HostelDialog> {
       'school_name': _schoolName,
       'short_name': _schoolShortName,
       'updated_at': FieldValue.serverTimestamp(),
+      // ← ADD THESE:
+      'deposit_type': _depositType,
+      'deposit_value': double.tryParse(_depositValue.text.trim()) ?? 0.0,
     };
 
     try {
       if (_isEdit) {
+        await db.collection('hostels').doc(widget.doc!.id).update(data);
         // Inside _save() — WRONG
-        _depositValue.addListener(() => setState(() {}));
+
         // ✅ LOG HOSTEL UPDATE
         await ActivityLogger.log(
           action: 'Updated Hostel',
