@@ -2084,6 +2084,7 @@ class _BookingSheetState extends State<_BookingSheet>
     }
   }
 
+  bool _paymentHandled = false; // ← add this field to _BookingSheetState
   void _startBookingListener() {
     _bookingListener?.cancel();
     _bookingListener = FirebaseFirestore.instance
@@ -2092,19 +2093,18 @@ class _BookingSheetState extends State<_BookingSheet>
         .snapshots()
         .listen((snap) async {
       if (!snap.exists || !mounted) return;
+      if (_paymentHandled) return; // ← guard against double-fire
       final data = snap.data()!;
       final paymentStatus = data['payment_status'] as String?;
 
       if (paymentStatus == 'deposit_paid' || paymentStatus == 'fully_paid') {
         _bookingListener?.cancel();
         if (!mounted) return;
-
+        _paymentHandled = true; // ← set before navigating
         await BookingStorageService.saveBookingId(_bookingId!);
         HapticFeedback.heavyImpact();
         widget.onSuccess(_bookingId!, _slots);
       }
-    }, onError: (e) {
-      debugPrint('Booking listener error: $e');
     });
   }
 
@@ -2311,6 +2311,7 @@ class _BookingSheetState extends State<_BookingSheet>
     try {
       if (_isTestNumber) {
         await Future.delayed(const Duration(seconds: 2));
+        _bookingListener?.cancel(); // ← ADD THIS
         await _onPaymentSuccess(_payRef);
         return;
       }
@@ -2350,6 +2351,7 @@ class _BookingSheetState extends State<_BookingSheet>
         final otpData = jsonDecode(otpRes.body);
 
         if (otpData['status'] == 'success') {
+          _bookingListener?.cancel(); // ← ADD THIS
           await _onPaymentSuccess(_payRef);
         } else {
           await _pollPaymentStatus(_payRef);
@@ -2357,6 +2359,7 @@ class _BookingSheetState extends State<_BookingSheet>
       } else if (status == 'pay_offline' || status == 'pending') {
         await _pollPaymentStatus(_payRef);
       } else if (status == 'success') {
+        _bookingListener?.cancel(); // ← ADD THIS
         await _onPaymentSuccess(_payRef);
       } else {
         throw Exception(chargeData['message'] ?? 'Payment failed. Try again.');
@@ -2499,6 +2502,7 @@ class _BookingSheetState extends State<_BookingSheet>
       debugPrint('verify-payment response: $data');
       final status = data['status'];
       if (status == 'success') {
+        _bookingListener?.cancel(); // ← ADD THIS
         await _onPaymentSuccess(reference);
         return;
       }
@@ -2523,6 +2527,8 @@ class _BookingSheetState extends State<_BookingSheet>
   }
 
   Future<void> _onPaymentSuccess(String reference) async {
+    if (_paymentHandled) return; // ← guard here too
+    _paymentHandled = true; // ← claim it immediately
     final roomRef =
         FirebaseFirestore.instance.collection('rooms').doc(widget.room.id);
     final bookingRef =
