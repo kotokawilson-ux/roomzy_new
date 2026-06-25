@@ -29,23 +29,26 @@ class BookingsScreen extends StatefulWidget {
   State<BookingsScreen> createState() => _BookingsScreenState();
 }
 
-class _BookingsScreenState extends State<BookingsScreen> {
+class _BookingsScreenState extends State<BookingsScreen>
+    with TickerProviderStateMixin {
   List<Map<String, dynamic>> _bookings = [];
   List<Map<String, dynamic>> _filtered = [];
   bool _loading = true;
   String? _error;
   _Filter _filter = _Filter.all;
   final _searchCtrl = TextEditingController();
-
+  late TabController _tabCtrl;
   @override
   void initState() {
     super.initState();
     _load();
     _searchCtrl.addListener(_applyFilter);
+    _tabCtrl = TabController(length: 2, vsync: this);
   }
 
   @override
   void dispose() {
+    _tabCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -170,126 +173,196 @@ class _BookingsScreenState extends State<BookingsScreen> {
       backgroundColor: _kBg,
       appBar: const Navbar(),
       endDrawer: const NavbarDrawer(),
-      body: SingleChildScrollView(
-        child: Column(children: [
-          // ── Header ──────────────────────────────────────────────
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.symmetric(
-                horizontal: isWide ? 60 : 24, vertical: 40),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [_kPrimary, Color(0xFF0D9488)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-            ),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('My Bookings',
-                  style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white)),
-              const SizedBox(height: 6),
-              Text('Your hostel booking history',
-                  style: TextStyle(
-                      fontSize: 14, color: Colors.white.withOpacity(0.8))),
-              const SizedBox(height: 20),
-              // Search
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
+          SliverToBoxAdapter(
+            child: Column(children: [
+              // ── Header ──────────────────────────────────────────
               Container(
-                decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(50),
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.1), blurRadius: 10)
-                    ]),
-                child: TextField(
-                  controller: _searchCtrl,
-                  decoration: const InputDecoration(
-                    hintText: 'Search by hostel, room…',
-                    hintStyle: TextStyle(fontSize: 14, color: Colors.black38),
-                    prefixIcon: Icon(Icons.search_rounded, color: _kPrimary),
-                    border: InputBorder.none,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                width: double.infinity,
+                padding: EdgeInsets.symmetric(
+                    horizontal: isWide ? 60 : 24, vertical: 40),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [_kPrimary, Color(0xFF0D9488)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
                 ),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('My Bookings',
+                          style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white)),
+                      const SizedBox(height: 6),
+                      Text('Your hostel booking history',
+                          style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.white.withOpacity(0.8))),
+                      const SizedBox(height: 20),
+                      Container(
+                        decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(50),
+                            boxShadow: [
+                              BoxShadow(
+                                  color: Colors.black.withOpacity(0.1),
+                                  blurRadius: 10)
+                            ]),
+                        child: TextField(
+                          controller: _searchCtrl,
+                          decoration: const InputDecoration(
+                            hintText: 'Search by hostel, room…',
+                            hintStyle:
+                                TextStyle(fontSize: 14, color: Colors.black38),
+                            prefixIcon:
+                                Icon(Icons.search_rounded, color: _kPrimary),
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 20, vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        height: 40,
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(50),
+                        ),
+                        child: TabBar(
+                          controller: _tabCtrl,
+                          indicator: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(50),
+                          ),
+                          indicatorSize: TabBarIndicatorSize.tab,
+                          dividerColor: Colors.transparent,
+                          labelColor: _kPrimary,
+                          unselectedLabelColor: Colors.white,
+                          labelStyle: const TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 13),
+                          unselectedLabelStyle: const TextStyle(
+                              fontWeight: FontWeight.w500, fontSize: 13),
+                          tabs: const [
+                            Tab(text: 'Bookings'),
+                            Tab(text: 'Pre-Bookings'),
+                          ],
+                        ),
+                      ),
+                    ]),
               ),
+
+              // ── Stats (Bookings tab only) ────────────────────────
+              if (!_loading && _error == null && _bookings.isNotEmpty)
+                AnimatedBuilder(
+                  animation: _tabCtrl,
+                  builder: (_, __) {
+                    if (_tabCtrl.index != 0) return const SizedBox.shrink();
+                    return Container(
+                      color: Colors.white,
+                      padding: EdgeInsets.symmetric(
+                          horizontal: isWide ? 60 : 16, vertical: 16),
+                      child: Row(children: [
+                        _StatChip(
+                            label: 'Total',
+                            count: _bookings.length,
+                            color: _kPrimary),
+                        const SizedBox(width: 10),
+                        _StatChip(
+                            label: 'Confirmed',
+                            count: _bookings
+                                .where((b) => b['status'] == 'confirmed')
+                                .length,
+                            color: _kGreen),
+                        const SizedBox(width: 10),
+                        _StatChip(
+                            label: 'Pending',
+                            count: _bookings
+                                .where((b) =>
+                                    b['status'] == 'pending' ||
+                                    b['status'] == 'booked')
+                                .length,
+                            color: _kOrange),
+                        const SizedBox(width: 10),
+                        _StatChip(
+                            label: 'Cancelled',
+                            count: _bookings
+                                .where((b) =>
+                                    b['status'] == 'cancelled' ||
+                                    b['status'] == 'declined')
+                                .length,
+                            color: _kRed),
+                      ]),
+                    );
+                  },
+                ),
+
+              // ── Filter pills (Bookings tab only) ─────────────────
+              if (!_loading && _error == null && _bookings.isNotEmpty)
+                AnimatedBuilder(
+                  animation: _tabCtrl,
+                  builder: (_, __) {
+                    if (_tabCtrl.index != 0) return const SizedBox.shrink();
+                    return Container(
+                      color: Colors.white,
+                      padding:
+                          EdgeInsets.symmetric(horizontal: isWide ? 60 : 16),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                            children: _Filter.values
+                                .map((f) => _FilterTab(
+                                      label: f.name[0].toUpperCase() +
+                                          f.name.substring(1),
+                                      isActive: _filter == f,
+                                      onTap: () => _setFilter(f),
+                                    ))
+                                .toList()),
+                      ),
+                    );
+                  },
+                ),
             ]),
           ),
-
-          // ── Stats bar ──────────────────────────────────────────
-          if (!_loading && _error == null && _bookings.isNotEmpty)
-            Container(
-              color: Colors.white,
-              padding: EdgeInsets.symmetric(
-                  horizontal: isWide ? 60 : 16, vertical: 16),
-              child: Row(children: [
-                _StatChip(
-                    label: 'Total', count: _bookings.length, color: _kPrimary),
-                const SizedBox(width: 10),
-                _StatChip(
-                    label: 'Confirmed',
-                    count: _bookings
-                        .where((b) => b['status'] == 'confirmed')
-                        .length,
-                    color: _kGreen),
-                const SizedBox(width: 10),
-                _StatChip(
-                    label: 'Pending',
-                    count: _bookings
-                        .where((b) =>
-                            b['status'] == 'pending' || b['status'] == 'booked')
-                        .length,
-                    color: _kOrange),
-                const SizedBox(width: 10),
-                _StatChip(
-                    label: 'Cancelled',
-                    count: _bookings
-                        .where((b) =>
-                            b['status'] == 'cancelled' ||
-                            b['status'] == 'declined')
-                        .length,
-                    color: _kRed),
-              ]),
-            ),
-
-          // ── Filter tabs ────────────────────────────────────────
-          if (!_loading && _error == null && _bookings.isNotEmpty)
-            Container(
-              color: Colors.white,
-              padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 16),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                    children: _Filter.values
-                        .map((f) => _FilterTab(
-                              label:
-                                  f.name[0].toUpperCase() + f.name.substring(1),
-                              isActive: _filter == f,
-                              onTap: () => _setFilter(f),
-                            ))
-                        .toList()),
-              ),
-            ),
-
-          // ── Content ────────────────────────────────────────────
-          Padding(
-            padding: EdgeInsets.symmetric(
-                horizontal: isWide ? 60 : 16, vertical: 24),
-            child: _loading
+        ],
+        body: TabBarView(
+          controller: _tabCtrl,
+          children: [
+            // ── Tab 1: Bookings ──────────────────────────────────
+            _loading
                 ? _buildShimmer()
                 : _error != null
                     ? _buildError()
                     : _filtered.isEmpty
                         ? _buildEmpty()
-                        : _buildList(isWide),
-          ),
+                        : isWide
+                            ? SingleChildScrollView(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 60, vertical: 24),
+                                  child: _buildList(true),
+                                ),
+                              )
+                            : ListView.separated(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 24),
+                                itemCount: _filtered.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 16),
+                                itemBuilder: (_, i) => _BookingCard(
+                                    booking: _filtered[i],
+                                    onCancel: _cancelBooking),
+                              ),
 
-          const Footer(),
-        ]),
+            // ── Tab 2: Pre-Bookings ──────────────────────────────
+            const _PreBookingsTab(),
+          ],
+        ),
       ),
     );
   }
@@ -321,36 +394,43 @@ class _BookingsScreenState extends State<BookingsScreen> {
   }
 
   Widget _buildShimmer() {
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: 3,
-      separatorBuilder: (_, __) => const SizedBox(height: 16),
-      itemBuilder: (_, __) => Shimmer.fromColors(
-        baseColor: Colors.grey[300]!,
-        highlightColor: Colors.grey[100]!,
-        child: Container(
-            height: 180,
-            decoration: BoxDecoration(
-                color: Colors.white, borderRadius: BorderRadius.circular(20))),
-      ),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+          children: List.generate(
+              3,
+              (_) => Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Shimmer.fromColors(
+                      baseColor: Colors.grey[300]!,
+                      highlightColor: Colors.grey[100]!,
+                      child: Container(
+                          height: 180,
+                          decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20))),
+                    ),
+                  ))),
     );
   }
 
   Widget _buildError() {
     return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-      const Icon(Icons.wifi_off_rounded, size: 52, color: Colors.grey),
-      const SizedBox(height: 12),
-      Text(_error!,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.black45)),
-      const SizedBox(height: 16),
-      ElevatedButton(
-          onPressed: _load,
-          style: ElevatedButton.styleFrom(backgroundColor: _kPrimary),
-          child: const Text('Retry')),
-    ]));
+        child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.wifi_off_rounded, size: 52, color: Colors.grey),
+        const SizedBox(height: 12),
+        Text(_error!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.black45)),
+        const SizedBox(height: 16),
+        ElevatedButton(
+            onPressed: _load,
+            style: ElevatedButton.styleFrom(backgroundColor: _kPrimary),
+            child: const Text('Retry')),
+      ]),
+    ));
   }
 
   Widget _buildEmpty() {
@@ -529,10 +609,11 @@ class _BookingCard extends StatelessWidget {
         // ── Action buttons ───────────────────────────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Row(children: [
-            // View receipt
-            Expanded(
-              child: ElevatedButton.icon(
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ElevatedButton.icon(
                 onPressed: () => context.push('/bookings/$id'),
                 icon: const Icon(Icons.receipt_long_rounded, size: 16),
                 label: const Text('Receipt'),
@@ -541,14 +622,12 @@ class _BookingCard extends StatelessWidget {
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(50)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
                 ),
               ),
-            ),
-            if (hostelPhone.isNotEmpty) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
+              if (hostelPhone.isNotEmpty)
+                OutlinedButton.icon(
                   onPressed: () => launchUrl(Uri.parse('tel:$hostelPhone')),
                   icon: const Icon(Icons.phone_rounded, size: 16),
                   label: const Text('Call'),
@@ -557,15 +636,12 @@ class _BookingCard extends StatelessWidget {
                     side: const BorderSide(color: _kPrimary),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(50)),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 10, horizontal: 16),
                   ),
                 ),
-              ),
-            ],
-            if (canCancel) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
+              if (canCancel)
+                OutlinedButton.icon(
                   onPressed: () => onCancel(id),
                   icon: const Icon(Icons.cancel_outlined, size: 16),
                   label: const Text('Cancel'),
@@ -574,20 +650,18 @@ class _BookingCard extends StatelessWidget {
                     side: const BorderSide(color: _kRed),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(50)),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 10, horizontal: 16),
                   ),
                 ),
-              ),
+              if (hostelId.isNotEmpty)
+                IconButton(
+                  onPressed: () => context.go('/hostels/$hostelId'),
+                  icon: const Icon(Icons.apartment_rounded, color: _kPrimary),
+                  tooltip: 'View hostel',
+                ),
             ],
-            if (hostelId.isNotEmpty) ...[
-              const SizedBox(width: 8),
-              IconButton(
-                onPressed: () => context.go('/hostels/$hostelId'),
-                icon: const Icon(Icons.apartment_rounded, color: _kPrimary),
-                tooltip: 'View hostel',
-              ),
-            ],
-          ]),
+          ),
         ),
       ]),
     );
@@ -727,3 +801,302 @@ class _FilterTab extends StatelessWidget {
     );
   }
 }
+// ─── Pre-Bookings Tab ─────────────────────────────────────────────────────────
+
+class _PreBookingsTab extends StatefulWidget {
+  const _PreBookingsTab();
+  @override
+  State<_PreBookingsTab> createState() => _PreBookingsTabState();
+}
+
+class _PreBookingsTabState extends State<_PreBookingsTab> {
+  String _filter = 'all';
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Center(child: Text('Sign in to view pre-bookings'));
+    }
+
+    return CustomScrollView(slivers: [
+      // ── Filter pills ──────────────────────────────────────────
+      SliverToBoxAdapter(
+        child: Container(
+          color: Colors.white,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final entry in const [
+                  ('all', 'All'),
+                  ('active', 'Active'),
+                  ('converted', 'Converted'),
+                  ('expired', 'Expired'),
+                ])
+                  GestureDetector(
+                    onTap: () => setState(() => _filter = entry.$1),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _filter == entry.$1
+                            ? _kPrimary
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(50),
+                        border: Border.all(
+                            color: _filter == entry.$1
+                                ? _kPrimary
+                                : Colors.black12),
+                      ),
+                      child: Text(entry.$2,
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: _filter == entry.$1
+                                  ? Colors.white
+                                  : Colors.black45)),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+
+      // ── Live stream ───────────────────────────────────────────
+      StreamBuilder<QuerySnapshot>(
+        stream: _filter == 'all'
+            ? FirebaseFirestore.instance
+                .collection('pre_bookings')
+                .where('user_id', isEqualTo: user.uid)
+                .orderBy('created_at', descending: true)
+                .snapshots()
+            : FirebaseFirestore.instance
+                .collection('pre_bookings')
+                .where('user_id', isEqualTo: user.uid)
+                .where('status', isEqualTo: _filter)
+                .orderBy('created_at', descending: true)
+                .snapshots(),
+        builder: (ctx, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const SliverFillRemaining(
+              child: Center(child: CircularProgressIndicator(color: _kPrimary)),
+            );
+          }
+          if (snap.hasError) {
+            return SliverFillRemaining(
+              child: Center(
+                  child: Text('Error: ${snap.error}',
+                      style: const TextStyle(color: Colors.black45))),
+            );
+          }
+          final docs = snap.data?.docs ?? [];
+          if (docs.isEmpty) {
+            return const SliverFillRemaining(
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(40),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.bookmark_border_rounded,
+                        size: 48, color: Colors.black12),
+                    SizedBox(height: 12),
+                    Text('No pre-bookings yet',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: _kDark)),
+                    SizedBox(height: 6),
+                    Text('Pre-bookings you register will appear here',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.black45)),
+                  ]),
+                ),
+              ),
+            );
+          }
+
+          return SliverPadding(
+            padding: const EdgeInsets.all(16),
+            sliver: SliverList.separated(
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemCount: docs.length,
+              itemBuilder: (ctx, i) {
+                final d = docs[i].data() as Map<String, dynamic>;
+                final status = d['status'] as String? ?? 'active';
+                final expiresTs = d['expires_at'] as Timestamp?;
+                final daysLeft = expiresTs != null
+                    ? expiresTs.toDate().difference(DateTime.now()).inDays
+                    : null;
+                final isUrgent =
+                    daysLeft != null && daysLeft <= 1 && status == 'active';
+
+                final accentColor = switch (status) {
+                  'converted' => _kGreen,
+                  'expired' => _kOrange,
+                  _ => isUrgent ? _kOrange : _kPrimary,
+                };
+
+                return Container(
+                  // your existing card code here, no changes needed
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: accentColor.withOpacity(0.2)),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 12,
+                          offset: const Offset(0, 3)),
+                    ],
+                  ),
+                  child: Column(children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                      decoration: BoxDecoration(
+                        color: accentColor.withOpacity(0.07),
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(20)),
+                      ),
+                      child: Row(children: [
+                        Icon(
+                            status == 'converted'
+                                ? Icons.check_circle_rounded
+                                : status == 'expired'
+                                    ? Icons.timer_off_rounded
+                                    : Icons.bookmark_rounded,
+                            color: accentColor,
+                            size: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(d['hostel_name'] ?? '—',
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w800,
+                                        color: _kDark)),
+                                Text('Room ${d['room_number'] ?? '—'}',
+                                    style: const TextStyle(
+                                        fontSize: 12, color: Colors.black45)),
+                              ]),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: accentColor.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(50),
+                            border:
+                                Border.all(color: accentColor.withOpacity(0.3)),
+                          ),
+                          child: Text(
+                            status == 'active'
+                                ? (daysLeft != null
+                                    ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
+                                    : 'Active')
+                                : status.toUpperCase(),
+                            style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: accentColor),
+                          ),
+                        ),
+                      ]),
+                    ),
+
+                    // Body
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(children: [
+                        Row(children: [
+                          _InfoTile(
+                              icon: Icons.timer_outlined,
+                              label: 'Visit Window',
+                              value: '${d['visit_window_days'] ?? '—'} days'),
+                        ]),
+                        if (status == 'converted' &&
+                            d['converted_booking_id'] != null) ...[
+                          const SizedBox(height: 8),
+                          Row(children: [
+                            _InfoTile(
+                                icon: Icons.receipt_long_rounded,
+                                label: 'Booking Ref',
+                                value: (d['converted_booking_id'] as String)
+                                    .substring(0, 8)
+                                    .toUpperCase()),
+                          ]),
+                        ],
+                      ]),
+                    ),
+
+                    // Actions
+                    if (status == 'active' || status == 'converted')
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: Row(children: [
+                          if (status == 'active')
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  final hostelId =
+                                      d['hostel_id'] as String? ?? '';
+                                  if (hostelId.isNotEmpty) {
+                                    context.go('/hostels/$hostelId');
+                                  }
+                                },
+                                icon: const Icon(Icons.arrow_forward_rounded,
+                                    size: 16),
+                                label: const Text('Proceed to Book'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _kPrimary,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(50)),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                              ),
+                            ),
+                          if (status == 'converted')
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  final bookingId =
+                                      d['converted_booking_id'] as String? ??
+                                          '';
+                                  if (bookingId.isNotEmpty) {
+                                    context.push('/bookings/$bookingId');
+                                  }
+                                },
+                                icon: const Icon(Icons.receipt_long_rounded,
+                                    size: 16),
+                                label: const Text('View Receipt'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _kGreen,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(50)),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                              ),
+                            ),
+                        ]),
+                      ),
+                  ]), // Column children (card body)
+                ); // Container (card)
+              }, // itemBuilder
+            ), // SliverList.separated
+          ); // SliverPadding
+        }, // StreamBuilder builder
+      ), // StreamBuilder
+    ]); // CustomScrollView slivers
+  } // build()
+}                     // _PreBookingsTabState

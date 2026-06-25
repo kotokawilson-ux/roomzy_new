@@ -96,6 +96,13 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
 
       // ── 3. Re-arm reminders if balance still owed ─────────────────────
       _maybeRescheduleReminders(data, settings);
+      // ── 4. Mark any linked pre-booking as converted ───────────────────
+      final payStatus = data['payment_status'] as String? ?? '';
+      if (payStatus == 'paid' ||
+          payStatus == 'deposit_paid' ||
+          payStatus == 'fully_paid') {
+        _markPreBookingConverted();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -156,6 +163,39 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
       oneSignalPlayerId: playerId,
       hostelName: booking['hostel_name'] ?? 'your room',
     );
+  }
+
+// ── NEW — paste here at class level ──────────────────────────────────────
+  Future<void> _markPreBookingConverted() async {
+    final b = _booking;
+    if (b == null) return;
+
+    final roomId = b['room_id'] as String?;
+    final userId = b['user_id'] as String?;
+    if (roomId == null || roomId.isEmpty) return;
+
+    try {
+      Query query = FirebaseFirestore.instance
+          .collection('pre_bookings')
+          .where('room_id', isEqualTo: roomId)
+          .where('status', isEqualTo: 'active');
+
+      if (userId != null && userId.isNotEmpty) {
+        query = query.where('user_id', isEqualTo: userId);
+      }
+
+      final snap = await query.limit(1).get();
+      if (snap.docs.isEmpty) return;
+
+      await snap.docs.first.reference.update({
+        'status': 'converted',
+        'converted_booking_id': widget.bookingId,
+        'conversion_method': 'online_payment',
+        'converted_at': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('⚠️ Could not mark pre-booking converted: $e');
+    }
   }
 
   Future<void> _saveDueDate(DateTime picked) async {
@@ -1432,6 +1472,7 @@ class _BalancePaymentCard extends StatefulWidget {
 }
 
 class _BalancePaymentCardState extends State<_BalancePaymentCard> {
+  bool _paymentHandled = false; // ← add this
   bool _expanded = false;
   int _payMode = 0;
   double _customAmount = 0;
@@ -1529,6 +1570,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
           );
           final vData = jsonDecode(verifyRes.body);
           if (vData['status'] == 'success') {
+            if (_paymentHandled) return; // ← guard
             confirmed = true;
             break;
           }
@@ -1544,6 +1586,21 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
       final bookingRef2 = FirebaseFirestore.instance
           .collection('bookings')
           .doc(widget.bookingId);
+
+      // ── Idempotency: skip if this reference already recorded ──
+      _paymentHandled = true; // ← claim before checking
+      final existingPayment = await bookingRef2
+          .collection('payments')
+          .where('reference', isEqualTo: ref)
+          .limit(1)
+          .get();
+
+      if (existingPayment.docs.isNotEmpty) {
+        debugPrint(
+            '⚠️ Balance payment $ref already recorded, skipping duplicate');
+        widget.onPaymentComplete();
+        return;
+      }
 
       await FirebaseFirestore.instance.runTransaction((txn) async {
         txn.update(bookingRef2, {
@@ -1593,6 +1650,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
       ));
       widget.onPaymentComplete();
     } catch (e) {
+      _paymentHandled = false; // reset on each new attempt
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Payment failed: $e'),

@@ -39,7 +39,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 // ─── ⚙️  Replace these two values from your OneSignal dashboard ──────────────
 const _kOneSignalAppId = 'aad5f0fb-e695-4c28-9537-d34411df4f41';
-const _kOneSignalRestKey = 'os_v2_app_vlk7b67gsvgcrfjx2ncbdx2pifsqifs4smaez3m5ecyfq6hh3ed77uuayl7hmtifbzubyodky5wb4xrfu4scvdty3ri2tsh5zuymqcy';
+const _kOneSignalRestKey =
+    'os_v2_app_vlk7b67gsvgcrfjx2ncbdx2pifsqifs4smaez3m5ecyfq6hh3ed77uuayl7hmtifbzubyodky5wb4xrfu4scvdty3ri2tsh5zuymqcy';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _kOneSignalBase = 'https://onesignal.com/api/v1';

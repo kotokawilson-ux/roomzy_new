@@ -79,7 +79,7 @@ class _BookingsPaneState extends State<BookingsPane>
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
   Stream<QuerySnapshot>? _stream;
-
+  late final TabController _tabCtrl;
   @override
   void initState() {
     super.initState();
@@ -88,11 +88,13 @@ class _BookingsPaneState extends State<BookingsPane>
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
     _rebuildStream();
+    _tabCtrl = TabController(length: 2, vsync: this);
   }
 
   @override
   void dispose() {
     _fadeCtrl.dispose();
+    _tabCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -124,43 +126,98 @@ class _BookingsPaneState extends State<BookingsPane>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _TopBar(
-            stream: _db.collection('bookings').snapshots(),
-            searchCtrl: _searchCtrl,
-            statusFilter: _statusFilter,
-            sortField: _sortField,
-            sortAsc: _sortAsc,
-            onSearchChanged: (v) => setState(() => _searchQuery = v),
-            onFilterChanged: (v) {
-              _statusFilter = v;
-              _rebuildStream();
-            },
-            onSortChanged: (field, asc) {
-              _sortField = field;
-              _sortAsc = asc;
-              _rebuildStream();
-            },
+          // ── Pill tab bar ─────────────────────────────────────────────────
+          Container(
+            color: _kCard,
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 40,
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: _kSurface,
+                    borderRadius: BorderRadius.circular(50),
+                    border: Border.all(color: _kBorder),
+                  ),
+                  child: TabBar(
+                    controller: _tabCtrl,
+                    indicator: BoxDecoration(
+                      gradient:
+                          const LinearGradient(colors: [_kPrimary, _kAccent]),
+                      borderRadius: BorderRadius.circular(50),
+                    ),
+                    indicatorSize: TabBarIndicatorSize.tab,
+                    dividerColor: Colors.transparent,
+                    labelColor: Colors.white,
+                    unselectedLabelColor: _kTextMid,
+                    labelStyle: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 13),
+                    unselectedLabelStyle: const TextStyle(
+                        fontWeight: FontWeight.w500, fontSize: 13),
+                    tabs: const [
+                      Tab(text: 'Bookings'),
+                      Tab(text: 'Pre-Bookings'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 0),
+              ],
+            ),
           ),
+
+          // ── Tab views ────────────────────────────────────────────────────
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _stream,
-              builder: (ctx, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const _LoadingGrid();
-                }
-                if (snap.hasError) {
-                  return _ErrorBox(message: snap.error.toString());
-                }
-                final allDocs = snap.data?.docs ?? [];
-                final filtered = _applySearch(allDocs);
-                if (filtered.isEmpty) {
-                  return _EmptyBox(
-                    isFiltered:
-                        _searchQuery.isNotEmpty || _statusFilter != 'all',
-                  );
-                }
-                return _BookingsList(docs: filtered, allDocs: allDocs);
-              },
+            child: TabBarView(
+              controller: _tabCtrl,
+              children: [
+                // ── Tab 1: existing bookings ──────────────────────────────
+                Column(children: [
+                  _TopBar(
+                    stream: _db.collection('bookings').snapshots(),
+                    searchCtrl: _searchCtrl,
+                    statusFilter: _statusFilter,
+                    sortField: _sortField,
+                    sortAsc: _sortAsc,
+                    onSearchChanged: (v) => setState(() => _searchQuery = v),
+                    onFilterChanged: (v) {
+                      _statusFilter = v;
+                      _rebuildStream();
+                    },
+                    onSortChanged: (field, asc) {
+                      _sortField = field;
+                      _sortAsc = asc;
+                      _rebuildStream();
+                    },
+                  ),
+                  Expanded(
+                    child: StreamBuilder<QuerySnapshot>(
+                      stream: _stream,
+                      builder: (ctx, snap) {
+                        if (snap.connectionState == ConnectionState.waiting) {
+                          return const _LoadingGrid();
+                        }
+                        if (snap.hasError) {
+                          return _ErrorBox(message: snap.error.toString());
+                        }
+                        final allDocs = snap.data?.docs ?? [];
+                        final filtered = _applySearch(allDocs);
+                        if (filtered.isEmpty) {
+                          return _EmptyBox(
+                            isFiltered: _searchQuery.isNotEmpty ||
+                                _statusFilter != 'all',
+                          );
+                        }
+                        return _BookingsList(docs: filtered, allDocs: allDocs);
+                      },
+                    ),
+                  ),
+                ]),
+
+                // ── Tab 2: pre-bookings ───────────────────────────────────
+                const _PreBookingsTab(),
+              ],
             ),
           ),
         ],
@@ -216,13 +273,16 @@ class _TopBar extends StatelessWidget {
                 color: Colors.white, size: 18),
           ),
           const SizedBox(width: 12),
-          const Text('Bookings Management',
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: _kTextDark,
-                  letterSpacing: -0.3)),
-          const Spacer(),
+          Flexible(
+            child: Text('Bookings Management',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: _kTextDark,
+                    letterSpacing: -0.3)),
+          ),
+          const SizedBox(width: 8),
           _LivePulse(),
         ]),
         const SizedBox(height: 16),
@@ -2572,4 +2632,389 @@ class _ErrorBox extends StatelessWidget {
       ),
     );
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRE-BOOKINGS TAB — admin view
+// ══════════════════════════════════════════════════════════════════════════════
+class _PreBookingsTab extends StatefulWidget {
+  const _PreBookingsTab();
+  @override
+  State<_PreBookingsTab> createState() => _PreBookingsTabState();
+}
+
+class _PreBookingsTabState extends State<_PreBookingsTab> {
+  String _statusFilter = 'all';
+  final _searchCtrl = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl
+        .addListener(() => setState(() => _searchQuery = _searchCtrl.text));
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _updateStatus(String docId, String status,
+      {String? reason}) async {
+    final update = <String, dynamic>{
+      'status': status,
+      'updated_at': FieldValue.serverTimestamp(),
+    };
+    if (reason != null) update['lost_reason'] = reason;
+    await _db.collection('pre_bookings').doc(docId).update(update);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      // Search + filters
+      Container(
+        color: _kCard,
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: 260,
+              height: 40,
+              child: TextField(
+                controller: _searchCtrl,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Search hostel, room, student…',
+                  hintStyle: const TextStyle(fontSize: 13, color: _kTextLight),
+                  prefixIcon: const Icon(Icons.search_rounded,
+                      size: 18, color: _kTextLight),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () => _searchCtrl.clear(),
+                          child: const Icon(Icons.close_rounded,
+                              size: 16, color: _kTextLight))
+                      : null,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                  filled: true,
+                  fillColor: _kSurface,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _kBorder)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _kBorder)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide:
+                          const BorderSide(color: _kPrimary, width: 1.5)),
+                ),
+              ),
+            ),
+            for (final entry in {
+              'all': 'All',
+              'active': 'Active',
+              'converted': 'Converted',
+              'expired': 'Expired',
+              'lost': 'Lost',
+            }.entries)
+              _FilterChip(
+                label: entry.value,
+                selected: _statusFilter == entry.key,
+                color: _statusChipColor(entry.key),
+                onTap: () => setState(() => _statusFilter = entry.key),
+              ),
+          ],
+        ),
+      ),
+
+      // Live stream list
+      Expanded(
+        child: StreamBuilder<QuerySnapshot>(
+          stream: _statusFilter == 'all'
+              ? _db
+                  .collection('pre_bookings')
+                  .orderBy('created_at', descending: true)
+                  .snapshots()
+              : _db
+                  .collection('pre_bookings')
+                  .where('status', isEqualTo: _statusFilter)
+                  .orderBy('created_at', descending: true)
+                  .snapshots(),
+          builder: (ctx, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const _LoadingGrid();
+            }
+            if (snap.hasError) {
+              return _ErrorBox(message: snap.error.toString());
+            }
+
+            var docs = snap.data?.docs ?? [];
+
+            // Search filter
+            if (_searchQuery.trim().isNotEmpty) {
+              final q = _searchQuery.toLowerCase();
+              docs = docs.where((d) {
+                final data = d.data() as Map<String, dynamic>;
+                return (data['hostel_name'] ?? '')
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    (data['room_number'] ?? '')
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    (data['student_name'] ?? '')
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    (data['email'] ?? '').toString().toLowerCase().contains(q);
+              }).toList();
+            }
+
+            // Stats
+            final allDocs = snap.data?.docs ?? [];
+            final activeCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'active')
+                .length;
+            final convertedCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'converted')
+                .length;
+            final expiredCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'expired')
+                .length;
+            final lostCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'lost')
+                .length;
+
+            if (docs.isEmpty) {
+              return _EmptyBox(
+                  isFiltered:
+                      _searchQuery.isNotEmpty || _statusFilter != 'all');
+            }
+
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                // Stats row
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    _StatChip(
+                        label: 'Active',
+                        value: '$activeCount',
+                        icon: Icons.bookmark_rounded,
+                        color: _kPrimary,
+                        bg: _kBlueBg),
+                    const SizedBox(width: 10),
+                    _StatChip(
+                        label: 'Converted',
+                        value: '$convertedCount',
+                        icon: Icons.check_circle_rounded,
+                        color: _kGreen,
+                        bg: _kGreenBg),
+                    const SizedBox(width: 10),
+                    _StatChip(
+                        label: 'Expired',
+                        value: '$expiredCount',
+                        icon: Icons.timer_off_rounded,
+                        color: _kOrange,
+                        bg: _kOrangeBg),
+                    const SizedBox(width: 10),
+                    _StatChip(
+                        label: 'Lost',
+                        value: '$lostCount',
+                        icon: Icons.cancel_rounded,
+                        color: _kRed,
+                        bg: _kRedBg),
+                  ]),
+                ),
+                const SizedBox(height: 16),
+
+                // Cards
+                ...docs.map((doc) {
+                  final d = doc.data() as Map<String, dynamic>;
+                  final status = d['status'] as String? ?? 'active';
+                  final expiresTs = d['expires_at'] as Timestamp?;
+                  final createdTs = d['created_at'] as Timestamp?;
+                  final daysLeft = expiresTs != null
+                      ? expiresTs.toDate().difference(DateTime.now()).inDays
+                      : null;
+                  final isUrgent =
+                      daysLeft != null && daysLeft <= 1 && status == 'active';
+
+                  final accentColor = switch (status) {
+                    'converted' => _kGreen,
+                    'expired' || 'lost' => _kTextLight,
+                    _ => isUrgent ? _kOrange : _kPrimary,
+                  };
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: _kCard,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: accentColor.withOpacity(0.25)),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.04),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3)),
+                      ],
+                    ),
+                    child: Column(children: [
+                      // Header
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                        decoration: BoxDecoration(
+                          color: accentColor.withOpacity(0.07),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(14)),
+                        ),
+                        child: Row(children: [
+                          Icon(
+                            status == 'converted'
+                                ? Icons.check_circle_rounded
+                                : status == 'active'
+                                    ? Icons.bookmark_rounded
+                                    : Icons.bookmark_remove_rounded,
+                            color: accentColor,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(d['hostel_name'] ?? '—',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                          color: _kTextDark)),
+                                  Text('Room ${d['room_number'] ?? '—'}',
+                                      style: const TextStyle(
+                                          fontSize: 12, color: _kTextMid)),
+                                ]),
+                          ),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 110),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: accentColor.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(50),
+                                border: Border.all(
+                                    color: accentColor.withOpacity(0.3)),
+                              ),
+                              child: Text(
+                                status == 'active'
+                                    ? (daysLeft != null
+                                        ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
+                                        : 'Active')
+                                    : status.toUpperCase(),
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: accentColor),
+                              ),
+                            ),
+                          )
+                        ]),
+                      ),
+
+                      // Body
+                      Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(children: [
+                          _CardRow(
+                              icon: Icons.person_rounded,
+                              label: 'Student',
+                              value: d['student_name'] ?? '—'),
+                          _CardRow(
+                              icon: Icons.email_rounded,
+                              label: 'Email',
+                              value: d['email'] ?? '—'),
+                          _CardRow(
+                              icon: Icons.phone_rounded,
+                              label: 'Phone',
+                              value: d['phone'] ?? '—'),
+                          _CardRow(
+                              icon: Icons.timer_outlined,
+                              label: 'Window',
+                              value: '${d['visit_window_days'] ?? '—'} days'),
+                          if (createdTs != null)
+                            _CardRow(
+                                icon: Icons.calendar_today_rounded,
+                                label: 'Registered',
+                                value: _fmtShort(createdTs.toDate())),
+                          if (status == 'converted' &&
+                              d['converted_booking_id'] != null)
+                            _CardRow(
+                                icon: Icons.receipt_long_rounded,
+                                label: 'Booking ID',
+                                value: (d['converted_booking_id'] as String)
+                                    .substring(0, 8)
+                                    .toUpperCase()),
+                          if (status == 'lost' && d['lost_reason'] != null)
+                            _CardRow(
+                                icon: Icons.info_outline_rounded,
+                                label: 'Reason',
+                                value: d['lost_reason']),
+                        ]),
+                      ),
+
+                      if (status == 'active')
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _SmallActionBtn(
+                                label: 'Mark Converted',
+                                icon: Icons.check_circle_rounded,
+                                color: _kGreen,
+                                onTap: () => _updateStatus(doc.id, 'converted'),
+                              ),
+                              _SmallActionBtn(
+                                label: 'Mark Expired',
+                                icon: Icons.timer_off_rounded,
+                                color: _kOrange,
+                                onTap: () => _updateStatus(doc.id, 'expired'),
+                              ),
+                              _SmallActionBtn(
+                                label: 'Mark Lost',
+                                icon: Icons.cancel_rounded,
+                                color: _kRed,
+                                onTap: () => _updateStatus(doc.id, 'lost',
+                                    reason: 'Marked lost by admin'),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ]),
+                  );
+                }),
+              ],
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+
+  Color _statusChipColor(String s) => switch (s) {
+        'active' => _kPrimary,
+        'converted' => _kGreen,
+        'expired' => _kOrange,
+        'lost' => _kRed,
+        _ => _kTextMid,
+      };
 }

@@ -206,6 +206,12 @@ class Hostel {
   /// Ignored (treated as 0) when depositType == 'none'.
   final double depositValue;
 
+  // ── Pre-booking ─────────────────────────────────────────────
+  /// Number of days a student gets to visit and verify a room
+  /// before their pre-booking expires. Landlord-configurable,
+  /// enforced to a minimum of 3 both client-side and in Firestore rules.
+  final int visitWindowDays;
+
   const Hostel({
     required this.id,
     required this.landlordId,
@@ -232,6 +238,7 @@ class Hostel {
     this.priceRange,
     this.depositType = 'none',
     this.depositValue = 0.0,
+    this.visitWindowDays = 3,
   });
 
   /// Calculates the deposit amount for a given room price.
@@ -273,6 +280,7 @@ class Hostel {
         priceRange: json['price_range']?.toString(),
         depositType: json['deposit_type']?.toString() ?? 'none',
         depositValue: _parseDouble(json['deposit_value']),
+        visitWindowDays: _parseInt(json['visit_window_days'], 3),
       );
 
   Map<String, dynamic> toJson() => {
@@ -300,6 +308,7 @@ class Hostel {
         'price_range': priceRange,
         'deposit_type': depositType,
         'deposit_value': depositValue,
+        'visit_window_days': visitWindowDays,
       };
 
   Hostel copyWith({
@@ -328,6 +337,7 @@ class Hostel {
     String? priceRange,
     String? depositType,
     double? depositValue,
+    int? visitWindowDays,
   }) =>
       Hostel(
         id: id ?? this.id,
@@ -355,6 +365,7 @@ class Hostel {
         priceRange: priceRange ?? this.priceRange,
         depositType: depositType ?? this.depositType,
         depositValue: depositValue ?? this.depositValue,
+        visitWindowDays: visitWindowDays ?? this.visitWindowDays,
       );
 }
 
@@ -498,6 +509,10 @@ class Booking {
   final DateTime? balanceDueDate;
   final String? moveInSetBy; // 'student' | 'landlord_or_admin'
 
+  // ── Pre-booking link ─────────────────────────────────────────
+  /// Set when this booking was created from a converted pre-booking.
+  final String? preBookingId;
+
   const Booking({
     required this.id,
     required this.roomId,
@@ -529,6 +544,7 @@ class Booking {
     this.paymentSchedule = const [],
     this.balanceDueDate,
     this.moveInSetBy,
+    this.preBookingId,
   });
 
   // ── Convenience getters ─────────────────────────────────────
@@ -584,6 +600,7 @@ class Booking {
         paymentSchedule: _parseSchedule(json['payment_schedule']),
         balanceDueDate: _parseDate(json['balance_due_date']),
         moveInSetBy: json['move_in_set_by']?.toString(),
+        preBookingId: json['pre_booking_id']?.toString(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -617,6 +634,7 @@ class Booking {
         if (balanceDueDate != null)
           'balance_due_date': balanceDueDate!.toIso8601String(),
         if (moveInSetBy != null) 'move_in_set_by': moveInSetBy,
+        if (preBookingId != null) 'pre_booking_id': preBookingId,
       };
 
   Booking copyWith({
@@ -650,6 +668,7 @@ class Booking {
     List<Map<String, dynamic>>? paymentSchedule,
     DateTime? balanceDueDate,
     String? moveInSetBy,
+    String? preBookingId,
   }) =>
       Booking(
         id: id ?? this.id,
@@ -682,6 +701,159 @@ class Booking {
         paymentSchedule: paymentSchedule ?? this.paymentSchedule,
         balanceDueDate: balanceDueDate ?? this.balanceDueDate,
         moveInSetBy: moveInSetBy ?? this.moveInSetBy,
+        preBookingId: preBookingId ?? this.preBookingId,
+      );
+}
+
+// ─── PreBooking ───────────────────────────────────────────────
+/// status values: 'active' | 'converted' | 'cancelled' | 'expired' | 'lost'
+/// - 'active': student has registered interest, visit window running
+/// - 'converted': student went ahead and booked (app_payment or manual)
+/// - 'cancelled': student backed out themselves
+/// - 'expired': visit window passed with no action
+/// - 'lost': someone else booked the room first
+class PreBooking {
+  final String id;
+  final String userId;
+  final String studentName;
+  final String email;
+  final String phone;
+  final String hostelId;
+  final String hostelName;
+  final String hostelCode;
+  final String landlordId;
+  final String roomId;
+  final String roomNumber;
+  final int visitWindowDays;
+  final DateTime createdAt;
+  final DateTime expiresAt;
+  final String status;
+  final String? convertedBookingId;
+  final String? conversionMethod; // 'app_payment' | 'manual'
+  final String? lostReason;
+
+  const PreBooking({
+    required this.id,
+    required this.userId,
+    required this.studentName,
+    required this.email,
+    required this.phone,
+    required this.hostelId,
+    required this.hostelName,
+    required this.hostelCode,
+    required this.landlordId,
+    required this.roomId,
+    required this.roomNumber,
+    required this.visitWindowDays,
+    required this.createdAt,
+    required this.expiresAt,
+    required this.status,
+    this.convertedBookingId,
+    this.conversionMethod,
+    this.lostReason,
+  });
+
+  // ── Convenience getters ─────────────────────────────────────
+  bool get isActive => status == 'active';
+  bool get isConverted => status == 'converted';
+  bool get isCancelled => status == 'cancelled';
+  bool get isExpiredStatus => status == 'expired';
+  bool get isLost => status == 'lost';
+
+  /// True once `expiresAt` has passed, regardless of stored status —
+  /// useful for client-side checks before the status flip has synced.
+  bool get isPastWindow => DateTime.now().isAfter(expiresAt);
+
+  /// Whole days left until the visit window closes. 0 once expired.
+  int get daysRemaining {
+    final diff = expiresAt.difference(DateTime.now()).inHours;
+    return diff <= 0 ? 0 : (diff / 24).ceil();
+  }
+
+  factory PreBooking.fromJson(String docId, Map<String, dynamic> json) =>
+      PreBooking(
+        id: docId,
+        userId: json['user_id']?.toString() ?? '',
+        studentName: json['student_name']?.toString() ?? '',
+        email: json['email']?.toString() ?? '',
+        phone: json['phone']?.toString() ?? '',
+        hostelId: json['hostel_id']?.toString() ?? '',
+        hostelName: json['hostel_name']?.toString() ?? '',
+        hostelCode: json['hostel_code']?.toString() ?? '',
+        landlordId: json['landlord_id']?.toString() ?? '',
+        roomId: json['room_id']?.toString() ?? '',
+        roomNumber: json['room_number']?.toString() ?? '',
+        visitWindowDays: _parseInt(json['visit_window_days'], 3),
+        createdAt: _parseDate(json['created_at']) ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+        expiresAt: _parseDate(json['expires_at']) ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+        status: json['status']?.toString() ?? 'active',
+        convertedBookingId: json['converted_booking_id']?.toString(),
+        conversionMethod: json['conversion_method']?.toString(),
+        lostReason: json['lost_reason']?.toString(),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'user_id': userId,
+        'student_name': studentName,
+        'email': email,
+        'phone': phone,
+        'hostel_id': hostelId,
+        'hostel_name': hostelName,
+        'hostel_code': hostelCode,
+        'landlord_id': landlordId,
+        'room_id': roomId,
+        'room_number': roomNumber,
+        'visit_window_days': visitWindowDays,
+        'created_at': _dateToString(createdAt),
+        'expires_at': _dateToString(expiresAt),
+        'status': status,
+        if (convertedBookingId != null)
+          'converted_booking_id': convertedBookingId,
+        if (conversionMethod != null) 'conversion_method': conversionMethod,
+        if (lostReason != null) 'lost_reason': lostReason,
+      };
+
+  PreBooking copyWith({
+    String? id,
+    String? userId,
+    String? studentName,
+    String? email,
+    String? phone,
+    String? hostelId,
+    String? hostelName,
+    String? hostelCode,
+    String? landlordId,
+    String? roomId,
+    String? roomNumber,
+    int? visitWindowDays,
+    DateTime? createdAt,
+    DateTime? expiresAt,
+    String? status,
+    String? convertedBookingId,
+    String? conversionMethod,
+    String? lostReason,
+  }) =>
+      PreBooking(
+        id: id ?? this.id,
+        userId: userId ?? this.userId,
+        studentName: studentName ?? this.studentName,
+        email: email ?? this.email,
+        phone: phone ?? this.phone,
+        hostelId: hostelId ?? this.hostelId,
+        hostelName: hostelName ?? this.hostelName,
+        hostelCode: hostelCode ?? this.hostelCode,
+        landlordId: landlordId ?? this.landlordId,
+        roomId: roomId ?? this.roomId,
+        roomNumber: roomNumber ?? this.roomNumber,
+        visitWindowDays: visitWindowDays ?? this.visitWindowDays,
+        createdAt: createdAt ?? this.createdAt,
+        expiresAt: expiresAt ?? this.expiresAt,
+        status: status ?? this.status,
+        convertedBookingId: convertedBookingId ?? this.convertedBookingId,
+        conversionMethod: conversionMethod ?? this.conversionMethod,
+        lostReason: lostReason ?? this.lostReason,
       );
 }
 

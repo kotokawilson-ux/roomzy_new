@@ -1581,6 +1581,16 @@ class _RoomDialogState extends State<_RoomDialog> {
     'Chamber and Hall',
     'Other',
   ];
+  double _grossUp(double landlordPrice) {
+    final exact = landlordPrice / (1 - 0.0195);
+    if (landlordPrice < 100) {
+      // Round up to nearest 0.50
+      return ((exact * 2).ceil() / 2);
+    } else {
+      // Round up to nearest 50
+      return ((exact / 50).ceil() * 50).toDouble();
+    }
+  }
 
   @override
   void initState() {
@@ -1618,7 +1628,7 @@ class _RoomDialogState extends State<_RoomDialog> {
       'room_number': _roomNumber.text.trim(),
       'type': _type,
       'capacity': int.tryParse(_capacity.text.trim()) ?? 1,
-      'price': double.tryParse(_price.text.trim()) ?? 0,
+      'price': _grossUp(double.tryParse(_price.text.trim()) ?? 0),
       'available': _available,
       'image': _image.text.trim(),
       'images': _images.text.trim(),

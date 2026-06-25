@@ -18,6 +18,7 @@ import '../../models/models.dart';
 import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
 import '../../services/move_in_service.dart';
+import 'widgets/pre_booking_sheet.dart';
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -173,6 +174,8 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
   List<String> _facilities = [];
   bool _loading = true;
   String? _error;
+  PreBooking? _activePreBooking;
+  bool _preBookingLoaded = false;
 
   StreamSubscription? _hostelSub;
   StreamSubscription? _roomsSub;
@@ -190,6 +193,27 @@ class _HostelDetailScreenState extends State<HostelDetailScreen> {
     _roomsSub?.cancel();
     _facilitiesSub?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadActivePreBooking(String roomId) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('pre_bookings')
+        .where('user_id', isEqualTo: uid)
+        .where('room_id', isEqualTo: roomId)
+        .where('status', isEqualTo: 'active')
+        .limit(1)
+        .get();
+
+    if (!mounted) return;
+    setState(() {
+      _activePreBooking = snap.docs.isNotEmpty
+          ? PreBooking.fromJson(snap.docs.first.id, snap.docs.first.data())
+          : null;
+      _preBookingLoaded = true;
+    });
   }
 
   void _startListeners() {
@@ -829,11 +853,11 @@ class _RoomsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hPad = isWide ? 60.0 : 20.0;
-    final cols = isWide ? 3 : 1;
     final screenW = MediaQuery.of(context).size.width;
+    final cols = screenW > 900 ? 3 : 1;
+
     final totalSpacing = (cols - 1) * 20.0;
     final cardW = (screenW - hPad * 2 - totalSpacing) / cols;
-    const cardH = 160.0 + 250.0;
 
     return Container(
       color: _kBg,
@@ -845,23 +869,36 @@ class _RoomsSection extends StatelessWidget {
         const SizedBox(height: 32),
         rooms.isEmpty
             ? _EmptyBox(message: 'No rooms found for this hostel.')
-            : GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: cols,
-                  crossAxisSpacing: 20,
-                  mainAxisSpacing: 20,
-                  mainAxisExtent: cardH,
-                ),
-                itemCount: rooms.length,
-                itemBuilder: (_, i) => _RoomCard(
-                  room: rooms[i],
-                  hostel: hostel,
-                  onBooked: onBooked,
-                  cardWidth: cardW,
-                ),
-              ),
+            : cols == 1
+                ? ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: rooms.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 20),
+                    itemBuilder: (_, i) => _RoomCard(
+                      room: rooms[i],
+                      hostel: hostel,
+                      onBooked: onBooked,
+                      cardWidth: cardW,
+                    ),
+                  )
+                : GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: cols,
+                      crossAxisSpacing: 20,
+                      mainAxisSpacing: 20,
+                      childAspectRatio: 0.72,
+                    ),
+                    itemCount: rooms.length,
+                    itemBuilder: (_, i) => _RoomCard(
+                      room: rooms[i],
+                      hostel: hostel,
+                      onBooked: onBooked,
+                      cardWidth: cardW,
+                    ),
+                  ),
       ]),
     );
   }
@@ -887,6 +924,7 @@ class _RoomCardState extends State<_RoomCard>
   late AnimationController _hoverCtrl;
   late Animation<double> _elevation;
   bool _hovered = false;
+  bool _hasActivePreBooking = false; // ← add this
 
   @override
   void initState() {
@@ -946,7 +984,7 @@ class _RoomCardState extends State<_RoomCard>
             ],
           ),
           clipBehavior: Clip.hardEdge,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: Column(children: [
             // ── Image ──────────────────────────────────────────────────────
             SizedBox(
               height: 160,
@@ -1029,77 +1067,199 @@ class _RoomCardState extends State<_RoomCard>
             ),
 
             // ── Content ────────────────────────────────────────────────────
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(mainAxisSize: MainAxisSize.min, children: [
-                      Text(
-                        '${widget.room.type} Room',
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: _kDark),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 11, 14, 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Room title + number
+                  Text(
+                    '${widget.room.type} Room',
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: _kDark),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Room No. ${widget.room.roomNumber}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: _kTextDim,
+                        fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    _MiniPill(Icons.people_outline_rounded,
+                        'Cap: ${widget.room.capacity}', Colors.blueGrey),
+                    const SizedBox(width: 6),
+                    _MiniPill(
+                      Icons.door_front_door_outlined,
+                      '$rem slot${rem != 1 ? 's' : ''}',
+                      isAvail ? _kGreen : _kRed,
+                    ),
+                  ]),
+
+                  // ── Pre-book explanation banner ───────────────────────
+                  if (isAvail) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F3FF),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color: const Color(0xFF7C3AED).withOpacity(0.2)),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Room No. ${widget.room.roomNumber}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            fontSize: 12,
-                            color: _kTextDim,
-                            fontWeight: FontWeight.w500),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.bookmark_add_outlined,
+                              size: 13, color: Color(0xFF7C3AED)),
+                          const SizedBox(width: 6),
+                          const Expanded(
+                            child: Text(
+                              'Not ready to book yet? Pre-book to register your interest and get a visit window before deciding.',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xFF6D28D9),
+                                height: 1.45,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 8),
-                      Row(
+                    ),
+                  ],
+
+                  const SizedBox(height: 12),
+
+                  // ── Pre-book button (prominent, above Book Now) ───────
+                  if (isAvail) ...[
+                    GestureDetector(
+                      onTap: () => showPreBookingSheet(
+                        context: context,
+                        hostel: widget.hostel,
+                        room: Room(
+                          id: widget.room.id,
+                          hostelId: widget.hostel.id,
+                          hostelName: widget.hostel.hostelName,
+                          hostelCode: widget.hostel.hostelCode,
+                          roomNumber: widget.room.roomNumber,
+                          type: widget.room.type,
+                          capacity: widget.room.capacity,
+                          price: widget.room.price,
+                          available: widget.room.available,
+                          booked: widget.room.booked,
+                        ),
+                        user: UserModel(
+                          id: FirebaseAuth.instance.currentUser?.uid ?? '',
+                          username:
+                              FirebaseAuth.instance.currentUser?.displayName ??
+                                  '',
+                          email: FirebaseAuth.instance.currentUser?.email ?? '',
+                          phone: '',
+                          role: 'student',
+                        ),
+                      ),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF5F3FF),
+                          borderRadius: BorderRadius.circular(50),
+                          border: Border.all(
+                            color: const Color(0xFF7C3AED).withOpacity(0.6),
+                          ),
+                        ),
+                        child: const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            _MiniPill(
-                                Icons.people_outline_rounded,
-                                'Cap: ${widget.room.capacity}',
-                                Colors.blueGrey),
-                            const SizedBox(width: 6),
-                            _MiniPill(
-                              Icons.door_front_door_outlined,
-                              '$rem slot${rem != 1 ? 's' : ''}',
-                              isAvail ? _kGreen : _kRed,
+                            Icon(Icons.bookmark_add_outlined,
+                                size: 13, color: Color(0xFF7C3AED)),
+                            SizedBox(width: 6),
+                            Text(
+                              'Pre-book · Register Interest',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF7C3AED),
+                              ),
                             ),
-                          ]),
-                    ]),
-
-                    // ── Action buttons ────────────────────────────────────
-                    Row(children: [
-                      Expanded(
-                        child: _OutlineBtn(
-                          label: 'Photos',
-                          icon: Icons.photo_library_outlined,
-                          onTap: (widget.room.images.isNotEmpty ||
-                                  widget.room.image != null)
-                              ? () => _showImages(context, widget.room)
-                              : null,
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _FilledBtn(
-                          label: isAvail ? 'Book Now' : 'Full',
-                          icon: isAvail
-                              ? Icons.hotel_rounded
-                              : Icons.block_rounded,
-                          onTap: isAvail
-                              ? () => _showBooking(context, widget.room)
-                              : null,
-                          color: isAvail ? _kPrimary : Colors.grey[400]!,
-                        ),
-                      ),
-                    ]),
+                    ),
+                    const SizedBox(height: 8),
                   ],
-                ),
+// ── Call Hostel (shown after pre-booking) ─────────────
+                  if (_hasActivePreBooking &&
+                      (widget.hostel.phone ?? '').isNotEmpty) ...[
+                    GestureDetector(
+                      onTap: () => launchUrl(
+                        Uri.parse(
+                            'tel:${_splitPhone(widget.hostel.phone).first}'),
+                      ),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEFFEFB),
+                          borderRadius: BorderRadius.circular(50),
+                          border:
+                              Border.all(color: _kPrimary.withOpacity(0.45)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.phone_rounded,
+                                size: 13, color: _kPrimary),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Call Hostel · ${_splitPhone(widget.hostel.phone).first}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: _kPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  // ── Photos + Book Now row ─────────────────────────────
+                  Row(children: [
+                    Expanded(
+                      child: _OutlineBtn(
+                        label: 'Photos',
+                        icon: Icons.photo_library_outlined,
+                        onTap: (widget.room.images.isNotEmpty ||
+                                widget.room.image != null)
+                            ? () => _showImages(context, widget.room)
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _FilledBtn(
+                        label: isAvail ? 'Book Now' : 'Full',
+                        icon:
+                            isAvail ? Icons.hotel_rounded : Icons.block_rounded,
+                        onTap: isAvail
+                            ? () => _showBooking(context, widget.room)
+                            : null,
+                        color: isAvail ? _kPrimary : Colors.grey[400]!,
+                      ),
+                    ),
+                  ]),
+                ],
               ),
             ),
           ]),
@@ -2093,14 +2253,17 @@ class _BookingSheetState extends State<_BookingSheet>
         .snapshots()
         .listen((snap) async {
       if (!snap.exists || !mounted) return;
-      if (_paymentHandled) return; // ← guard against double-fire
+      if (_paymentHandled) return;
+
       final data = snap.data()!;
       final paymentStatus = data['payment_status'] as String?;
 
       if (paymentStatus == 'deposit_paid' || paymentStatus == 'fully_paid') {
         _bookingListener?.cancel();
         if (!mounted) return;
-        _paymentHandled = true; // ← set before navigating
+        _paymentHandled = true;
+
+        // ── Only navigate, NEVER write here ──
         await BookingStorageService.saveBookingId(_bookingId!);
         HapticFeedback.heavyImpact();
         widget.onSuccess(_bookingId!, _slots);
@@ -2527,14 +2690,38 @@ class _BookingSheetState extends State<_BookingSheet>
   }
 
   Future<void> _onPaymentSuccess(String reference) async {
-    if (_paymentHandled) return; // ← guard here too
-    _paymentHandled = true; // ← claim it immediately
+    if (_paymentHandled) return;
+    _paymentHandled = true;
+
     final roomRef =
         FirebaseFirestore.instance.collection('rooms').doc(widget.room.id);
     final bookingRef =
         FirebaseFirestore.instance.collection('bookings').doc(_bookingId);
 
+    // ── Server-side idempotency: skip if this reference already recorded ──
     try {
+      final existingPayment = await bookingRef
+          .collection('payments')
+          .where('reference', isEqualTo: reference)
+          .limit(1)
+          .get();
+
+      if (existingPayment.docs.isNotEmpty) {
+        debugPrint(
+            '⚠️ Payment $reference already recorded, skipping duplicate');
+        await BookingStorageService.saveBookingId(_bookingId!);
+        if (!mounted) return;
+        HapticFeedback.heavyImpact();
+        widget.onSuccess(_bookingId!, _slots);
+        return;
+      }
+    } catch (e) {
+      debugPrint('Idempotency check error: $e');
+      // Continue anyway — better to risk a duplicate check than block payment
+    }
+
+    try {
+      // ── Step 1: Read booking doc BEFORE transaction to get commission fields
       // ── Step 1: Read booking doc BEFORE transaction to get commission fields
       final bookingSnap = await bookingRef.get();
       final bData = bookingSnap.data() ?? {};
@@ -2681,6 +2868,7 @@ class _BookingSheetState extends State<_BookingSheet>
       );
     } catch (e) {
       if (!mounted) return;
+      _paymentHandled = false; // ← reset so user can retry
       _goToStep(1);
       _showSnack(
         e.toString().contains('Not enough slots')
@@ -3580,11 +3768,13 @@ class _RoomSummaryCard extends StatelessWidget {
           ),
           const SizedBox(width: 14),
           Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Text(
                   '${room.type} Room · No. ${room.roomNumber}',
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                   style: const TextStyle(
                       fontSize: 14, fontWeight: FontWeight.w800, color: _kDark),
                 ),
@@ -3593,18 +3783,21 @@ class _RoomSummaryCard extends StatelessWidget {
                   'GHS ${room.price.toStringAsFixed(2)} × $slots slot${slots > 1 ? 's' : ''}',
                   style: const TextStyle(fontSize: 12, color: _kTextMuted),
                 ),
-              ])),
+              ],
+            ),
+          ),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
             const Text('Total',
                 style: TextStyle(fontSize: 11, color: _kTextDim)),
             Text(
               'GHS ${total.toStringAsFixed(2)}',
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                   fontSize: 16, fontWeight: FontWeight.w900, color: _kPrimary),
             ),
           ]),
         ]),
-      );
+      ); // ← closes Container(
 }
 
 // ─── Order Banner ─────────────────────────────────────────────────────────────
