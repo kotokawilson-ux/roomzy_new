@@ -196,7 +196,8 @@ class Hostel {
   final String? schoolName;
   final String? schoolShortName;
   final String? priceRange;
-
+  final int balanceDueAmount; // e.g. 2
+  final String balanceDueUnit; // 'days' | 'weeks' | 'months'
   // ── Deposit ─────────────────────────────────────────────────
   /// 'none' | 'percent' | 'fixed'
   final String depositType;
@@ -239,7 +240,30 @@ class Hostel {
     this.depositType = 'none',
     this.depositValue = 0.0,
     this.visitWindowDays = 3,
+    this.balanceDueAmount = 0,
+    this.balanceDueUnit = 'days',
   });
+  DateTime? autoDueDate(DateTime moveInDate) {
+    switch (balanceDueUnit) {
+      case 'on_arrival':
+        return moveInDate;
+      case 'weeks':
+        if (balanceDueAmount <= 0) return null;
+        return moveInDate.add(Duration(days: balanceDueAmount * 7));
+      case 'months':
+        if (balanceDueAmount <= 0) return null;
+        var month = moveInDate.month + balanceDueAmount;
+        var year = moveInDate.year + (month - 1) ~/ 12;
+        month = ((month - 1) % 12) + 1;
+        final maxDay = DateTime(year, month + 1, 0).day;
+        return DateTime(year, month, moveInDate.day.clamp(1, maxDay));
+      case 'days':
+        if (balanceDueAmount <= 0) return null;
+        return moveInDate.add(Duration(days: balanceDueAmount));
+      default:
+        return null;
+    }
+  }
 
   /// Calculates the deposit amount for a given room price.
   /// Returns 0 when depositType is 'none'.
@@ -281,6 +305,8 @@ class Hostel {
         depositType: json['deposit_type']?.toString() ?? 'none',
         depositValue: _parseDouble(json['deposit_value']),
         visitWindowDays: _parseInt(json['visit_window_days'], 3),
+        balanceDueAmount: (json['balance_due_amount'] as num?)?.toInt() ?? 0,
+        balanceDueUnit: (json['balance_due_unit'] as String?) ?? 'days',
       );
 
   Map<String, dynamic> toJson() => {
@@ -309,6 +335,8 @@ class Hostel {
         'deposit_type': depositType,
         'deposit_value': depositValue,
         'visit_window_days': visitWindowDays,
+        'balance_due_amount': balanceDueAmount,
+        'balance_due_unit': balanceDueUnit,
       };
 
   Hostel copyWith({
@@ -338,6 +366,8 @@ class Hostel {
     String? depositType,
     double? depositValue,
     int? visitWindowDays,
+    int? balanceDueAmount,
+    String? balanceDueUnit,
   }) =>
       Hostel(
         id: id ?? this.id,
@@ -366,6 +396,8 @@ class Hostel {
         depositType: depositType ?? this.depositType,
         depositValue: depositValue ?? this.depositValue,
         visitWindowDays: visitWindowDays ?? this.visitWindowDays,
+        balanceDueAmount: balanceDueAmount ?? this.balanceDueAmount,
+        balanceDueUnit: balanceDueUnit ?? this.balanceDueUnit,
       );
 }
 

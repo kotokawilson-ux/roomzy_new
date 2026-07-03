@@ -181,6 +181,10 @@ class _HostelsListState extends State<HostelsList> {
     }
     // ── Budget filter ────────────────────────────────────────────────────
     // ── 2. Budget + Duration filter ─────────────────────────────────────────
+    // ── 2. Budget + Duration filter ─────────────────────────────────────────
+    // Now matches the user's budget against the hostel's ACTUAL price range
+    // (min–max), not just a ceiling. A hostel only shows if the budget falls
+    // inside its listed range.
     if (budget != null && budget > 0) {
       final userDuration = _normalizeDuration(widget.durationFilter);
 
@@ -197,15 +201,18 @@ class _HostelsListState extends State<HostelsList> {
           return false; // duration mismatch → hide
         }
 
-        // ── Price must be within budget ──────────────────────────────────────
+        // ── Budget must fall within the hostel's price range ─────────────────
         final minPrice = _getMinPrice(h.priceRange);
+        final maxPrice = _getMaxPrice(h.priceRange);
         if (minPrice == null) return true; // can't parse → include
 
-        // Show hostel only if user's budget >= hostel's minimum price
-        // e.g. budget=2100, range="GHS 800-2200" → minPrice=800 → 2100>=800 ✓
-        // e.g. budget=500,  range="GHS 800-2200" → minPrice=800 → 500>=800  ✗
-        // e.g. budget=50000 but duration mismatch → already excluded above
-        return budget >= minPrice;
+        // Single fixed price (no range, e.g. "GHS 900") → treat max == min
+        final effectiveMax = maxPrice ?? minPrice;
+
+        // e.g. budget=1000, range="GHS 800-1200" → 800<=1000<=1200 ✓
+        // e.g. budget=500,  range="GHS 800-1200" → below range      ✗
+        // e.g. budget=5000, range="GHS 800-1200" → above range      ✗
+        return budget >= minPrice && budget <= effectiveMax;
       }).toList();
     }
 
@@ -292,7 +299,7 @@ class _HostelsListState extends State<HostelsList> {
         crossAxisCount: crossAxisCount,
         crossAxisSpacing: spacing,
         mainAxisSpacing: spacing,
-        childAspectRatio: 0.75,
+        childAspectRatio: 0.66,
       ),
       itemBuilder: (_, index) =>
           _HostelCard(hostel: _filtered[index], theme: theme),
@@ -531,6 +538,9 @@ class _HostelCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 8),
+                    // Only ever render up to 2 location-ish lines so every card has the
+// same maximum content height inside the grid's fixed-aspect-ratio
+// cell — this is what was causing the overflow.
                     if (hostel.address != null && hostel.address!.isNotEmpty)
                       _InfoRow(
                         icon: Icons.location_on,
@@ -538,8 +548,8 @@ class _HostelCard extends StatelessWidget {
                         color: Colors.redAccent,
                         textColor: textSecondary,
                         iconSize: iconSize,
-                      ),
-                    if (hostel.town != null && hostel.town!.isNotEmpty)
+                      )
+                    else if (hostel.town != null && hostel.town!.isNotEmpty)
                       _InfoRow(
                         icon: Icons.map,
                         text: '${hostel.town}, Ghana',
@@ -551,9 +561,7 @@ class _HostelCard extends StatelessWidget {
                         hostel.schoolName!.isNotEmpty)
                       _InfoRow(
                         icon: Icons.school,
-                        text: hostel.schoolShortName != null
-                            ? '${hostel.schoolName} (${hostel.schoolShortName})'
-                            : hostel.schoolName!,
+                        text: hostel.schoolShortName ?? hostel.schoolName!,
                         color: AppColors.primary,
                         textColor: AppColors.primary,
                         iconSize: iconSize,

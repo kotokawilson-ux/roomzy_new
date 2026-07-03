@@ -111,14 +111,20 @@ class _HostelFormState extends State<HostelForm> {
   late final TextEditingController _mainImage;
   late final TextEditingController _galleryImages; // comma-separated
 
-  // Controllers — deposit
+// Controllers — deposit
   late final TextEditingController _depositValue;
+
+  // Controllers — balance due
+  late final TextEditingController _balanceDueAmount;
 
   // Duration
   late String _durationType;
 
   // Deposit
   late String _depositType; // 'none' | 'percent' | 'fixed'
+
+  // Balance due unit
+  late String _balanceDueUnit; // 'days' | 'weeks' | 'months'
 
   // School
   String? _schoolId;
@@ -151,6 +157,12 @@ class _HostelFormState extends State<HostelForm> {
           ? h!.depositValue.toStringAsFixed(h.depositType == 'percent' ? 0 : 2)
           : '',
     );
+    _depositValue.addListener(() => setState(() {}));
+    _balanceDueAmount = TextEditingController(
+      text: (h?.balanceDueAmount ?? 0) > 0 ? '${h!.balanceDueAmount}' : '',
+    );
+    _balanceDueUnit = h?.balanceDueUnit ?? 'days';
+    _balanceDueAmount.addListener(() => setState(() {}));
     _schoolId = h?.schoolId;
     _schoolName = h?.schoolName;
     _schoolShortName = h?.schoolShortName;
@@ -174,6 +186,7 @@ class _HostelFormState extends State<HostelForm> {
       _mainImage,
       _galleryImages,
       _depositValue,
+      _balanceDueAmount,
     ]) {
       c.dispose();
     }
@@ -252,6 +265,8 @@ class _HostelFormState extends State<HostelForm> {
           _priceRange.text.trim().isEmpty ? null : _priceRange.text.trim(),
       depositType: _depositType,
       depositValue: parsedDepositValue,
+      balanceDueAmount: int.tryParse(_balanceDueAmount.text.trim()) ?? 0,
+      balanceDueUnit: _balanceDueUnit,
     );
 
     if (_isEdit) {
@@ -523,6 +538,111 @@ class _HostelFormState extends State<HostelForm> {
                     // Live preview
                     _DepositPreview(
                         type: _depositType, rawValue: _depositValue.text),
+                  ],
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              // ── Balance Due ─────────────────────────────
+              _Section(
+                title: 'Balance Payment Deadline',
+                icon: Icons.event_rounded,
+                children: [
+                  const Text(
+                    'How long after move-in does the student have to pay their remaining balance?',
+                    style: TextStyle(fontSize: 11, color: _C.textLight),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    SizedBox(
+                      width: 100,
+                      child: _Field(
+                        label: 'Amount',
+                        controller: _balanceDueAmount,
+                        hint: 'e.g. 2',
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Unit',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: _C.textDark)),
+                          const SizedBox(height: 6),
+                          Row(children: [
+                            for (final unit in ['days', 'weeks', 'months'])
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () =>
+                                      setState(() => _balanceDueUnit = unit),
+                                  child: Container(
+                                    margin: EdgeInsets.only(
+                                        right: unit != 'months' ? 8 : 0),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: _balanceDueUnit == unit
+                                          ? _C.green.withOpacity(0.1)
+                                          : _C.pageBg,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: _balanceDueUnit == unit
+                                            ? _C.green
+                                            : _C.border,
+                                        width:
+                                            _balanceDueUnit == unit ? 1.5 : 1,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      unit[0].toUpperCase() + unit.substring(1),
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: _balanceDueUnit == unit
+                                              ? _C.green
+                                              : _C.textLight),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ]),
+                        ],
+                      ),
+                    ),
+                  ]),
+                  if ((int.tryParse(_balanceDueAmount.text.trim()) ?? 0) >
+                      0) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _C.green.withOpacity(0.07),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _C.green.withOpacity(0.2)),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.check_circle_outline_rounded,
+                            size: 13, color: _C.green),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            'Students get ${_balanceDueAmount.text.trim()} $_balanceDueUnit after move-in to pay their balance',
+                            style: const TextStyle(
+                                fontSize: 11,
+                                color: _C.green,
+                                fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ]),
+                    ),
                   ],
                 ],
               ),

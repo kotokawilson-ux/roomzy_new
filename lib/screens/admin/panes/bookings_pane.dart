@@ -9,6 +9,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import '../../../models/models.dart'; // ← add this
 
 // ─── Theme tokens ─────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -58,6 +59,18 @@ Future<void> _incrementRoomSlots(String roomId, int slots) async {
     if (booked + slots > capacity) throw Exception('Not enough slots');
     txn.update(roomRef, {'booked': FieldValue.increment(slots)});
   });
+}
+
+// ── Slot guard ────────────────────────────────────────────────────────────────
+// A slot is held whenever the student has made at least one payment,
+// regardless of what the admin has set the booking status to.
+bool _slotIsHeld(Map<String, dynamic> data) {
+  final ps = (data['payment_status'] ?? '') as String;
+  final st = (data['status'] ?? '') as String;
+  return ps == 'deposit_paid' ||
+      ps == 'fully_paid' ||
+      st == 'active' ||
+      st == 'confirmed';
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -858,7 +871,11 @@ class _ActionBtn extends StatelessWidget {
   Future<void> _setStatus(BuildContext ctx, String newStatus) async {
     try {
       final bookingSnap = await _db.collection('bookings').doc(docId).get();
-      final oldStatus = (bookingSnap.data()?['status'] ?? 'booked') as String;
+      if (!bookingSnap.exists) {
+        if (ctx.mounted) _showSnack(ctx, 'Booking not found', _kRed);
+        return;
+      }
+      final oldData = bookingSnap.data()!;
 
       await _db.collection('bookings').doc(docId).update({
         'status': newStatus,
@@ -869,13 +886,13 @@ class _ActionBtn extends StatelessWidget {
       final slots = (data['slots_booked'] ?? 1) as int;
 
       if (roomId != null && roomId.isNotEmpty) {
-        // Only decrement if moving AWAY from confirmed (freeing up the slot)
+        // Free the slot when declining or resetting — but ONLY if a payment
+        // already reserved it. We check payment_status, not booking status,
+        // because a paid booking stays paid even when admin changes status.
         if ((newStatus == 'declined' || newStatus == 'booked') &&
-            oldStatus == 'confirmed') {
+            _slotIsHeld(oldData)) {
           await _decrementRoomSlots(roomId, slots);
         }
-        // Never increment here — slots are booked when the student pays,
-        // not when admin confirms
       }
 
       if (ctx.mounted)
@@ -901,14 +918,34 @@ class _ActionBtn extends StatelessWidget {
     if (confirm != true) return;
 
     try {
-      final roomId = (data['room_id'] ?? data['roomId'])?.toString();
-      final slots = (data['slots_booked'] ?? 1) as int;
-      final status = (data['status'] ?? 'booked') as String;
+      // Always fetch the latest booking data from Firestore —
+      // never trust the stale 'data' map passed into this widget.
+      final bookingSnap = await _db.collection('bookings').doc(docId).get();
+      if (!bookingSnap.exists) {
+        messenger.showSnackBar(SnackBar(
+          content: const Text('Booking already deleted',
+              style: TextStyle(fontWeight: FontWeight.w600)),
+          backgroundColor: _kRed,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(16),
+        ));
+        return;
+      }
 
-      if (roomId != null && roomId.isNotEmpty && status == 'confirmed') {
+      final liveData = bookingSnap.data()!;
+      final roomId = (liveData['room_id'] ?? liveData['roomId'])?.toString();
+      final slots = (liveData['slots_booked'] ?? 1) as int;
+
+      // Free the slot only if a payment already reserved it.
+      // _slotIsHeld checks payment_status AND status so active/confirmed
+      // bookings are both handled correctly.
+      if (roomId != null && roomId.isNotEmpty && _slotIsHeld(liveData)) {
         await _decrementRoomSlots(roomId, slots);
       }
 
+      // Delete payments subcollection first, then the parent booking doc.
       final paymentsSnap = await _db
           .collection('bookings')
           .doc(docId)
@@ -919,6 +956,7 @@ class _ActionBtn extends StatelessWidget {
       }
 
       await _db.collection('bookings').doc(docId).delete();
+
       messenger.showSnackBar(SnackBar(
         content: const Text('Booking deleted',
             style: TextStyle(fontWeight: FontWeight.w600)),
@@ -1068,24 +1106,42 @@ class _DetailSheetState extends State<_DetailSheet> {
 
   Future<void> _handleDecline(BuildContext ctx, Map<String, dynamic> d) async {
     try {
+      // Always read fresh data from Firestore so payment_status is current —
+      // the 'd' map passed in may be stale if the sheet has been open a while.
       final snap = await _db.collection('bookings').doc(widget.docId).get();
-      final old = (snap.data()?['status'] ?? 'booked') as String;
-      await _db
-          .collection('bookings')
-          .doc(widget.docId)
-          .update({'status': 'declined'});
-      final roomId = (d['room_id'] ?? d['roomId'])?.toString();
-      final slots = (d['slots_booked'] ?? 1) as int;
-      if (roomId != null && roomId.isNotEmpty && old == 'confirmed') {
+      if (!snap.exists) {
+        if (ctx.mounted) Navigator.pop(ctx);
+        return;
+      }
+
+      final liveData = snap.data()!;
+
+      await _db.collection('bookings').doc(widget.docId).update({
+        'status': 'declined',
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+
+      final roomId = (liveData['room_id'] ?? liveData['roomId'])?.toString();
+      final slots = (liveData['slots_booked'] ?? 1) as int;
+
+      // Use _slotIsHeld so we free the slot whenever a payment has
+      // reserved it — not just when booking status was 'confirmed'.
+      if (roomId != null && roomId.isNotEmpty && _slotIsHeld(liveData)) {
         await _decrementRoomSlots(roomId, slots);
       }
+
       if (ctx.mounted) Navigator.pop(ctx);
     } catch (e) {
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: _kRed,
-            behavior: SnackBarBehavior.floating));
+          content: Text('Error: $e',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+          backgroundColor: _kRed,
+          behavior: SnackBarBehavior.floating,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(16),
+        ));
       }
     }
   }
@@ -1106,7 +1162,6 @@ class _DetailSheetState extends State<_DetailSheet> {
       ),
     );
     if (picked == null) return;
-
     try {
       await _db.collection('bookings').doc(widget.docId).update({
         'balance_due_date': Timestamp.fromDate(picked),
@@ -1131,14 +1186,27 @@ class _DetailSheetState extends State<_DetailSheet> {
       }
     }
   }
+String _fmtDate(DateTime d) => DateFormat('dd MMM yyyy, hh:mm a').format(d);
+String _fmtShort(DateTime d) => DateFormat('dd MMM yy, hh:mm a').format(d);
 
+String _balanceDueDisplay(Map<String, dynamic> d) {
+  final due = d['balance_due_date'];
+  final unit = d['balance_due_unit'];
+  if (due is Timestamp) {
+    if (unit == 'on_arrival') return 'Due on Arrival (${_fmtDate(due.toDate())})';
+    return _fmtDate(due.toDate());
+  }
+  final moveIn = d['move_in_date'];
+  if (moveIn == null) return 'Pending — set once move-in date is confirmed';
+  return 'Not set — hostel has no balance deadline configured';
+}
   Future<void> _setMoveInDate(BuildContext ctx, Map<String, dynamic> d) async {
     final picked = await showDatePicker(
       context: ctx,
       initialDate: DateTime.now(),
       firstDate:
           DateTime.now().subtract(const Duration(days: 30)), // allow backdating
-      lastDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
       helpText: 'Set Move-In Date',
       builder: (c, child) => Theme(
         data: Theme.of(c).copyWith(
@@ -1150,23 +1218,59 @@ class _DetailSheetState extends State<_DetailSheet> {
     );
     if (picked == null) return;
 
+
     try {
       final snap = await _db.collection('bookings').doc(widget.docId).get();
       final data = snap.data()!;
+
+      // Guard: never activate a declined or cancelled booking
+      final currentStatus = (data['status'] ?? '') as String;
+      if (currentStatus == 'declined' || currentStatus == 'cancelled') {
+        if (ctx.mounted) {
+          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+            content: const Text(
+                'Cannot set move-in date on a declined or cancelled booking'),
+            backgroundColor: _kRed,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            margin: const EdgeInsets.all(16),
+          ));
+        }
+        return;
+      }
+
       final durationType = data['duration_type']?.toString() ?? 'year';
       final totalAmount = (data['amount'] as num).toDouble();
 
       final schedule = _buildSchedule(picked, durationType, totalAmount);
 
+      // Pull the hostel's balance-due config (e.g. "45 days") and let
+      // the model calculate the due date — falls back to null (manual
+      // "Set Due Date") if the hostel never configured this.
+      DateTime? autoDue;
+      Hostel? hostel; // ← hoisted
+      final hostelId = data['hostel_id']?.toString();
+      if (hostelId != null && hostelId.isNotEmpty) {
+        final hostelSnap = await _db.collection('hostels').doc(hostelId).get();
+        if (hostelSnap.exists) {
+          hostel = Hostel.fromJson(
+              hostelSnap.id, hostelSnap.data()!); // ← no 'final'
+          autoDue = hostel.autoDueDate(picked);
+        }
+      }
+
       await _db.collection('bookings').doc(widget.docId).update({
         'move_in_date': Timestamp.fromDate(picked),
         'payment_schedule': schedule,
-        'balance_due_date': schedule.first['due_date'],
-        'status': 'active', // ← was 'active'
-        'move_in_confirmed': true, // ← add this
+        'balance_due_date':
+            autoDue != null ? Timestamp.fromDate(autoDue) : null,
+        'balance_due_unit': hostel?.balanceDueUnit,
+        'balance_due_amount': hostel?.balanceDueAmount,
+        'status': 'active',
+        'move_in_confirmed': true,
         'move_in_set_by': 'admin',
       });
-
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
           content: const Text('Move-in date set — payment schedule activated'),
@@ -1188,16 +1292,46 @@ class _DetailSheetState extends State<_DetailSheet> {
     }
   }
 
+  DateTime? _computeBalanceDueDate(
+    DateTime moveIn,
+    int amount,
+    String unit,
+  ) {
+    if (amount <= 0) return null;
+    switch (unit) {
+      case 'weeks':
+        return moveIn.add(Duration(days: amount * 7));
+      case 'months':
+        final totalMonths = moveIn.month + amount;
+        final targetYear = moveIn.year + (totalMonths - 1) ~/ 12;
+        final targetMonth = ((totalMonths - 1) % 12) + 1;
+        final daysInTargetMonth = DateTime(targetYear, targetMonth + 1, 0).day;
+        final targetDay =
+            moveIn.day > daysInTargetMonth ? daysInTargetMonth : moveIn.day;
+        return DateTime(
+            targetYear, targetMonth, targetDay, moveIn.hour, moveIn.minute);
+      case 'days':
+      default:
+        return moveIn.add(Duration(days: amount));
+    }
+  }
+
   List<Map<String, dynamic>> _buildSchedule(
     DateTime moveIn,
     String durationType,
     double totalAmount,
   ) {
+    // 'amount' on the booking already represents the full price for
+    // whichever period the hostel charges in (room.price is per-period,
+    // not a multi-period total) — so every duration type is a single
+    // lump payment due at move-in. There's no lease-length field to
+    // split a monthly booking into multiple installments against.
     final label = switch (durationType) {
       'year' => 'Full Year Payment',
       'academic_year' => 'Academic Year Payment',
       'semester' => 'Semester Payment',
-      _ => 'Month 1',
+      'month' => 'Monthly Payment',
+      _ => 'Full Payment',
     };
     return [
       {
@@ -1407,14 +1541,8 @@ class _DetailSheetState extends State<_DetailSheet> {
                               d['balance'] != null
                                   ? 'GHS ${NumberFormat('#,##0.00').format((d['balance'] as num).toDouble())}'
                                   : '—'),
-                          _DetailTile(
-                              Icons.event_rounded,
-                              'Balance Due Date',
-                              d['balance_due_date'] is Timestamp
-                                  ? _fmtDate(
-                                      (d['balance_due_date'] as Timestamp)
-                                          .toDate())
-                                  : 'Not set'),
+                          _DetailTile(Icons.event_rounded, 'Balance Due Date',
+                              _balanceDueDisplay(d)),
                           _DetailTile(
                               Icons.key_rounded,
                               'Move-In Date',

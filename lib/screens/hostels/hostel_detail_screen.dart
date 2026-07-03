@@ -19,6 +19,8 @@ import '../../widgets/navbar.dart';
 import '../../widgets/footer.dart';
 import '../../services/move_in_service.dart';
 import 'widgets/pre_booking_sheet.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart' as latlong;
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -797,7 +799,7 @@ class _DetailsBox extends StatelessWidget {
           SizedBox(width: 8),
           Expanded(
             child: Text(
-              'NOTE: Any room you book will be unavailable for others',
+              'NOTE: Booking a room reserves it exclusively for you — it won\'t be shown to other students. Not ready to commit? Use Pre-book below to schedule a visit and confirm it\'s right for you first.',
               style: TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w600, color: _kOrange),
             ),
@@ -1573,6 +1575,7 @@ class _FacilitiesSection extends StatelessWidget {
 }
 
 // ─── 5. LOCATION ─────────────────────────────────────────────────────────────
+// ─── 5. LOCATION ─────────────────────────────────────────────────────────────
 const _kGeoapifyApiKey = '1f447c87da1949b48571d28867d1f6a6';
 
 class _LocationSection extends StatelessWidget {
@@ -1596,13 +1599,6 @@ class _LocationSection extends StatelessWidget {
     return null;
   }
 
-  String _staticMapUrl(double lat, double lng) =>
-      'https://maps.geoapify.com/v1/staticmap'
-      '?style=osm-bright&width=800&height=400'
-      '&center=lonlat:$lng,$lat&zoom=16'
-      '&marker=lonlat:$lng,$lat;color:%230f766e;size:large'
-      '&apiKey=$_kGeoapifyApiKey';
-
   String _buildOpenUrl(double? lat, double? lng) {
     if (lat != null && lng != null)
       return 'https://www.google.com/maps?q=$lat,$lng';
@@ -1617,97 +1613,174 @@ class _LocationSection extends StatelessWidget {
     final coords = _extractCoords();
     final lat = coords?['lat'];
     final lng = coords?['lng'];
+    final hasCoords = lat != null && lng != null;
     final openUrl = _buildOpenUrl(lat, lng);
-    final staticUrl =
-        (lat != null && lng != null) ? _staticMapUrl(lat, lng) : null;
 
     return Container(
       color: _kBg,
       padding: EdgeInsets.symmetric(horizontal: isWide ? 60 : 20, vertical: 52),
       child: Column(children: [
-        _SectionHeading(title: 'Our Location', subtitle: 'Find us on the map'),
+        _SectionHeading(
+          title: 'Our Location',
+          subtitle: hasCoords
+              ? 'Explore the exact spot — pinch, drag, and zoom'
+              : 'Find us on the map',
+        ),
         const SizedBox(height: 24),
-        GestureDetector(
-          onTap: () async {
-            final uri = Uri.parse(openUrl);
-            if (await canLaunchUrl(uri))
-              await launchUrl(uri, mode: LaunchMode.externalApplication);
-          },
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withOpacity(0.12),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8)),
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.12),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8)),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: hasCoords
+                ? _InteractiveMap(lat: lat!, lng: lng!, openUrl: openUrl)
+                : _MapFallbackTappable(openUrl: openUrl),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─── Interactive live map (pan / zoom / pinch) ────────────────────────────────
+class _InteractiveMap extends StatefulWidget {
+  final double lat;
+  final double lng;
+  final String openUrl;
+  const _InteractiveMap(
+      {required this.lat, required this.lng, required this.openUrl});
+
+  @override
+  State<_InteractiveMap> createState() => _InteractiveMapState();
+}
+
+class _InteractiveMapState extends State<_InteractiveMap> {
+  final MapController _mapCtrl = MapController();
+  static const double _defaultZoom = 16.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final center = latlong.LatLng(widget.lat, widget.lng);
+
+    return SizedBox(
+      height: 320,
+      child: Stack(children: [
+        FlutterMap(
+          mapController: _mapCtrl,
+          options: MapOptions(
+            initialCenter: center,
+            initialZoom: _defaultZoom,
+            minZoom: 5,
+            maxZoom: 19,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.pinchZoom |
+                  InteractiveFlag.drag |
+                  InteractiveFlag.doubleTapZoom,
+            ),
+          ),
+          children: [
+            TileLayer(
+              urlTemplate:
+                  'https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=$_kGeoapifyApiKey',
+              userAgentPackageName: 'com.roomzyfind.app',
+              maxZoom: 19,
+            ),
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: center,
+                  width: 46,
+                  height: 46,
+                  alignment: Alignment.topCenter,
+                  child: _MapPin(),
+                ),
               ],
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: Stack(children: [
-                if (staticUrl != null)
-                  CachedNetworkImage(
-                    imageUrl: staticUrl,
-                    height: 240,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    placeholder: (_, __) => _MapShimmer(),
-                    errorWidget: (_, __, ___) => _MapFallback(),
-                  )
-                else
-                  _MapFallback(),
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 14),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.bottomCenter,
-                        end: Alignment.topCenter,
-                        colors: [
-                          Colors.black.withOpacity(0.7),
-                          Colors.transparent
-                        ],
-                      ),
-                    ),
-                    child: Row(children: [
-                      const Icon(Icons.location_on_rounded,
-                          color: Colors.white, size: 17),
-                      const SizedBox(width: 7),
-                      const Expanded(
-                        child: Text(
-                          'Tap to open in Google Maps',
+          ],
+        ),
+
+        // ── Recenter button ────────────────────────────────────────────────
+        Positioned(
+          top: 12,
+          right: 12,
+          child: GestureDetector(
+            onTap: () => _mapCtrl.move(center, _defaultZoom),
+            child: Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withOpacity(0.15), blurRadius: 8)
+                ],
+              ),
+              child: const Icon(Icons.my_location_rounded,
+                  size: 18, color: _kPrimary),
+            ),
+          ),
+        ),
+
+        // ── "Open in Google Maps" bar ──────────────────────────────────────
+        Positioned(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: GestureDetector(
+            onTap: () async {
+              final uri = Uri.parse(widget.openUrl);
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [Colors.black.withOpacity(0.72), Colors.transparent],
+                ),
+              ),
+              child: Row(children: [
+                const Icon(Icons.location_on_rounded,
+                    color: Colors.white, size: 17),
+                const SizedBox(width: 7),
+                const Expanded(
+                  child: Text(
+                    'This is the exact location',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.open_in_new_rounded,
+                          size: 12, color: _kPrimary),
+                      SizedBox(width: 5),
+                      Text('Get directions',
                           style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(50),
-                        ),
-                        child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.open_in_new_rounded,
-                                  size: 12, color: _kPrimary),
-                              SizedBox(width: 5),
-                              Text('Open',
-                                  style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: _kPrimary)),
-                            ]),
-                      ),
-                    ]),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _kPrimary)),
+                    ],
                   ),
                 ),
               ]),
@@ -1719,70 +1792,117 @@ class _LocationSection extends StatelessWidget {
   }
 }
 
-class _MapShimmer extends StatelessWidget {
+// ─── Map pin marker ────────────────────────────────────────────────────────────
+class _MapPin extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => Shimmer.fromColors(
-        baseColor: Colors.grey[300]!,
-        highlightColor: Colors.grey[100]!,
-        child: Container(
-            height: 240, width: double.infinity, color: Colors.grey[300]),
+  Widget build(BuildContext context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _kPrimary,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3)),
+              ],
+            ),
+            child: const Icon(Icons.apartment_rounded,
+                color: Colors.white, size: 16),
+          ),
+          CustomPaint(size: const Size(10, 8), painter: _PinTailPainter()),
+        ],
       );
 }
 
-class _MapFallback extends StatelessWidget {
+class _PinTailPainter extends CustomPainter {
   @override
-  Widget build(BuildContext context) => Container(
-        height: 240,
-        width: double.infinity,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [_kPrimary.withOpacity(0.1), _kPrimary.withOpacity(0.04)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = _kPrimary;
+    final path = Path()
+      ..moveTo(size.width / 2, size.height)
+      ..lineTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_) => false;
+}
+
+// ─── Fallback when coordinates can't be parsed ────────────────────────────────
+class _MapFallbackTappable extends StatelessWidget {
+  final String openUrl;
+  const _MapFallbackTappable({required this.openUrl});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: () async {
+          final uri = Uri.parse(openUrl);
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          }
+        },
+        child: Container(
+          height: 240,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_kPrimary.withOpacity(0.1), _kPrimary.withOpacity(0.04)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
           ),
-        ),
-        child: Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: _kPrimary,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                      color: _kPrimary.withOpacity(0.4),
-                      blurRadius: 20,
-                      offset: const Offset(0, 6))
-                ],
-              ),
-              child: const Icon(Icons.location_on_rounded,
-                  color: Colors.white, size: 28),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(50),
-                boxShadow: [
-                  BoxShadow(
-                      color: Colors.black.withOpacity(0.08), blurRadius: 8)
-                ],
-              ),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.touch_app_rounded, size: 12, color: _kPrimary),
-                SizedBox(width: 5),
-                Text(
-                  'Tap to open in Google Maps',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: _kPrimary),
+          child: Center(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: _kPrimary,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                        color: _kPrimary.withOpacity(0.4),
+                        blurRadius: 20,
+                        offset: const Offset(0, 6))
+                  ],
                 ),
-              ]),
-            ),
-          ]),
+                child: const Icon(Icons.location_on_rounded,
+                    color: Colors.white, size: 28),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(50),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.black.withOpacity(0.08), blurRadius: 8)
+                  ],
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.touch_app_rounded, size: 12, color: _kPrimary),
+                  SizedBox(width: 5),
+                  Text(
+                    'Tap to open in Google Maps',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: _kPrimary),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
         ),
       );
 }
@@ -2772,70 +2892,80 @@ class _BookingSheetState extends State<_BookingSheet>
               : 'pending';
 
       // ── Step 5: Run Firestore transaction ─────────────────────────────────
-      await FirebaseFirestore.instance.runTransaction((txn) async {
-        final roomSnap = await txn.get(roomRef);
-        final capacity = (roomSnap.data()?['capacity'] ?? 1) as int;
-        final booked = (roomSnap.data()?['booked'] ?? 0) as int;
-
-        // Only check + increment slots on first payment
-        // (slots were not reserved yet — room was just held as pending)
-        if (isFirstPayment) {
+      // ── Step 5 & 6: Atomic batch — room slot + booking doc + payment record ──
+      // runTransaction can't write subcollections, so we use WriteBatch instead.
+      // A batch commits atomically: all writes succeed or all fail together.
+      //
+      // SLOT GUARD: we still need a transaction just for the slot capacity check
+      // (read-then-write must be atomic to prevent overbooking). We do that
+      // first, then commit the rest as a batch.
+      if (isFirstPayment) {
+        await FirebaseFirestore.instance.runTransaction((txn) async {
+          final roomSnap = await txn.get(roomRef);
+          final capacity = (roomSnap.data()?['capacity'] ?? 1) as int;
           final currentBooked = (roomSnap.data()?['booked'] ?? 0) as int;
           if (capacity - currentBooked < _slots) {
             throw Exception('Not enough slots left');
           }
-          txn.update(
-              roomRef, {'booked': currentBooked + _slots}); // ← plain value
-        }
-
-        // Update booking doc
-        txn.update(bookingRef, {
-          // ── Payment amounts ───────────────────────────────────────────────
-          'amount_paid': newTotalPaid,
-          'balance': newBalance,
-          'payment_status': newPaymentStatus,
-          'status': newBookingStatus,
-          'payment_reference': reference,
-
-          // ── Commission tracking ───────────────────────────────────────────
-          'commission_collected': newCommissionCollected,
-          'commission_remaining': newCommissionRemaining,
-
-          // ── Payment count ─────────────────────────────────────────────────
-          'payment_count': FieldValue.increment(1),
-
-          // ── Timestamps ────────────────────────────────────────────────────
-          'paid_at': FieldValue.serverTimestamp(),
-          if (isFinalPayment) 'fully_paid_at': FieldValue.serverTimestamp(),
+          txn.update(roomRef, {'booked': currentBooked + _slots});
         });
+      }
+
+      // Now atomically write the booking update + payment subcollection doc.
+      final batch = FirebaseFirestore.instance.batch();
+      final paymentRef = bookingRef.collection('payments').doc();
+
+      batch.update(bookingRef, {
+        // ── Payment amounts ─────────────────────────────────────────────────
+        'amount_paid': newTotalPaid,
+        'balance': newBalance,
+        'payment_status': newPaymentStatus,
+        'status': newBookingStatus,
+        'payment_reference': reference,
+
+        // ── Commission tracking ─────────────────────────────────────────────
+        'commission_collected': newCommissionCollected,
+        'commission_remaining': newCommissionRemaining,
+
+        // ── Payment count ───────────────────────────────────────────────────
+        'payment_count': FieldValue.increment(1),
+
+        // ── Timestamps ──────────────────────────────────────────────────────
+        'paid_at': FieldValue.serverTimestamp(),
+        if (isFinalPayment) 'fully_paid_at': FieldValue.serverTimestamp(),
       });
 
-      // ── Step 6: Record in payments subcollection ──────────────────────────
-      // Outside transaction — subcollection writes can't go inside runTransaction
-      await bookingRef.collection('payments').add({
-        // ── What the student paid ─────────────────────────────────────────
+      batch.set(paymentRef, {
+        // ── What the student paid ───────────────────────────────────────────
         'amount': _amountToPay,
         'method': 'momo',
         'provider': _momoProvider,
         'reference': reference,
         'status': 'paid',
+        // ── Denormalized display fields (avoids N+1 reads in admin pane) ─────
+        'name': bData['name'],
+        'email': bData['email'],
+        'hostel_id': bData['hostel_id'],
+        'hostel_name': bData['hostel_name'],
+        'room_number': bData['room_number'],
+        'landlord_id': bData['landlord_id'],
 
-        // ── Commission breakdown for this payment ─────────────────────────
+        // ── Commission breakdown for this payment ───────────────────────────
         'commission_taken': commissionThisPayment,
         'landlord_received': landlordGetsThisPayment,
         'commission_rate_used': commissionRateDecimal,
 
-        // ── Payment position ──────────────────────────────────────────────
+        // ── Payment position ────────────────────────────────────────────────
         'payment_number': paymentCount + 1,
         'is_first_payment': isFirstPayment,
         'is_final_payment': isFinalPayment,
 
-        // ── Running totals at time of this payment ────────────────────────
+        // ── Running totals at time of this payment ──────────────────────────
         'total_paid_after': newTotalPaid,
         'balance_after': newBalance,
         'commission_collected_after': newCommissionCollected,
 
-        // ── Human-readable note ───────────────────────────────────────────
+        // ── Human-readable note ─────────────────────────────────────────────
         'note': isFirstPayment && isFinalPayment
             ? 'Full payment — 100% commission taken'
             : isFirstPayment
@@ -2846,6 +2976,8 @@ class _BookingSheetState extends State<_BookingSheet>
 
         'paid_at': FieldValue.serverTimestamp(),
       });
+
+      await batch.commit();
 
       // ── Step 7: Log activity ──────────────────────────────────────────────
       await _logActivity(
@@ -2899,27 +3031,94 @@ class _BookingSheetState extends State<_BookingSheet>
       return;
     }
 
+    final bookingRef =
+        FirebaseFirestore.instance.collection('bookings').doc(_bookingId);
+    final roomRef =
+        FirebaseFirestore.instance.collection('rooms').doc(widget.room.id);
+
     try {
       final ref = _generateReference();
-      await FirebaseFirestore.instance
-          .collection('bookings')
-          .doc(_bookingId)
-          .update({
-        'payment_status': _paymentStatusLabel,
-        'status': _amountToPay >= _totalAmount ? 'confirmed' : 'pending',
+
+      // ── Pull the same commission/position fields the MoMo path uses ────────
+      final bookingSnap = await bookingRef.get();
+      final bData = bookingSnap.data() ?? {};
+      final rawRate = (bData['commission_rate'] as num?)?.toDouble() ?? 5.0;
+      final commissionRateDecimal = rawRate > 1 ? rawRate / 100 : rawRate;
+      final commissionOwed = (bData['commission_owed'] as num?)?.toDouble() ??
+          (_totalAmount * 0.05);
+      final commissionCollected =
+          (bData['commission_collected'] as num?)?.toDouble() ?? 0.0;
+      final commissionRemaining = commissionOwed - commissionCollected;
+      final paymentCount = (bData['payment_count'] as num?)?.toInt() ?? 0;
+      final amountAlreadyPaid =
+          (bData['amount_paid'] as num?)?.toDouble() ?? 0.0;
+
+      final newTotalPaid = amountAlreadyPaid + _amountToPay;
+      final isFirstPayment = paymentCount == 0;
+      final isFinalPayment = newTotalPaid >= _totalAmount;
+
+      // ── Same commission rule as the MoMo path ───────────────────────────────
+      double commissionThisPayment;
+      if (isFirstPayment && isFinalPayment) {
+        commissionThisPayment = commissionOwed;
+      } else if (isFirstPayment) {
+        commissionThisPayment = commissionOwed / 2;
+      } else if (isFinalPayment) {
+        commissionThisPayment = commissionRemaining;
+      } else {
+        commissionThisPayment = 0.0;
+      }
+
+      final landlordGetsThisPayment = _amountToPay - commissionThisPayment;
+      final newCommissionCollected =
+          commissionCollected + commissionThisPayment;
+      final newCommissionRemaining = commissionOwed - newCommissionCollected;
+      final newBalance = (_totalAmount - newTotalPaid).clamp(0.0, _totalAmount);
+
+      // ── Reserve the room slot on first payment, same as MoMo path ──────────
+      if (isFirstPayment) {
+        await FirebaseFirestore.instance.runTransaction((txn) async {
+          final roomSnap = await txn.get(roomRef);
+          final capacity = (roomSnap.data()?['capacity'] ?? 1) as int;
+          final currentBooked = (roomSnap.data()?['booked'] ?? 0) as int;
+          if (capacity - currentBooked < _slots) {
+            throw Exception('Not enough slots left');
+          }
+          txn.update(roomRef, {'booked': currentBooked + _slots});
+        });
+      }
+
+      final landlordId = (await FirebaseFirestore.instance
+              .collection('hostels')
+              .doc(widget.hostel.id)
+              .get())
+          .data()?['landlord_id'];
+
+      final newPaymentStatus = isFinalPayment ? 'fully_paid' : 'deposit_paid';
+      final newBookingStatus =
+          (_depositAmount > 0 && newTotalPaid >= _depositAmount) ||
+                  isFinalPayment
+              ? 'confirmed'
+              : 'pending';
+
+      final batch = FirebaseFirestore.instance.batch();
+      final paymentRef = bookingRef.collection('payments').doc();
+
+      batch.update(bookingRef, {
+        'amount_paid': newTotalPaid,
+        'balance': newBalance,
+        'payment_status': newPaymentStatus,
+        'status': newBookingStatus,
         'payment_method': 'Manual',
-        'amount_paid': _amountToPay,
-        'balance': (_totalAmount - _amountToPay).clamp(0, _totalAmount),
         'payment_reference': ref,
+        'commission_collected': newCommissionCollected,
+        'commission_remaining': newCommissionRemaining,
+        'payment_count': FieldValue.increment(1),
         'paid_at': FieldValue.serverTimestamp(),
+        if (isFinalPayment) 'fully_paid_at': FieldValue.serverTimestamp(),
       });
 
-      // Record in payments subcollection
-      await FirebaseFirestore.instance
-          .collection('bookings')
-          .doc(_bookingId!)
-          .collection('payments')
-          .add({
+      batch.set(paymentRef, {
         'amount': _amountToPay,
         'method': 'manual',
         'reference': ref,
@@ -2929,14 +3128,41 @@ class _BookingSheetState extends State<_BookingSheet>
             : _payMode == 1
                 ? 'Partial payment (manual)'
                 : 'Full payment (manual)',
+        // ── Denormalized display fields ─────────────────────────────────────
+        'name': _name.text.trim(),
+        'email': _email.text.trim(),
+        'hostel_id': widget.hostel.id,
+        'hostel_name': widget.hostel.hostelName,
+        'room_number': widget.room.roomNumber,
+        'landlord_id': landlordId,
+        // ── Commission breakdown, same shape as the MoMo path ───────────────
+        'commission_taken': commissionThisPayment,
+        'landlord_received': landlordGetsThisPayment,
+        'commission_rate_used': commissionRateDecimal,
+        'payment_number': paymentCount + 1,
+        'is_first_payment': isFirstPayment,
+        'is_final_payment': isFinalPayment,
+        'total_paid_after': newTotalPaid,
+        'balance_after': newBalance,
+        'commission_collected_after': newCommissionCollected,
         'paid_at': FieldValue.serverTimestamp(),
       });
 
+      await batch.commit();
+
       await _logActivity(
-        action: 'Manual Booking Payment',
+        action: isFirstPayment && isFinalPayment
+            ? 'Booking Fully Paid (Manual)'
+            : isFirstPayment
+                ? 'Booking Deposit Paid (Manual)'
+                : isFinalPayment
+                    ? 'Booking Balance Cleared (Manual)'
+                    : 'Booking Partial Payment (Manual)',
         details:
             'User ${_email.text.trim()} submitted manual payment of GHS ${_amountToPay.toStringAsFixed(2)} '
-            'for Room ${widget.room.roomNumber} at ${widget.hostel.hostelName}.',
+            '(payment #${paymentCount + 1}) for Room ${widget.room.roomNumber} at ${widget.hostel.hostelName}. '
+            'Commission taken: GHS ${commissionThisPayment.toStringAsFixed(2)}. '
+            'Landlord received: GHS ${landlordGetsThisPayment.toStringAsFixed(2)}.',
         userEmail: _email.text.trim(),
       );
 
@@ -2945,7 +3171,13 @@ class _BookingSheetState extends State<_BookingSheet>
       HapticFeedback.heavyImpact();
       widget.onSuccess(_bookingId!, _slots);
     } catch (e) {
-      _showSnack('Error recording payment: $e', isError: true);
+      if (!mounted) return;
+      _showSnack(
+        e.toString().contains('Not enough slots')
+            ? 'Sorry, those slots were just taken. Choose fewer slots or a different room.'
+            : 'Error recording payment: $e',
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }

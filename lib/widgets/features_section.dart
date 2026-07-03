@@ -54,37 +54,37 @@ class FeaturesSection extends StatelessWidget {
           ),
           const SizedBox(height: 32),
 
-          // Responsive Grid
+          // Responsive layout using Wrap — each card sizes to its own
+          // content, so there's no fixed aspect ratio to overflow.
           LayoutBuilder(
             builder: (context, constraints) {
-              int columns = constraints.maxWidth >= 1200
+              final width = constraints.maxWidth;
+              int columns = width >= 1200
                   ? 3
-                  : constraints.maxWidth >= 800
+                  : width >= 800
                       ? 2
                       : 1;
 
-              return GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: features.length,
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: columns,
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: 1.1,
-                ),
-                itemBuilder: (context, index) {
-                  final f = features[index];
-                  return _FeatureCard(
-                    icon: f['icon'] as IconData,
-                    title: f['title'] as String,
-                    desc: f['desc'] as String,
-                    textPrimary: textPrimary,
-                    textSecondary: textSecondary,
-                    surfaceColor: surfaceColor,
-                    primaryColor: primaryColor,
-                  );
-                },
+              const spacing = 16.0;
+              final cardWidth = (width - (spacing * (columns - 1))) / columns;
+
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: features
+                    .map((f) => SizedBox(
+                          width: cardWidth,
+                          child: _FeatureCard(
+                            icon: f['icon'] as IconData,
+                            title: f['title'] as String,
+                            desc: f['desc'] as String,
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            surfaceColor: surfaceColor,
+                            primaryColor: primaryColor,
+                          ),
+                        ))
+                    .toList(),
               );
             },
           ),
@@ -140,8 +140,12 @@ class _FeatureCardState extends State<_FeatureCard> {
             ),
           ],
         ),
+        // mainAxisSize.min: the card is only ever as tall as its content
+        // actually needs — there is no fixed height/aspect ratio to
+        // overflow, no matter how long the title/description get.
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             // Icon
             Container(

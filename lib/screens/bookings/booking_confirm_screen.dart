@@ -127,7 +127,8 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     if (balance <= 0 ||
         dueDateTs == null ||
         status == 'cancelled' ||
-        status == 'declined') return;
+        status == 'declined' ||
+        status == 'active') return;
 
     if (dueDateTs.toDate().isBefore(DateTime.now())) {
       await FirebaseFirestore.instance
@@ -196,14 +197,6 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     } catch (e) {
       debugPrint('⚠️ Could not mark pre-booking converted: $e');
     }
-  }
-
-  Future<void> _saveDueDate(DateTime picked) async {
-    await FirebaseFirestore.instance
-        .collection('bookings')
-        .doc(widget.bookingId)
-        .update({'balance_due_date': Timestamp.fromDate(picked)});
-    await _load();
   }
 
   Future<void> _updateReminderSettings(ReminderSettings updated) async {
@@ -308,7 +301,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     final isPaid = paymentStatus == 'paid' ||
         paymentStatus == 'fully_paid' ||
         paymentStatus == 'deposit_paid';
-    final isConfirmed = status == 'confirmed';
+    final isConfirmed = status == 'confirmed' || status == 'active';
     final name = b['name'] ?? '—';
     final email = b['email'] ?? '—';
     final phone = b['phone'] ?? '—';
@@ -427,7 +420,7 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
                   isConfirmed && isFullyPaid
                       ? 'Your room is fully secured. See you soon!'
                       : isConfirmed && isDepositPaid
-                          ? 'Balance of GHS ${balance.toStringAsFixed(2)} due on arrival.'
+                          ? 'Balance of GHS ${balance.toStringAsFixed(2)} due by the deadline below.'
                           : status == 'cancelled' || status == 'declined'
                               ? autoRevoked
                                   ? 'Balance was not paid by the due date.'
@@ -496,24 +489,6 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
             balance: balance,
             daysUntilDue: daysUntilDue,
             isOverdue: isOverdue,
-            onPickDate: () async {
-              final now = DateTime.now();
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: dueDate ?? now.add(const Duration(days: 7)),
-                firstDate: now,
-                lastDate: now.add(const Duration(days: 365)),
-                helpText: 'Set Balance Payment Deadline',
-                builder: (ctx, child) => Theme(
-                  data: Theme.of(ctx).copyWith(
-                    colorScheme: const ColorScheme.light(
-                        primary: _kPrimary, onPrimary: Colors.white),
-                  ),
-                  child: child!,
-                ),
-              );
-              if (picked != null) await _saveDueDate(picked);
-            },
           ),
           const SizedBox(height: 16),
         ],
@@ -722,14 +697,12 @@ class _DueDateCard extends StatelessWidget {
   final double balance;
   final int? daysUntilDue;
   final bool isOverdue;
-  final VoidCallback onPickDate;
 
   const _DueDateCard({
     required this.dueDate,
     required this.balance,
     required this.daysUntilDue,
     required this.isOverdue,
-    required this.onPickDate,
   });
 
   Color get _accentColor => isOverdue
@@ -793,7 +766,7 @@ class _DueDateCard extends StatelessWidget {
                       color: Colors.black45,
                       fontWeight: FontWeight.w600)),
               Text(
-                dueDate != null ? _fmt(dueDate!) : 'Tap to set a deadline',
+                dueDate != null ? _fmt(dueDate!) : 'Not set yet',
                 style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w900,
@@ -801,25 +774,7 @@ class _DueDateCard extends StatelessWidget {
               ),
             ]),
           ),
-          // Edit date button
-          GestureDetector(
-            onTap: onPickDate,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: _accentColor.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(50),
-                border: Border.all(color: _accentColor.withOpacity(0.3)),
-              ),
-              child: Text(
-                dueDate != null ? 'Change' : 'Set Date',
-                style: TextStyle(
-                    color: _accentColor,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
+          // "Change" button removed — due date is landlord/admin-controlled only
         ]),
         if (dueDate != null) ...[
           const SizedBox(height: 12),

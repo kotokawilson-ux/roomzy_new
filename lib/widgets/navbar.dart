@@ -455,7 +455,7 @@ class _NotificationPanel extends StatelessWidget {
   void _goToMessage(String messageId) {
     onClose(); // close panel first
     // Push chat screen, passing the message ID to scroll to.
-    navContext.push('/chat', extra: {'scrollToMessageId': messageId});
+    navContext.go('/chat', extra: {'scrollToMessageId': messageId});
   }
 
   @override

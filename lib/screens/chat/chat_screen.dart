@@ -604,17 +604,20 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             width: 6,
                             height: 6,
                             decoration: const BoxDecoration(
-                              color: Color(0xFF69F0AE),
-                              shape: BoxShape.circle,
-                            ),
+                                color: Color(0xFF69F0AE),
+                                shape: BoxShape.circle),
                           ),
                           const SizedBox(width: 5),
-                          Text(
-                            'Online · Usually replies in minutes',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color: Colors.white.withOpacity(0.85),
-                              fontWeight: FontWeight.w400,
+                          Expanded(
+                            child: Text(
+                              'Online · Usually replies in minutes',
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: Colors.white.withOpacity(0.85),
+                                fontWeight: FontWeight.w400,
+                              ),
                             ),
                           ),
                         ],

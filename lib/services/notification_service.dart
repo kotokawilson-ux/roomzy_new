@@ -30,20 +30,23 @@ class NotificationService {
   static GlobalKey<NavigatorState>? _navKey;
 
   static const _oneSignalAppId = 'aad5f0fb-e695-4c28-9537-d34411df4f41';
-  static const _oneSignalRestApiKey =
-      'os_v2_app_vlk7b67gsvgcrfjx2ncbdx2pifsqifs4smaez3m5ecyfq6hh3ed77uuayl7hmtifbzubyodky5wb4xrfu4scvdty3ri2tsh5zuymqcy';
+
+  // ── NOTE: REST API key removed from here entirely. It now lives only in
+  //    your backend's env vars (Vercel) and is never shipped to the client.
+  //    The app ID above is still needed locally for OneSignal.initialize()
+  //    (the native mobile SDK init call), which is not a secret.
+
+  // ── Your backend's /api/notify endpoint — update this if your domain changes.
+  static const _notifyEndpoint =
+      'https://roomzy-backend-eight.vercel.app/api/notify';
 
   String _lastSavedUid = '';
 
-  // ── Platform guard ────────────────────────────────────────────────────────
-  // OneSignal only works on Android and iOS.
-  // Web, Windows, macOS, Linux all skip every OneSignal call at runtime.
   bool get _isMobileOnly =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
-  // ── Init ──────────────────────────────────────────────────────────────────
   Future<void> init({
     required GlobalKey<NavigatorState> navKey,
     required GoRouter router,
@@ -60,7 +63,6 @@ class NotificationService {
       OneSignal.initialize(_oneSignalAppId);
       await OneSignal.Notifications.requestPermission(true);
 
-      // Show heads-up banner even when app is in foreground (like WhatsApp)
       OneSignal.Notifications.addForegroundWillDisplayListener((event) {
         event.notification.display();
       });
@@ -83,8 +85,6 @@ class NotificationService {
     }
   }
 
-  // ── Current OneSignal player/subscription ID ──────────────────────────────
-  // Returns empty string on web/desktop or if OneSignal hasn't assigned an ID.
   String get currentPlayerId {
     if (!_isMobileOnly) return '';
     try {
@@ -94,7 +94,6 @@ class NotificationService {
     }
   }
 
-  // ── Save player ID for a regular user ─────────────────────────────────────
   Future<void> saveTokenForUser(String uid) async {
     if (uid.isEmpty || !_isMobileOnly) return;
     _lastSavedUid = uid;
@@ -116,30 +115,40 @@ class NotificationService {
     }
   }
 
-  // ── Save player ID for admin ───────────────────────────────────────────────
   Future<void> saveTokenForAdmin(String adminUid) async {
     if (adminUid.isEmpty || !_isMobileOnly) return;
 
     try {
       final playerId = OneSignal.User.pushSubscription.id;
       if (playerId == null || playerId.isEmpty) return;
+
+      // Private admin doc (sensitive fields, admin-only read)
       await FirebaseFirestore.instance
           .collection('admins')
           .doc(adminUid)
           .set({'oneSignalPlayerId': playerId}, SetOptions(merge: true));
+
+      // Public token-only doc (safe for any signed-in user to read,
+      // so students can notify admin without seeing sensitive admin data)
+      await FirebaseFirestore.instance
+          .collection('admin_push_tokens')
+          .doc(adminUid)
+          .set({'oneSignalPlayerId': playerId}, SetOptions(merge: true));
+
       debugPrint('[OneSignal] Player ID saved for admin $adminUid');
     } catch (e) {
       debugPrint('[OneSignal] saveTokenForAdmin error: $e');
     }
   }
 
-  // ── Notify a student (called from admin) ──────────────────────────────────
+  // ── NOTE: no _isMobileOnly guard here — this is pure Firestore read +
+  //    HTTP POST to our own backend, no native OneSignal SDK involved,
+  //    so it works on web too.
   Future<void> notifyStudent({
     required String studentUid,
     required String title,
     required String body,
   }) async {
-    if (!_isMobileOnly) return;
     try {
       final doc = await FirebaseFirestore.instance
           .collection('users')
@@ -161,18 +170,21 @@ class NotificationService {
     }
   }
 
-  // ── Notify admin (called from student chat) ───────────────────────────────
+  // ── NOTE: reads from admin_push_tokens (not admins) — students don't
+  //    have Firestore read access to /admins since it holds sensitive
+  //    data, so the push token lives in this separate, narrow collection.
   Future<void> notifyAdmin({
     required String title,
     required String body,
     required String studentUid,
   }) async {
-    if (!_isMobileOnly) return;
     try {
-      final snap =
-          await FirebaseFirestore.instance.collection('admins').limit(1).get();
+      final snap = await FirebaseFirestore.instance
+          .collection('admin_push_tokens')
+          .limit(1)
+          .get();
       if (snap.docs.isEmpty) {
-        debugPrint('[OneSignal] No admin documents found');
+        debugPrint('[OneSignal] No admin push token found');
         return;
       }
       final playerId = snap.docs.first.data()['oneSignalPlayerId'] as String?;
@@ -191,7 +203,9 @@ class NotificationService {
     }
   }
 
-  // ── REST push via OneSignal API ────────────────────────────────────────────
+  // ── Push send — now proxied through our own backend (Vercel), which
+  //    holds the OneSignal REST API key server-side. This avoids CORS
+  //    failures on web and keeps the key out of the client bundle.
   Future<void> _sendPush({
     required List<String> playerIds,
     required String title,
@@ -200,19 +214,13 @@ class NotificationService {
   }) async {
     try {
       final response = await http.post(
-        Uri.parse('https://api.onesignal.com/notifications'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'key $_oneSignalRestApiKey',
-        },
+        Uri.parse(_notifyEndpoint),
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'app_id': _oneSignalAppId,
-          'include_player_ids': playerIds,
-          'headings': {'en': title},
-          'contents': {'en': body},
+          'playerIds': playerIds,
+          'title': title,
+          'body': body,
           'data': data,
-          'android_channel_id': 'chat_messages',
-          'priority': 10,
         }),
       );
 

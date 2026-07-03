@@ -18,6 +18,7 @@ import 'dashboard/landlord_dashboard.dart';
 import 'hostels/landlord_hostels.dart';
 import 'rooms/landlord_rooms.dart';
 import 'bookings/landlord_bookings.dart';
+import 'payments/landlord_payments.dart';
 import 'profile/landlord_profile.dart';
 
 // ─────────────────────────────────────────────────────────────
@@ -34,18 +35,23 @@ class _C {
   static const green = Color(0xFF2D6A4F);
   static const greenLight = Color(0xFFD8F3DC);
   static const greenFaint = Color(0xFFF0FAF3);
+  static const red = Color(0xFFEF4444);
 }
 
 // ─────────────────────────────────────────────────────────────
 // NAV ITEMS
 // ─────────────────────────────────────────────────────────────
-enum _Page { dashboard, hostels, rooms, bookings, profile }
+enum _Page { dashboard, hostels, rooms, bookings, payments, profile }
 
 class _NavItem {
   final _Page page;
   final IconData icon;
   final String label;
-  const _NavItem(this.page, this.icon, this.label);
+
+  /// Optional static badge count. Wire to a real stream/provider
+  /// (e.g. count of "pending" settlements) in production.
+  final int? badge;
+  const _NavItem(this.page, this.icon, this.label, {this.badge});
 }
 
 const _mainNav = [
@@ -53,6 +59,7 @@ const _mainNav = [
   _NavItem(_Page.hostels, Icons.apartment_rounded, 'My Hostels'),
   _NavItem(_Page.rooms, Icons.bed_rounded, 'Rooms'),
   _NavItem(_Page.bookings, Icons.calendar_month_rounded, 'Bookings'),
+  _NavItem(_Page.payments, Icons.payments_rounded, 'Payments'),
 ];
 
 const _bottomNav = [
@@ -89,6 +96,10 @@ class _LandlordPortalState extends State<LandlordPortal> {
   Landlord? _landlord;
   bool _landlordLoaded = false;
 
+  // TODO: wire to a real unread-notifications stream (OneSignal /
+  // Firestore) once POST /api/notify proxy is live.
+  int _unreadNotifications = 0;
+
   late final LandlordService _service;
   AuthService? _auth;
 
@@ -123,11 +134,27 @@ class _LandlordPortalState extends State<LandlordPortal> {
     if (mounted) context.go('/login');
   }
 
+  void _openNotifications() {
+    // TODO: replace with a real notifications panel/screen once
+    // the OneSignal proxy (POST /api/notify) and a Firestore
+    // notifications collection are wired up.
+    setState(() => _unreadNotifications = 0);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _C.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => const _NotificationsSheet(),
+    );
+  }
+
   String get _pageTitle => switch (_current) {
         _Page.dashboard => 'Dashboard',
         _Page.hostels => 'My Hostels',
         _Page.rooms => 'Rooms',
         _Page.bookings => 'Bookings',
+        _Page.payments => 'Payments',
         _Page.profile => 'Profile',
       };
 
@@ -146,6 +173,7 @@ class _LandlordPortalState extends State<LandlordPortal> {
       _Page.rooms => LandlordRooms(landlordId: lid, service: _service),
       _Page.bookings =>
         LandlordBookingsScreen(landlordId: lid, service: _service),
+      _Page.payments => LandlordPaymentsScreen(landlordId: lid),
       _Page.profile => LandlordProfileScreen(
           landlordId: lid,
           service: _service,
@@ -230,6 +258,8 @@ class _LandlordPortalState extends State<LandlordPortal> {
                       pageTitle: _pageTitle,
                       landlord: _landlord,
                       layout: layout,
+                      unreadNotifications: _unreadNotifications,
+                      onNotificationsTap: _openNotifications,
                       onMenuTap: layout == _Layout.mobile
                           ? () => Scaffold.of(innerContext).openDrawer()
                           : null,
@@ -501,8 +531,26 @@ class _SidebarTile extends StatelessWidget {
                   ? MainAxisAlignment.center
                   : MainAxisAlignment.start,
               children: [
-                Icon(item.icon,
-                    color: active ? Colors.white : Colors.white60, size: 18),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(item.icon,
+                        color: active ? Colors.white : Colors.white60,
+                        size: 18),
+                    if (item.badge != null && item.badge! > 0 && collapsed)
+                      Positioned(
+                        right: -4,
+                        top: -4,
+                        child: Container(
+                          padding: const EdgeInsets.all(2),
+                          decoration: const BoxDecoration(
+                              color: _C.red, shape: BoxShape.circle),
+                          constraints:
+                              const BoxConstraints(minWidth: 12, minHeight: 12),
+                        ),
+                      ),
+                  ],
+                ),
                 if (!collapsed) ...[
                   const SizedBox(width: 10),
                   Expanded(
@@ -513,7 +561,21 @@ class _SidebarTile extends StatelessWidget {
                             fontWeight:
                                 active ? FontWeight.w600 : FontWeight.w400)),
                   ),
-                  if (active)
+                  if (item.badge != null && item.badge! > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _C.red,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text('${item.badge}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700)),
+                    )
+                  else if (active)
                     Container(
                       width: 6,
                       height: 6,
@@ -606,8 +668,26 @@ class _BottomNav extends StatelessWidget {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(n.icon,
-                          color: active ? _C.green : _C.textMuted, size: 22),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Icon(n.icon,
+                              color: active ? _C.green : _C.textMuted,
+                              size: 22),
+                          if (n.badge != null && n.badge! > 0)
+                            Positioned(
+                              right: -4,
+                              top: -2,
+                              child: Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: const BoxDecoration(
+                                    color: _C.red, shape: BoxShape.circle),
+                                constraints: const BoxConstraints(
+                                    minWidth: 10, minHeight: 10),
+                              ),
+                            ),
+                        ],
+                      ),
                       const SizedBox(height: 2),
                       Text(n.label,
                           style: TextStyle(
@@ -635,12 +715,16 @@ class _TopBar extends StatelessWidget {
     required this.pageTitle,
     required this.landlord,
     required this.layout,
+    required this.unreadNotifications,
+    required this.onNotificationsTap,
     this.onMenuTap,
   });
 
   final String pageTitle;
   final Landlord? landlord;
   final _Layout layout;
+  final int unreadNotifications;
+  final VoidCallback onNotificationsTap;
   final VoidCallback? onMenuTap;
 
   @override
@@ -701,6 +785,34 @@ class _TopBar extends StatelessWidget {
             ),
           ),
 
+          // ── Notification bell ─────────────────────────────
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              IconButton(
+                onPressed: onNotificationsTap,
+                icon: const Icon(Icons.notifications_none_rounded,
+                    color: _C.textDark),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                tooltip: 'Notifications',
+              ),
+              if (unreadNotifications > 0)
+                Positioned(
+                  right: 4,
+                  top: 6,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: const BoxDecoration(
+                        color: _C.red, shape: BoxShape.circle),
+                    constraints:
+                        const BoxConstraints(minWidth: 8, minHeight: 8),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 6),
+
           // ── Name + avatar (always at far right) ──────────
           Row(
             mainAxisSize: MainAxisSize.min,
@@ -748,6 +860,42 @@ class _TopBar extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// NOTIFICATIONS SHEET (placeholder — swap for real data once
+// the OneSignal proxy + Firestore notifications collection exist)
+// ─────────────────────────────────────────────────────────────
+class _NotificationsSheet extends StatelessWidget {
+  const _NotificationsSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Notifications',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _C.textDark)),
+            const SizedBox(height: 16),
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text('No notifications yet.',
+                    style: TextStyle(color: _C.textMuted, fontSize: 13)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

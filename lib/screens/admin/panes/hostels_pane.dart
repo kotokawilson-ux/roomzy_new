@@ -1166,6 +1166,8 @@ class _HostelDialogState extends State<_HostelDialog> {
   String _durationType = 'per year';
   String _depositType = 'none';
   final _depositValue = TextEditingController();
+  final _balanceDueAmount = TextEditingController();
+  String _balanceDueUnit = 'days';
 
   bool _saving = false;
   String? _validationError;
@@ -1210,11 +1212,14 @@ class _HostelDialogState extends State<_HostelDialog> {
       final dv = (d['deposit_value'] as num?)?.toDouble() ?? 0.0;
       _depositValue.text =
           dv > 0 ? dv.toStringAsFixed(_depositType == 'percent' ? 0 : 2) : '';
-    } else {
+      final bda = (d['balance_due_amount'] as num?)?.toInt() ?? 0;
+      _balanceDueAmount.text = bda > 0 ? '$bda' : '';
+      _balanceDueUnit = (d['balance_due_unit'] as String?) ?? 'days';
       _roomsAvail.text = '0';
     }
     _name.addListener(_genCode);
     _depositValue.addListener(() => setState(() {}));
+    _balanceDueAmount.addListener(() => setState(() {}));
   }
 
   void _genCode() {
@@ -1268,6 +1273,8 @@ class _HostelDialogState extends State<_HostelDialog> {
       // ← ADD THESE:
       'deposit_type': _depositType,
       'deposit_value': double.tryParse(_depositValue.text.trim()) ?? 0.0,
+      'balance_due_amount': int.tryParse(_balanceDueAmount.text.trim()) ?? 0,
+      'balance_due_unit': _balanceDueUnit,
     };
 
     try {
@@ -1465,6 +1472,103 @@ class _HostelDialogState extends State<_HostelDialog> {
                       ),
                     ],
                     const SizedBox(height: 16),
+                    _section('Balance Payment Deadline'),
+                    Text(
+                      'How long after move-in does the student have to pay their remaining balance?',
+                      style: TextStyle(fontSize: 12, color: kTextLight),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      SizedBox(
+                        width: 90,
+                        child: AdminFormField(
+                          label: 'Amount',
+                          controller: _balanceDueAmount,
+                          keyboard: TextInputType.number,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Unit',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: kTextLight)),
+                            const SizedBox(height: 6),
+                            Row(children: [
+                              for (final unit in ['days', 'weeks', 'months'])
+                                Expanded(
+                                  child: GestureDetector(
+                                    onTap: () =>
+                                        setState(() => _balanceDueUnit = unit),
+                                    child: Container(
+                                      margin: EdgeInsets.only(
+                                          right: unit != 'months' ? 6 : 0),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 11),
+                                      decoration: BoxDecoration(
+                                        color: _balanceDueUnit == unit
+                                            ? kGreen.withOpacity(0.1)
+                                            : kSurfaceAlt,
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color: _balanceDueUnit == unit
+                                              ? kGreen
+                                              : kBorder,
+                                          width:
+                                              _balanceDueUnit == unit ? 1.5 : 1,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        unit[0].toUpperCase() +
+                                            unit.substring(1),
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: _balanceDueUnit == unit
+                                                ? kGreen
+                                                : kTextLight),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ]),
+                          ],
+                        ),
+                      ),
+                    ]),
+                    if ((int.tryParse(_balanceDueAmount.text.trim()) ?? 0) >
+                        0) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: kGreen.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: kGreen.withOpacity(0.2)),
+                        ),
+                        child: Row(children: [
+                          Icon(Icons.check_circle_outline_rounded,
+                              size: 13, color: kGreen),
+                          const SizedBox(width: 7),
+                          Expanded(
+                            child: Text(
+                              'Students get ${_balanceDueAmount.text.trim()} $_balanceDueUnit after move-in to pay the balance',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: kGreen,
+                                  fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
                     _section('Payment Details'),
                     AdminFormField(
                         label: 'Mobile Money (MoMo)', controller: _momo),
@@ -1515,6 +1619,7 @@ class _HostelDialogState extends State<_HostelDialog> {
   void dispose() {
     _name.removeListener(_genCode);
     _depositValue.dispose();
+    _balanceDueAmount.dispose();
     for (final c in [
       _name,
       _code,

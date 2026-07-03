@@ -261,7 +261,15 @@ class LandlordService {
   /// Ordered by most recent first.
   /// Live stream of all bookings across the landlord's hostels.
   /// Reactively derived from the hostels stream — never goes stale.
-  Stream<List<Booking>> streamBookings(String landlordId) async* {
+  Stream<List<Booking>> streamBookings(String landlordId) {
+    // async* generators are single-subscription streams, which throw
+    // "Stream has already been listened to" if anything ever listens
+    // twice (tab rebuilds, hot reload, etc). asBroadcastStream() makes
+    // this safe to listen to more than once.
+    return _streamBookingsImpl(landlordId).asBroadcastStream();
+  }
+
+  Stream<List<Booking>> _streamBookingsImpl(String landlordId) async* {
     final hostels = await getHostels(landlordId);
     debugPrint('🏠 hostels: ${hostels.length}');
     if (hostels.isEmpty) {

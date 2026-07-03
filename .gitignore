@@ -36,3 +36,5 @@ migrate_working_dir/
 # Symbolication / obfuscation
 app.*.symbols
 app.*.map.json
+.vercel
+.env*

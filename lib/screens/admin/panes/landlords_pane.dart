@@ -682,26 +682,43 @@ class _LandlordDialogState extends State<_LandlordDialog>
   String? _authSuccess;
   bool get _isEdit => widget.doc != null;
 // Payout fields
+  // Payout fields
   final _payoutName = TextEditingController();
   final _payoutNumber = TextEditingController();
-  String _payoutProvider = 'MTN';
+  String _payoutType = 'momo'; // 'momo' | 'bank'
+  String _payoutProvider = 'MTN'; // used when _payoutType == 'momo'
+  String _payoutBank = 'gcb'; // used when _payoutType == 'bank'
   bool _payoutSaving = false;
   bool _payoutHasAccount = false;
   String? _payoutSubaccount;
 
   static const _kBackendUrl = 'https://roomzy-backend-eight.vercel.app/api';
   static const _payoutProviders = ['MTN', 'Vodafone', 'AirtelTigo'];
+  static const _payoutBanks = {
+    'gcb': 'GCB Bank',
+    'ecobank': 'Ecobank',
+    'stanbic': 'Stanbic Bank',
+    'fidelity': 'Fidelity Bank',
+    'uba': 'UBA',
+    'zenith': 'Zenith Bank',
+    'calbank': 'CalBank',
+  };
 
-  String get _bankCode => switch (_payoutProvider) {
-        'MTN' => 'MTN',
-        'Vodafone' => 'VOD',
-        _ => 'ATL',
-      };
+  String get _resolvedBankCode => _payoutType == 'momo'
+      ? switch (_payoutProvider) {
+          'MTN' => 'mtn',
+          'Vodafone' => 'vodafone',
+          _ => 'airteltigo',
+        }
+      : _payoutBank;
+
   @override
   void initState() {
     super.initState();
-    // 3 tabs: Personal · Photo · Credentials
     _tabs = TabController(length: 4, vsync: this);
+    _name.addListener(_genCode);
+    _phone.addListener(_genCode);
+
     if (_isEdit) {
       final d = widget.doc!.data();
       _name.text = d['full_name']?.toString() ?? '';
@@ -710,24 +727,33 @@ class _LandlordDialogState extends State<_LandlordDialog>
       _address.text = d['address']?.toString() ?? '';
       _code.text = d['landlord_code']?.toString() ?? '';
       _profileImage.text = d['profile_image']?.toString() ?? '';
-    }
-    _name.addListener(_genCode);
-    _phone.addListener(_genCode);
-    _name.addListener(() => setState(() {}));
-    // Keep Credentials tab email preview in sync
-    _email.addListener(() => setState(() {}));
-    if (_isEdit) {
-      final d = widget.doc!.data();
+
+      // ── Payout fields ──────────────────────────────────────────────
       _payoutName.text = d['payout_business_name']?.toString() ?? '';
       _payoutNumber.text = d['payout_account_number']?.toString() ?? '';
       _payoutSubaccount = d['paystack_subaccount']?.toString();
       _payoutHasAccount = _payoutSubaccount?.isNotEmpty == true;
+
+      if (_payoutName.text.trim().isEmpty) {
+        _payoutName.text = _name.text.trim();
+      }
+
+      final storedType = d['payout_type']?.toString() ?? 'momo';
+      _payoutType = storedType == 'bank' ? 'bank' : 'momo';
+
       final code = d['payout_bank_code']?.toString() ?? 'MTN';
-      _payoutProvider = code == 'VOD'
-          ? 'Vodafone'
-          : code == 'ATL'
-              ? 'AirtelTigo'
-              : 'MTN';
+      if (_payoutType == 'momo') {
+        _payoutProvider = code == 'VOD'
+            ? 'Vodafone'
+            : code == 'ATL'
+                ? 'AirtelTigo'
+                : 'MTN';
+      } else {
+        _payoutBank = _payoutBanks.keys.firstWhere(
+          (k) => k == code.toLowerCase(),
+          orElse: () => 'gcb',
+        );
+      }
     }
   }
 
@@ -748,13 +774,12 @@ class _LandlordDialogState extends State<_LandlordDialog>
   Future<void> _savePayout(String landlordId) async {
     if (_payoutName.text.trim().isEmpty || _payoutNumber.text.trim().isEmpty) {
       setState(() =>
-          _validationError = 'Business name and MoMo number are required.');
+          _validationError = 'Business name and account number are required.');
       return;
     }
     setState(() => _payoutSaving = true);
     try {
-      // ── Read the landlord's commission rate ──────────────────────────────
-      double commissionRate = 5.0; // fallback
+      double commissionRate = 5.0;
       try {
         final landlordDoc = await FirebaseFirestore.instance
             .collection('landlords')
@@ -774,31 +799,41 @@ class _LandlordDialogState extends State<_LandlordDialog>
               (settingsDoc.data()?['commission_percent'] as num?)?.toDouble() ??
                   5.0;
         }
-      } catch (_) {
-        // fallback to 5 if fetch fails
-      }
+      } catch (_) {}
+
+      final endpoint = _payoutHasAccount
+          ? '$_kBackendUrl/updateSubaccountRate'
+          : '$_kBackendUrl/create-subaccount';
+
+      final body = {
+        'landlordId': landlordId,
+        'businessName': _payoutName.text.trim(),
+        'accountNumber': _payoutNumber.text.trim(),
+        'bankCode': _resolvedBankCode,
+        'payoutType': _payoutType,
+        'percentageCharge': commissionRate,
+      };
 
       final res = await http.post(
-        Uri.parse('$_kBackendUrl/create-subaccount'),
+        Uri.parse(endpoint),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'landlordId': landlordId,
-          'businessName': _payoutName.text.trim(),
-          'bankCode': _bankCode,
-          'accountNumber': _payoutNumber.text.trim(),
-          'percentageCharge': commissionRate, // ← dynamic now
-        }),
+        body: jsonEncode(body),
       );
       final data = jsonDecode(res.body);
       if (data['error'] != null) throw Exception(data['error']);
+
       if (mounted) {
         setState(() {
           _payoutHasAccount = true;
-          _payoutSubaccount = data['subaccountCode'];
+          if (data['subaccountCode'] != null) {
+            _payoutSubaccount = data['subaccountCode'];
+          }
         });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Payout account saved'),
-          backgroundColor: Colors.green,
+        final warning = data['warning'] as String?;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(warning ?? 'Payout account saved'),
+          backgroundColor: warning != null ? Colors.orange : Colors.green,
+          duration: Duration(seconds: warning != null ? 6 : 3),
         ));
       }
     } catch (e) {
@@ -1404,58 +1439,194 @@ class _LandlordDialogState extends State<_LandlordDialog>
                         const SizedBox(height: 12),
 
                         // Provider selector
-                        Text('Mobile Money Network',
+                        // Payout type toggle
+                        Text('Payout Method',
                             style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
                                 color: kTextLight)),
                         const SizedBox(height: 8),
-                        Row(
-                          children: _payoutProviders.map((p) {
-                            final selected = _payoutProvider == p;
-                            return Expanded(
-                              child: GestureDetector(
-                                onTap: () =>
-                                    setState(() => _payoutProvider = p),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 150),
-                                  margin: EdgeInsets.only(
-                                      right:
-                                          p != _payoutProviders.last ? 8 : 0),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 10),
-                                  decoration: BoxDecoration(
-                                    color: selected
-                                        ? kGreen.withOpacity(0.08)
-                                        : kSurfaceAlt,
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: selected ? kGreen : kBorder,
-                                      width: selected ? 1.5 : 1,
-                                    ),
+                        Row(children: [
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => setState(() => _payoutType = 'momo'),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                margin: const EdgeInsets.only(right: 8),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: _payoutType == 'momo'
+                                      ? kGreen.withOpacity(0.08)
+                                      : kSurfaceAlt,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: _payoutType == 'momo'
+                                        ? kGreen
+                                        : kBorder,
+                                    width: _payoutType == 'momo' ? 1.5 : 1,
                                   ),
-                                  child: Text(p,
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color:
-                                              selected ? kGreen : kTextLight)),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.phone_android_outlined,
+                                        size: 14,
+                                        color: _payoutType == 'momo'
+                                            ? kGreen
+                                            : kTextLight),
+                                    const SizedBox(width: 6),
+                                    Text('Mobile Money',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: _payoutType == 'momo'
+                                                ? kGreen
+                                                : kTextLight)),
+                                  ],
                                 ),
                               ),
-                            );
-                          }).toList(),
-                        ),
+                            ),
+                          ),
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => setState(() => _payoutType = 'bank'),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: _payoutType == 'bank'
+                                      ? kGreen.withOpacity(0.08)
+                                      : kSurfaceAlt,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: _payoutType == 'bank'
+                                        ? kGreen
+                                        : kBorder,
+                                    width: _payoutType == 'bank' ? 1.5 : 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.account_balance_outlined,
+                                        size: 14,
+                                        color: _payoutType == 'bank'
+                                            ? kGreen
+                                            : kTextLight),
+                                    const SizedBox(width: 6),
+                                    Text('Bank Transfer',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: _payoutType == 'bank'
+                                                ? kGreen
+                                                : kTextLight)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ]),
                         const SizedBox(height: 12),
 
-                        // MoMo number
-                        _FormField(
-                          label: 'Mobile Money Number',
-                          required: true,
-                          icon: Icons.phone_android_outlined,
-                          controller: _payoutNumber,
-                          keyboard: TextInputType.phone,
-                        ),
+                        if (_payoutType == 'momo') ...[
+                          Text('Mobile Money Network',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: kTextLight)),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: _payoutProviders.map((p) {
+                              final selected = _payoutProvider == p;
+                              return Expanded(
+                                child: GestureDetector(
+                                  onTap: () =>
+                                      setState(() => _payoutProvider = p),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 150),
+                                    margin: EdgeInsets.only(
+                                        right:
+                                            p != _payoutProviders.last ? 8 : 0),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
+                                    decoration: BoxDecoration(
+                                      color: selected
+                                          ? kGreen.withOpacity(0.08)
+                                          : kSurfaceAlt,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: selected ? kGreen : kBorder,
+                                        width: selected ? 1.5 : 1,
+                                      ),
+                                    ),
+                                    child: Text(p,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: selected
+                                                ? kGreen
+                                                : kTextLight)),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                          const SizedBox(height: 12),
+                          _FormField(
+                            label: 'Mobile Money Number',
+                            required: true,
+                            icon: Icons.phone_android_outlined,
+                            controller: _payoutNumber,
+                            keyboard: TextInputType.phone,
+                          ),
+                        ] else ...[
+                          Text('Bank',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: kTextLight)),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: kSurfaceAlt,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: kBorder),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _payoutBank,
+                                isExpanded: true,
+                                items: _payoutBanks.entries
+                                    .map((e) => DropdownMenuItem(
+                                          value: e.key,
+                                          child: Text(e.value,
+                                              style: const TextStyle(
+                                                  fontSize: 13,
+                                                  color: kTextDark)),
+                                        ))
+                                    .toList(),
+                                onChanged: (v) {
+                                  if (v != null) {
+                                    setState(() => _payoutBank = v);
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          _FormField(
+                            label: 'Bank Account Number',
+                            required: true,
+                            icon: Icons.account_balance_outlined,
+                            controller: _payoutNumber,
+                            keyboard: TextInputType.number,
+                          ),
+                        ],
                         const SizedBox(height: 16),
 
                         // Save button — only shown when editing (landlord doc exists)
@@ -1883,6 +2054,8 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
   String _durationType = 'per year';
   String _depositType = 'none'; // 'none' | 'percent' | 'fixed'
   late final TextEditingController _depositValue;
+  late final TextEditingController _balanceDueAmount;
+  String _balanceDueUnit = 'days';
   bool _saving = false;
   String? _validationError;
 
@@ -1924,6 +2097,10 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
       text: dv > 0 ? dv.toStringAsFixed(_depositType == 'percent' ? 0 : 2) : '',
     );
     _depositValue.addListener(() => setState(() {}));
+    final bda = (d['balance_due_amount'] as num?)?.toInt() ?? 0;
+    _balanceDueAmount = TextEditingController(text: bda > 0 ? '$bda' : '');
+    _balanceDueUnit = (d['balance_due_unit'] as String?) ?? 'days';
+    _balanceDueAmount.addListener(() => setState(() {}));
   }
 
   Future<void> _save() async {
@@ -1951,6 +2128,8 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
         'duration_type': _durationType,
         'deposit_type': _depositType,
         'deposit_value': parsedDeposit,
+        'balance_due_amount': int.tryParse(_balanceDueAmount.text.trim()) ?? 0,
+        'balance_due_unit': _balanceDueUnit,
         'price_range': _priceRange.text.trim(),
         'rooms_available': int.tryParse(_roomsAvail.text.trim()) ?? 0,
         'payment_momo': _momo.text.trim(),
@@ -2161,6 +2340,113 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
                             rawValue: _depositValue.text,
                           ),
                         ],
+                        const SizedBox(height: 20),
+                        _SectionLabel(
+                            icon: Icons.event_rounded,
+                            label: 'Balance payment deadline'),
+                        Text(
+                          'How long after move-in does the student have to pay their remaining balance?',
+                          style: TextStyle(fontSize: 11, color: kTextLight),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(children: [
+                          SizedBox(
+                            width: 90,
+                            child: _FormField(
+                              label: 'Amount',
+                              controller: _balanceDueAmount,
+                              icon: Icons.numbers_rounded,
+                              keyboard: TextInputType.number,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Unit',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: kTextLight)),
+                                const SizedBox(height: 5),
+                                Row(children: [
+                                  for (final unit in [
+                                    'days',
+                                    'weeks',
+                                    'months'
+                                  ])
+                                    Expanded(
+                                      child: GestureDetector(
+                                        onTap: () => setState(
+                                            () => _balanceDueUnit = unit),
+                                        child: Container(
+                                          margin: EdgeInsets.only(
+                                              right: unit != 'months' ? 6 : 0),
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 12),
+                                          decoration: BoxDecoration(
+                                            color: _balanceDueUnit == unit
+                                                ? kGreen.withOpacity(0.1)
+                                                : kSurfaceAlt,
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                            border: Border.all(
+                                              color: _balanceDueUnit == unit
+                                                  ? kGreen
+                                                  : kBorder,
+                                              width: _balanceDueUnit == unit
+                                                  ? 1.5
+                                                  : 1,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            unit[0].toUpperCase() +
+                                                unit.substring(1),
+                                            textAlign: TextAlign.center,
+                                            style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                                color: _balanceDueUnit == unit
+                                                    ? kGreen
+                                                    : kTextLight),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ]),
+                              ],
+                            ),
+                          ),
+                        ]),
+                        if ((int.tryParse(_balanceDueAmount.text.trim()) ?? 0) >
+                            0) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: kGreen.withOpacity(0.06),
+                              borderRadius: BorderRadius.circular(8),
+                              border:
+                                  Border.all(color: kGreen.withOpacity(0.2)),
+                            ),
+                            child: Row(children: [
+                              Icon(Icons.check_circle_outline_rounded,
+                                  size: 13, color: kGreen),
+                              const SizedBox(width: 7),
+                              Expanded(
+                                child: Text(
+                                  'Students get ${_balanceDueAmount.text.trim()} $_balanceDueUnit after move-in to pay the balance',
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: kGreen,
+                                      fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                            ]),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2257,6 +2543,7 @@ class _HostelEditDialogState extends State<_HostelEditDialog>
   void dispose() {
     _tabs.dispose();
     _depositValue.dispose();
+    _balanceDueAmount.dispose();
     for (final c in [
       _name,
       _code,

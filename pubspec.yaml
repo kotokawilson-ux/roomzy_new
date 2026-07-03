@@ -46,6 +46,10 @@ dependencies:
   firebase_auth: ^5.3.0
   firebase_storage: ^12.3.0
 
+  # Maps
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+
   # Push notifications — OneSignal (replaces firebase_messaging + flutter_local_notifications)
   onesignal_flutter: ^5.2.5
 

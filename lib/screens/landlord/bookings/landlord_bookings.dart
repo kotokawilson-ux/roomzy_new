@@ -60,6 +60,18 @@ Future<void> _incrementRoomSlots(String roomId, int slots) async {
   });
 }
 
+// ── Slot guard ────────────────────────────────────────────────────────────────
+// A slot is held whenever the student has made at least one payment,
+// regardless of what the landlord/admin has set the booking status to.
+bool _slotIsHeld(Map<String, dynamic> data) {
+  final ps = (data['payment_status'] ?? '') as String;
+  final st = (data['status'] ?? '') as String;
+  return ps == 'deposit_paid' ||
+      ps == 'fully_paid' ||
+      st == 'active' ||
+      st == 'confirmed';
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
@@ -89,6 +101,8 @@ class _LandlordBookingsScreenState extends State<LandlordBookingsScreen>
 
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeAnim;
+  late final TabController _tabCtrl;
+  late final Stream<List<Booking>> _bookingsStream;
 
   @override
   void initState() {
@@ -97,7 +111,8 @@ class _LandlordBookingsScreenState extends State<LandlordBookingsScreen>
         vsync: this, duration: const Duration(milliseconds: 420));
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _fadeCtrl.forward();
-
+    _tabCtrl = TabController(length: 2, vsync: this);
+    _bookingsStream = widget.service.streamBookings(widget.landlordId);
     debugPrint('🔑 landlordId: "${widget.landlordId}"');
     widget.service.getHostels(widget.landlordId).then((hostels) {
       debugPrint('🏠 Hostels found: ${hostels.length}');
@@ -118,6 +133,7 @@ class _LandlordBookingsScreenState extends State<LandlordBookingsScreen>
   @override
   void dispose() {
     _fadeCtrl.dispose();
+    _tabCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -168,8 +184,218 @@ class _LandlordBookingsScreenState extends State<LandlordBookingsScreen>
       backgroundColor: _C.pageBg,
       body: FadeTransition(
         opacity: _fadeAnim,
-        child: StreamBuilder<List<Booking>>(
-          stream: widget.service.streamBookings(widget.landlordId),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Pill tab bar ─────────────────────────────────────────────
+            Container(
+              color: _C.surface,
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+              child: Container(
+                height: 40,
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: _C.pageBg,
+                  borderRadius: BorderRadius.circular(50),
+                  border: Border.all(color: _C.border),
+                ),
+                child: TabBar(
+                  controller: _tabCtrl,
+                  indicator: BoxDecoration(
+                    gradient: const LinearGradient(
+                        colors: [Color(0xFF1B4332), _C.green]),
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  dividerColor: Colors.transparent,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: _C.textMid,
+                  labelStyle: const TextStyle(
+                      fontWeight: FontWeight.w700, fontSize: 13),
+                  unselectedLabelStyle: const TextStyle(
+                      fontWeight: FontWeight.w500, fontSize: 13),
+                  tabs: const [
+                    Tab(text: 'Bookings'),
+                    Tab(text: 'Pre-Bookings'),
+                  ],
+                ),
+              ),
+            ),
+
+            // ── Tab views ────────────────────────────────────────────────
+            Expanded(
+              child: TabBarView(
+                controller: _tabCtrl,
+                children: [
+                  // ── Tab 1: existing bookings ─────────────────────────
+                  _KeepAliveWrapper(
+                    child: StreamBuilder<List<Booking>>(
+                      stream: _bookingsStream,
+                      builder: (ctx, snap) {
+                        if (snap.connectionState == ConnectionState.waiting) {
+                          return const Center(
+                              child:
+                                  CircularProgressIndicator(color: _C.green));
+                        }
+                        if (snap.hasError) {
+                          return _ErrorBox(message: snap.error.toString());
+                        }
+
+                        final allBookings = snap.data ?? [];
+                        final filtered = _applyFilters(allBookings);
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _TopBar(
+                              allBookings: allBookings,
+                              searchCtrl: _searchCtrl,
+                              statusFilter: _statusFilter,
+                              sortField: _sortField,
+                              sortAsc: _sortAsc,
+                              onSearchChanged: (v) =>
+                                  setState(() => _searchQuery = v),
+                              onFilterChanged: (v) =>
+                                  setState(() => _statusFilter = v),
+                              onSortChanged: (f, a) => setState(() {
+                                _sortField = f;
+                                _sortAsc = a;
+                              }),
+                            ),
+                            Expanded(
+                              child: filtered.isEmpty
+                                  ? _EmptyBox(
+                                      isFiltered: _searchQuery.isNotEmpty ||
+                                          _statusFilter != 'all')
+                                  : _BookingsList(bookings: filtered),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  // ── Tab 2: pre-bookings ───────────────────────────────
+                  _KeepAliveWrapper(
+                    child:
+                        _LandlordPreBookingsTab(landlordId: widget.landlordId),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PRE-BOOKINGS TAB — landlord view, filtered to this landlord's hostels
+// ══════════════════════════════════════════════════════════════════════════════
+class _LandlordPreBookingsTab extends StatefulWidget {
+  const _LandlordPreBookingsTab({required this.landlordId});
+  final String landlordId;
+
+  @override
+  State<_LandlordPreBookingsTab> createState() =>
+      _LandlordPreBookingsTabState();
+}
+
+class _LandlordPreBookingsTabState extends State<_LandlordPreBookingsTab> {
+  String _statusFilter = 'all';
+  final _searchCtrl = TextEditingController();
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl
+        .addListener(() => setState(() => _searchQuery = _searchCtrl.text));
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [
+      // Search + filters
+      Container(
+        color: _C.surface,
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: 260,
+              height: 40,
+              child: TextField(
+                controller: _searchCtrl,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Search hostel, room, student…',
+                  hintStyle: const TextStyle(fontSize: 13, color: _C.textMuted),
+                  prefixIcon: const Icon(Icons.search_rounded,
+                      size: 18, color: _C.textMuted),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? GestureDetector(
+                          onTap: () => _searchCtrl.clear(),
+                          child: const Icon(Icons.close_rounded,
+                              size: 16, color: _C.textMuted))
+                      : null,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                  filled: true,
+                  fillColor: _C.pageBg,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _C.border)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _C.border)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide:
+                          const BorderSide(color: _C.green, width: 1.5)),
+                ),
+              ),
+            ),
+            for (final entry in {
+              'all': 'All',
+              'active': 'Active',
+              'converted': 'Converted',
+              'expired': 'Expired',
+              'lost': 'Lost',
+            }.entries)
+              _FilterChip(
+                label: entry.value,
+                selected: _statusFilter == entry.key,
+                color: _statusChipColor(entry.key),
+                onTap: () => setState(() => _statusFilter = entry.key),
+              ),
+          ],
+        ),
+      ),
+
+      // Live stream — filtered to this landlord's hostels only
+      Expanded(
+        child: StreamBuilder<QuerySnapshot>(
+          stream: _statusFilter == 'all'
+              ? _db
+                  .collection('pre_bookings')
+                  .where('landlord_id', isEqualTo: widget.landlordId)
+                  .orderBy('created_at', descending: true)
+                  .snapshots()
+              : _db
+                  .collection('pre_bookings')
+                  .where('landlord_id', isEqualTo: widget.landlordId)
+                  .where('status', isEqualTo: _statusFilter)
+                  .orderBy('created_at', descending: true)
+                  .snapshots(),
           builder: (ctx, snap) {
             if (snap.connectionState == ConnectionState.waiting) {
               return const Center(
@@ -179,41 +405,232 @@ class _LandlordBookingsScreenState extends State<LandlordBookingsScreen>
               return _ErrorBox(message: snap.error.toString());
             }
 
-            final allBookings = snap.data ?? [];
-            final filtered = _applyFilters(allBookings);
+            var docs = snap.data?.docs ?? [];
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            if (_searchQuery.trim().isNotEmpty) {
+              final q = _searchQuery.toLowerCase();
+              docs = docs.where((d) {
+                final data = d.data() as Map<String, dynamic>;
+                return (data['hostel_name'] ?? '')
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    (data['room_number'] ?? '')
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    (data['student_name'] ?? '')
+                        .toString()
+                        .toLowerCase()
+                        .contains(q) ||
+                    (data['email'] ?? '').toString().toLowerCase().contains(q);
+              }).toList();
+            }
+
+            final allDocs = snap.data?.docs ?? [];
+            final activeCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'active')
+                .length;
+            final convertedCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'converted')
+                .length;
+            final expiredCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'expired')
+                .length;
+            final lostCount = allDocs
+                .where((d) => (d.data() as Map)['status'] == 'lost')
+                .length;
+
+            if (docs.isEmpty) {
+              return _EmptyBox(
+                  isFiltered:
+                      _searchQuery.isNotEmpty || _statusFilter != 'all');
+            }
+
+            return ListView(
+              padding: const EdgeInsets.all(16),
               children: [
-                _TopBar(
-                  allBookings: allBookings,
-                  searchCtrl: _searchCtrl,
-                  statusFilter: _statusFilter,
-                  sortField: _sortField,
-                  sortAsc: _sortAsc,
-                  onSearchChanged: (v) => setState(() => _searchQuery = v),
-                  onFilterChanged: (v) => setState(() => _statusFilter = v),
-                  onSortChanged: (f, a) => setState(() {
-                    _sortField = f;
-                    _sortAsc = a;
-                  }),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    _StatChip(
+                        label: 'Active',
+                        value: '$activeCount',
+                        icon: Icons.bookmark_rounded,
+                        color: _C.green,
+                        bg: _C.greenLight),
+                    const SizedBox(width: 10),
+                    _StatChip(
+                        label: 'Converted',
+                        value: '$convertedCount',
+                        icon: Icons.check_circle_rounded,
+                        color: _C.green,
+                        bg: _C.greenLight),
+                    const SizedBox(width: 10),
+                    _StatChip(
+                        label: 'Expired',
+                        value: '$expiredCount',
+                        icon: Icons.timer_off_rounded,
+                        color: _C.amber,
+                        bg: _C.amberLight),
+                    const SizedBox(width: 10),
+                    _StatChip(
+                        label: 'Lost',
+                        value: '$lostCount',
+                        icon: Icons.cancel_rounded,
+                        color: _C.red,
+                        bg: _C.redLight),
+                  ]),
                 ),
-                Expanded(
-                  child: filtered.isEmpty
-                      ? _EmptyBox(
-                          isFiltered:
-                              _searchQuery.isNotEmpty || _statusFilter != 'all')
-                      : _BookingsList(bookings: filtered),
-                ),
+                const SizedBox(height: 16),
+                ...docs.map((doc) {
+                  final d = doc.data() as Map<String, dynamic>;
+                  final status = d['status'] as String? ?? 'active';
+                  final expiresTs = d['expires_at'] as Timestamp?;
+                  final createdTs = d['created_at'] as Timestamp?;
+                  final daysLeft = expiresTs != null
+                      ? expiresTs.toDate().difference(DateTime.now()).inDays
+                      : null;
+                  final isUrgent =
+                      daysLeft != null && daysLeft <= 1 && status == 'active';
+
+                  final accentColor = switch (status) {
+                    'converted' => _C.green,
+                    'expired' || 'lost' => _C.textMuted,
+                    _ => isUrgent ? _C.amber : _C.green,
+                  };
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: _C.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: accentColor.withOpacity(0.25)),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.04),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3)),
+                      ],
+                    ),
+                    child: Column(children: [
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                        decoration: BoxDecoration(
+                          color: accentColor.withOpacity(0.07),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(14)),
+                        ),
+                        child: Row(children: [
+                          Icon(
+                            status == 'converted'
+                                ? Icons.check_circle_rounded
+                                : status == 'active'
+                                    ? Icons.bookmark_rounded
+                                    : Icons.bookmark_remove_rounded,
+                            color: accentColor,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(d['hostel_name'] ?? '—',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                          color: _C.textDark)),
+                                  Text('Room ${d['room_number'] ?? '—'}',
+                                      style: const TextStyle(
+                                          fontSize: 12, color: _C.textMid)),
+                                ]),
+                          ),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 110),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: accentColor.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(50),
+                                border: Border.all(
+                                    color: accentColor.withOpacity(0.3)),
+                              ),
+                              child: Text(
+                                status == 'active'
+                                    ? (daysLeft != null
+                                        ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
+                                        : 'Active')
+                                    : status.toUpperCase(),
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: accentColor),
+                              ),
+                            ),
+                          )
+                        ]),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(children: [
+                          _CardRow(
+                              icon: Icons.person_rounded,
+                              label: 'Student',
+                              value: d['student_name'] ?? '—'),
+                          _CardRow(
+                              icon: Icons.email_rounded,
+                              label: 'Email',
+                              value: d['email'] ?? '—'),
+                          _CardRow(
+                              icon: Icons.phone_rounded,
+                              label: 'Phone',
+                              value: d['phone'] ?? '—'),
+                          _CardRow(
+                              icon: Icons.timer_outlined,
+                              label: 'Window',
+                              value: '${d['visit_window_days'] ?? '—'} days'),
+                          if (createdTs != null)
+                            _CardRow(
+                                icon: Icons.calendar_today_rounded,
+                                label: 'Registered',
+                                value: _fmtShort(createdTs.toDate())),
+                          if (status == 'converted' &&
+                              d['converted_booking_id'] != null)
+                            _CardRow(
+                                icon: Icons.receipt_long_rounded,
+                                label: 'Booking ID',
+                                value: (d['converted_booking_id'] as String)
+                                    .substring(0, 8)
+                                    .toUpperCase()),
+                          if (status == 'lost' && d['lost_reason'] != null)
+                            _CardRow(
+                                icon: Icons.info_outline_rounded,
+                                label: 'Reason',
+                                value: d['lost_reason']),
+                        ]),
+                      ),
+                    ]),
+                  );
+                }),
               ],
             );
           },
         ),
       ),
-    );
+    ]);
   }
-}
 
+  Color _statusChipColor(String s) => switch (s) {
+        'active' => _C.green,
+        'converted' => _C.green,
+        'expired' => _C.amber,
+        'lost' => _C.red,
+        _ => _C.textMid,
+      };
+}
 // ══════════════════════════════════════════════════════════════════════════════
 // TOP BAR
 // ══════════════════════════════════════════════════════════════════════════════
@@ -800,6 +1217,25 @@ class _BookingCardState extends State<_BookingCard>
   }
 }
 
+class _KeepAliveWrapper extends StatefulWidget {
+  const _KeepAliveWrapper({required this.child});
+  final Widget child;
+  @override
+  State<_KeepAliveWrapper> createState() => _KeepAliveWrapperState();
+}
+
+class _KeepAliveWrapperState extends State<_KeepAliveWrapper>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+}
+
 class _CardRow extends StatelessWidget {
   const _CardRow({
     required this.icon,
@@ -845,7 +1281,11 @@ class _ActionBtn extends StatelessWidget {
   Future<void> _setStatus(BuildContext ctx, String newStatus) async {
     try {
       final snap = await _db.collection('bookings').doc(booking.id).get();
-      final oldStatus = (snap.data()?['status'] ?? 'booked') as String;
+      if (!snap.exists) {
+        if (ctx.mounted) _snack(ctx, 'Booking not found', _C.red);
+        return;
+      }
+      final oldData = snap.data()!;
 
       await _db.collection('bookings').doc(booking.id).update({
         'status': newStatus,
@@ -853,10 +1293,12 @@ class _ActionBtn extends StatelessWidget {
       });
 
       if (booking.roomId.isNotEmpty) {
+        // Free the slot only if a payment already reserved it — check
+        // payment_status, not just booking status (same guard as admin).
         if ((newStatus == 'cancelled' ||
                 newStatus == 'declined' ||
                 newStatus == 'booked') &&
-            oldStatus == 'confirmed') {
+            _slotIsHeld(oldData)) {
           await _decrementRoomSlots(booking.roomId, booking.slotsBooked);
         }
         // Never increment — slots already booked when student paid
@@ -886,8 +1328,14 @@ class _ActionBtn extends StatelessWidget {
       return; // drop the ctx.mounted check — use messenger instead
 
     try {
-      if (booking.roomId.isNotEmpty && booking.isConfirmed) {
-        await _decrementRoomSlots(booking.roomId, booking.slotsBooked);
+      // Always fetch the latest booking data from Firestore —
+      // never trust the stale 'booking' object passed into this widget.
+      final liveSnap = await _db.collection('bookings').doc(booking.id).get();
+      if (liveSnap.exists) {
+        final liveData = liveSnap.data()!;
+        if (booking.roomId.isNotEmpty && _slotIsHeld(liveData)) {
+          await _decrementRoomSlots(booking.roomId, booking.slotsBooked);
+        }
       }
 
       final paymentsSnap = await _db
@@ -1047,15 +1495,36 @@ class _DetailSheetState extends State<_DetailSheet> {
     }
   }
 
+  String _fmtShort(DateTime d) => DateFormat('dd MMM yy').format(d);
+
+  String _balanceDueDisplay(Map<String, dynamic> d) {
+    final due = d['balance_due_date'];
+    final unit = d['balance_due_unit'];
+    if (due is Timestamp) {
+      if (unit == 'on_arrival')
+        return 'Due on Arrival (${_fmtDate(due.toDate())})';
+      return _fmtDate(due.toDate());
+    }
+    final moveIn = d['move_in_date'];
+    if (moveIn == null) return 'Pending — set once move-in date is confirmed';
+    return 'Not set — hostel has no balance deadline configured';
+  }
+
   Future<void> _cancel(BuildContext ctx, Booking booking) async {
     try {
       final snap = await _db.collection('bookings').doc(booking.id).get();
-      final oldStatus = (snap.data()?['status'] ?? 'booked') as String;
+      if (!snap.exists) {
+        if (ctx.mounted) Navigator.pop(ctx);
+        return;
+      }
+      final liveData = snap.data()!;
 
       await _db.collection('bookings').doc(booking.id).update(
           {'status': 'declined', 'updated_at': FieldValue.serverTimestamp()});
 
-      if (booking.roomId.isNotEmpty && oldStatus == 'confirmed') {
+      // Use _slotIsHeld so we free the slot whenever a payment has
+      // reserved it — not just when booking status was 'confirmed'.
+      if (booking.roomId.isNotEmpty && _slotIsHeld(liveData)) {
         await _decrementRoomSlots(booking.roomId, booking.slotsBooked);
       }
       if (ctx.mounted) Navigator.pop(ctx);
@@ -1074,7 +1543,7 @@ class _DetailSheetState extends State<_DetailSheet> {
       context: ctx,
       initialDate: DateTime.now(),
       firstDate: DateTime.now().subtract(const Duration(days: 30)),
-      lastDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
       helpText: 'Set Move-In Date',
       builder: (c, child) => Theme(
         data: Theme.of(c).copyWith(
@@ -1089,14 +1558,36 @@ class _DetailSheetState extends State<_DetailSheet> {
     try {
       final snap = await _db.collection('bookings').doc(b.id).get();
       final data = snap.data()!;
+
+      // Guard: never activate a declined or cancelled booking
+      final currentStatus = (data['status'] ?? '') as String;
+      if (currentStatus == 'declined' || currentStatus == 'cancelled') {
+        if (ctx.mounted) {
+          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+            content: const Text(
+                'Cannot set move-in date on a declined or cancelled booking'),
+            backgroundColor: _C.red,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            margin: const EdgeInsets.all(16),
+          ));
+        }
+        return;
+      }
+
       final durationType = data['duration_type']?.toString() ?? 'year';
       final totalAmount = (data['amount'] as num).toDouble();
 
+      // 'amount' already represents the full price for whichever period
+      // the hostel charges in — every duration type is a single lump
+      // payment due at move-in (same logic as admin's _buildSchedule).
       final label = switch (durationType) {
         'year' => 'Full Year Payment',
         'academic_year' => 'Academic Year Payment',
         'semester' => 'Semester Payment',
-        _ => 'Month 1',
+        'month' => 'Monthly Payment',
+        _ => 'Full Payment',
       };
       final schedule = [
         {
@@ -1107,14 +1598,30 @@ class _DetailSheetState extends State<_DetailSheet> {
         }
       ];
 
+      // Pull the hostel's balance-due config and auto-calculate the
+      // due date, same as the admin panel.
+      DateTime? autoDue;
+      Hostel? hostel; // ← hoisted, nullable
+      final hostelId = data['hostel_id']?.toString();
+      if (hostelId != null && hostelId.isNotEmpty) {
+        final hostelSnap = await _db.collection('hostels').doc(hostelId).get();
+        if (hostelSnap.exists) {
+          hostel = Hostel.fromJson(
+              hostelSnap.id, hostelSnap.data()!); // ← no 'final'
+          autoDue = hostel.autoDueDate(picked);
+        }
+      }
+
       await _db.collection('bookings').doc(b.id).update({
         'move_in_date': Timestamp.fromDate(picked),
         'payment_schedule': schedule,
-        'balance_due_date': schedule.first['due_date'],
+        'balance_due_date':
+            autoDue != null ? Timestamp.fromDate(autoDue) : null,
+        'balance_due_unit': hostel?.balanceDueUnit,
+        'balance_due_amount': hostel?.balanceDueAmount,
         'status': 'active',
         'move_in_set_by': 'landlord',
       });
-
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
           content: const Text('Move-in date set — payment schedule activated'),
@@ -1335,14 +1842,8 @@ class _DetailSheetState extends State<_DetailSheet> {
                             b.balance > 0
                                 ? 'GHS ${NumberFormat('#,##0.00').format(b.balance)}'
                                 : '—'),
-                        _Tile(
-                            Icons.event_rounded,
-                            'Balance Due Date',
-                            data['balance_due_date'] is Timestamp
-                                ? _fmtDate(
-                                    (data['balance_due_date'] as Timestamp)
-                                        .toDate())
-                                : 'Not set'),
+                        _Tile(Icons.event_rounded, 'Balance Due Date',
+                            _balanceDueDisplay(data)),
                         _Tile(
                             Icons.key_rounded,
                             'Move-In Date',

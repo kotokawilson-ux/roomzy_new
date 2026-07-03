@@ -20,7 +20,12 @@ class _HostelsHeroState extends State<HostelsHero> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _budgetController = TextEditingController();
   String _selectedDuration = 'Per month';
-  final List<String> _durations = ['Per month', 'Per semester', 'Per year'];
+  final List<String> _durations = [
+    'Per month',
+    'Per semester',
+    'Per year',
+    'per academic year'
+  ];
 
   void _triggerSearch() {
     final raw = _budgetController.text.replaceAll(',', '').trim();

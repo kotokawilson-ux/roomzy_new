@@ -1,0 +1,288 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function userDoc() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid))
+        : null;
+    }
+    function userRole() {
+      return isSignedIn() && userDoc() != null ? userDoc().data.role : null;
+    }
+    function isAdmin() {
+      return userRole() == 'admin';
+    }
+    function isLandlord() {
+      return userRole() == 'landlord';
+    }
+    function isAdminOrLandlord() {
+      return userRole() in ['admin', 'landlord'];
+    }
+    function isOwnerOfBooking(booking) {
+      return booking.data.user_id == request.auth.uid ||
+        booking.data.email == request.auth.token.email;
+    }
+
+    // ── Settings ──────────────────────────────────────────
+    match /settings/{id} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── Activity Log ──────────────────────────────────────
+    match /activityLog/{logId} {
+      allow read:   if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Users ─────────────────────────────────────────────
+    match /users/{uid} {
+      allow read, write: if isSignedIn() &&
+        (request.auth.uid == uid || isAdmin());
+    }
+
+    // ── Hostels ───────────────────────────────────────────
+    match /hostels/{hostelId} {
+      allow read: if true;
+      allow create, delete: if isAdminOrLandlord();
+      allow update: if isAdminOrLandlord() &&
+        (
+          !('visit_window_days' in request.resource.data) ||
+          request.resource.data.visit_window_days >= 3
+        );
+    }
+
+    // ── Rooms ─────────────────────────────────────────────
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow create, delete: if isAdminOrLandlord();
+      allow update: if isAdminOrLandlord() ||
+        (
+          isSignedIn() &&
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['booked']) &&
+          request.resource.data.booked > resource.data.booked &&
+          request.resource.data.booked <= resource.data.capacity
+        );
+    }
+
+    // ── Bookings + Payments subcollection ─────────────────
+    match /bookings/{bookingId} {
+      allow get: if isSignedIn() &&
+        (isOwnerOfBooking(resource) || isAdminOrLandlord());
+
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn();
+
+      allow update: if isAdminOrLandlord() ||
+        (
+          isSignedIn() &&
+          isOwnerOfBooking(resource) &&
+          (
+            request.resource.data.diff(resource.data).changedKeys()
+              .hasOnly(['notes', 'updated_at'])
+            ||
+            (
+              request.resource.data.diff(resource.data).changedKeys()
+                .hasOnly(['status', 'updated_at', 'cancelled_at']) &&
+              request.resource.data.status == 'cancelled' &&
+              resource.data.status != 'confirmed'
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).changedKeys()
+                .hasOnly([
+                  'amount_paid', 'balance', 'payment_status', 'status',
+                  'payment_reference', 'commission_collected',
+                  'commission_remaining', 'payment_count',
+                  'paid_at', 'fully_paid_at'
+                ]) &&
+              request.resource.data.amount_paid > resource.data.amount_paid &&
+              request.resource.data.amount_paid <= resource.data.amount
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).changedKeys()
+                .hasOnly([
+                  'amount_paid', 'balance', 'payment_status', 'status',
+                  'commission_collected', 'commission_remaining',
+                  'payment_count', 'last_paid_at', 'fully_paid_at'
+                ]) &&
+              request.resource.data.amount_paid > resource.data.amount_paid &&
+              request.resource.data.amount_paid <= resource.data.amount
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).changedKeys()
+                .hasOnly([
+                  'move_in_date',
+                  'payment_schedule',
+                  'balance_due_date',
+                  'status',
+                  'move_in_confirmed',
+                  'move_in_set_by'
+                ]) &&
+              request.resource.data.status == 'active' &&
+              resource.data.status == 'confirmed' &&
+              resource.data.move_in_date == null
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).changedKeys()
+                .hasOnly(['momo_number', 'momo_provider', 'momo_type'])
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).changedKeys()
+                .hasOnly(['status', 'cancellation_reason', 'cancelled_at', 'auto_revoked']) &&
+              request.resource.data.status == 'cancelled'
+            )
+          )
+        );
+
+      allow delete: if isAdminOrLandlord();
+
+      match /payments/{paymentId} {
+        allow read: if isSignedIn() &&
+          (isOwnerOfBooking(get(/databases/$(database)/documents/bookings/$(bookingId)))
+            || isAdminOrLandlord());
+
+        allow create: if isSignedIn();
+        allow update: if isAdminOrLandlord();
+        allow delete: if isAdminOrLandlord();
+      }
+    }
+
+    // ── Payments — collection GROUP access ─────────────────
+    // Firestore does NOT let the nested rule above (bookings/{id}/payments/{id})
+    // serve collectionGroup('payments') queries — that needs its own rule using
+    // the {path=**} wildcard. This is what the admin Payments pane's cross-
+    // booking queries (main table, per-landlord payout totals) rely on.
+    // Does not affect or loosen the nested rule above, which still governs
+    // normal per-booking get/list/create/update/delete.
+    match /{path=**}/payments/{paymentId} {
+      allow list, get: if isAdminOrLandlord();
+    }
+
+    // ── Pre-Bookings ──────────────────────────────────────
+    match /pre_bookings/{preBookingId} {
+      allow create: if isSignedIn() &&
+        request.resource.data.user_id == request.auth.uid &&
+        request.resource.data.status == 'active' &&
+        request.resource.data.visit_window_days >= 3;
+
+      allow get: if isSignedIn() &&
+        (resource.data.user_id == request.auth.uid || isAdminOrLandlord());
+
+      allow list: if isSignedIn();
+
+      allow update: if isSignedIn() &&
+        (
+          (
+            resource.data.user_id == request.auth.uid &&
+            resource.data.status == 'active' &&
+            request.resource.data.diff(resource.data).changedKeys()
+              .hasOnly(['status', 'cancelled_at']) &&
+            request.resource.data.status == 'cancelled'
+          )
+          ||
+          (
+            resource.data.user_id == request.auth.uid &&
+            resource.data.status == 'active' &&
+            request.resource.data.diff(resource.data).changedKeys()
+              .hasOnly(['status', 'converted_booking_id', 'conversion_method']) &&
+            request.resource.data.status == 'converted' &&
+            request.resource.data.conversion_method == 'app_payment'
+          )
+          ||
+          (
+            isAdminOrLandlord() &&
+            request.resource.data.diff(resource.data).changedKeys()
+              .hasOnly(['status', 'lost_reason', 'converted_booking_id', 'conversion_method', 'expired_at']) &&
+            request.resource.data.status in ['lost', 'converted', 'expired']
+          )
+        );
+
+      allow delete: if isAdminOrLandlord();
+    }
+
+    // ── Facilities ────────────────────────────────────────
+    match /facilities/{id} {
+      allow read:  if true;
+      allow write: if isAdminOrLandlord();
+    }
+
+    // ── Schools ───────────────────────────────────────────
+    match /schools/{id} {
+      allow read:  if true;
+      allow write: if isAdmin();
+    }
+
+    // ── Landlords ─────────────────────────────────────────
+    match /landlords/{id} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── Payouts (NEW — landlord payout records) ────────────
+    // Only ever written by the backend Admin SDK (initiatePayout.js,
+    // finalizeTransfer.js), which bypasses rules entirely — so no client
+    // write path is granted here. Read access mirrors the existing
+    // landlords/payments pattern (any admin or landlord can list/get).
+    match /payouts/{payoutId} {
+      allow list, get: if isAdminOrLandlord();
+      allow write: if false;
+    }
+
+    // ── Admin Push Tokens (public token only, no sensitive data) ──
+    match /admin_push_tokens/{adminId} {
+      allow read:  if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == adminId;
+    }
+
+    // ── Messages ──────────────────────────────────────────
+    match /messages/{msgId} {
+      allow read: if isSignedIn() &&
+        (
+          resource.data.senderId == request.auth.uid ||
+          resource.data.recipientId == request.auth.uid ||
+          (resource.data.participants is list &&
+            request.auth.uid in resource.data.participants) ||
+          isAdmin()
+        );
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() &&
+        (
+          resource.data.senderId == request.auth.uid ||
+          resource.data.recipientId == request.auth.uid ||
+          (resource.data.participants is list &&
+            request.auth.uid in resource.data.participants) ||
+          isAdmin()
+        );
+      allow delete: if isAdmin();
+    }
+
+    // ── Chats ─────────────────────────────────────────────
+    match /chats/{uid} {
+      allow get:   if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow list:  if isSignedIn();
+      allow write: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+
+      match /messages/{messageId} {
+        allow read:   if isSignedIn() && (request.auth.uid == uid || isAdmin());
+        allow create: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+        allow update: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+        allow delete: if isAdmin();
+      }
+
+      match /{document=**} {
+        allow read, write: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      }
+    }
+  }
+}

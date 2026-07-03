@@ -1830,177 +1830,184 @@ class _AdminChatBubbleState extends State<_AdminChatBubble>
         position: _slide,
         child: Padding(
           padding: const EdgeInsets.only(bottom: 6),
-          child: Row(
-            mainAxisAlignment:
-                widget.isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (!widget.isMe) ...[
-                CircleAvatar(
-                  radius: 14,
-                  backgroundColor: _kGreenPale,
-                  child: Text(
-                    _initials(widget.studentName),
-                    style: const TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w600,
-                        color: _kGreen),
-                  ),
-                ),
-                const SizedBox(width: 7),
-              ],
-              Column(
-                crossAxisAlignment: widget.isMe
-                    ? CrossAxisAlignment.end
-                    : CrossAxisAlignment.start,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final maxBubbleWidth = constraints.maxWidth * 0.72;
+              return Row(
+                mainAxisAlignment: widget.isMe
+                    ? MainAxisAlignment.end
+                    : MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (widget.replyTo != null)
-                    Container(
-                      constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.55),
-                      margin: const EdgeInsets.only(bottom: 4),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: widget.isMe
-                            ? Colors.black.withOpacity(0.15)
-                            : const Color(0xFFF5F5F5),
-                        borderRadius: BorderRadius.circular(10),
-                        border: const Border(
-                            left: BorderSide(color: _kGreen, width: 3)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.replyTo!['senderName'],
-                            style: TextStyle(
-                              color: widget.isMe ? Colors.white70 : _kGreen,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          Text(
-                            widget.replyTo!['text'],
-                            style: TextStyle(
-                              color: widget.isMe ? Colors.white60 : Colors.grey,
-                              fontSize: 12,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
+                  if (!widget.isMe) ...[
+                    CircleAvatar(
+                      radius: 14,
+                      backgroundColor: _kGreenPale,
+                      child: Text(
+                        _initials(widget.studentName),
+                        style: const TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                            color: _kGreen),
                       ),
                     ),
-                  GestureDetector(
-                    onLongPress: () => _longPress(context),
-                    child: Container(
-                      constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.62),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: widget.isMe ? null : Colors.white,
-                        gradient: widget.isMe
-                            ? const LinearGradient(
-                                colors: [_kGreen, _kGreenMid],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              )
-                            : null,
-                        borderRadius: BorderRadius.only(
-                          topLeft: const Radius.circular(18),
-                          topRight: const Radius.circular(18),
-                          bottomLeft: Radius.circular(widget.isMe ? 18 : 4),
-                          bottomRight: Radius.circular(widget.isMe ? 4 : 18),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: (widget.isMe ? _kGreen : Colors.black)
-                                .withOpacity(0.1),
-                            blurRadius: 6,
-                            offset: const Offset(0, 2),
+                    const SizedBox(width: 7),
+                  ],
+                  Column(
+                    crossAxisAlignment: widget.isMe
+                        ? CrossAxisAlignment.end
+                        : CrossAxisAlignment.start,
+                    children: [
+                      if (widget.replyTo != null)
+                        Container(
+                          constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+                          margin: const EdgeInsets.only(bottom: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: widget.isMe
+                                ? Colors.black.withOpacity(0.15)
+                                : const Color(0xFFF5F5F5),
+                            borderRadius: BorderRadius.circular(10),
+                            border: const Border(
+                                left: BorderSide(color: _kGreen, width: 3)),
                           ),
-                        ],
-                        border: widget.isMe
-                            ? null
-                            : Border.all(color: const Color(0xFFEEEEEE)),
-                      ),
-                      child: _highlighted(widget.text, widget.searchQuery),
-                    ),
-                  ),
-                  if (reactionCounts.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Wrap(
-                        spacing: 4,
-                        children: reactionCounts.entries.map((e) {
-                          final mine = myReaction == e.key;
-                          return GestureDetector(
-                            onTap: () => widget.onReact(e.key),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 180),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 7, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: mine ? _kGreenPale : Colors.white,
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: mine
-                                      ? _kGreenBorder
-                                      : Colors.grey.shade200,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.replyTo!['senderName'],
+                                style: TextStyle(
+                                  color: widget.isMe ? Colors.white70 : _kGreen,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(e.key,
-                                      style: const TextStyle(fontSize: 13)),
-                                  const SizedBox(width: 3),
-                                  Text('${e.value}',
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          color: mine ? _kGreen : Colors.grey,
-                                          fontWeight: FontWeight.w600)),
-                                ],
+                              Text(
+                                widget.replyTo!['text'],
+                                style: TextStyle(
+                                  color: widget.isMe
+                                      ? Colors.white60
+                                      : Colors.grey,
+                                  fontSize: 12,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
+                            ],
+                          ),
+                        ),
+                      GestureDetector(
+                        onLongPress: () => _longPress(context),
+                        child: Container(
+                          constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: widget.isMe ? null : Colors.white,
+                            gradient: widget.isMe
+                                ? const LinearGradient(
+                                    colors: [_kGreen, _kGreenMid],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  )
+                                : null,
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(18),
+                              topRight: const Radius.circular(18),
+                              bottomLeft: Radius.circular(widget.isMe ? 18 : 4),
+                              bottomRight:
+                                  Radius.circular(widget.isMe ? 4 : 18),
                             ),
-                          );
-                        }).toList(),
+                            boxShadow: [
+                              BoxShadow(
+                                color: (widget.isMe ? _kGreen : Colors.black)
+                                    .withOpacity(0.1),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                            border: widget.isMe
+                                ? null
+                                : Border.all(color: const Color(0xFFEEEEEE)),
+                          ),
+                          child: _highlighted(widget.text, widget.searchQuery),
+                        ),
                       ),
-                    ),
-                  const SizedBox(height: 3),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(widget.time,
-                          style: const TextStyle(
-                              fontSize: 10.5, color: Color(0xFFAAAAAA))),
-                      if (widget.isMe) ...[
-                        const SizedBox(width: 4),
-                        _statusIconWidget(),
-                      ],
+                      if (reactionCounts.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Wrap(
+                            spacing: 4,
+                            children: reactionCounts.entries.map((e) {
+                              final mine = myReaction == e.key;
+                              return GestureDetector(
+                                onTap: () => widget.onReact(e.key),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 180),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 7, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: mine ? _kGreenPale : Colors.white,
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: mine
+                                          ? _kGreenBorder
+                                          : Colors.grey.shade200,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(e.key,
+                                          style: const TextStyle(fontSize: 13)),
+                                      const SizedBox(width: 3),
+                                      Text('${e.value}',
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color:
+                                                  mine ? _kGreen : Colors.grey,
+                                              fontWeight: FontWeight.w600)),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      const SizedBox(height: 3),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(widget.time,
+                              style: const TextStyle(
+                                  fontSize: 10.5, color: Color(0xFFAAAAAA))),
+                          if (widget.isMe) ...[
+                            const SizedBox(width: 4),
+                            _statusIconWidget(),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
+                  if (widget.isMe) ...[
+                    const SizedBox(width: 7),
+                    CircleAvatar(
+                      radius: 14,
+                      backgroundColor: _kGreenPale,
+                      child: const Icon(Icons.support_agent_rounded,
+                          color: _kGreen, size: 14),
+                    ),
+                  ],
                 ],
-              ),
-              if (widget.isMe) ...[
-                const SizedBox(width: 7),
-                CircleAvatar(
-                  radius: 14,
-                  backgroundColor: _kGreenPale,
-                  child: const Icon(Icons.support_agent_rounded,
-                      color: _kGreen, size: 14),
-                ),
-              ],
-            ],
+              );
+            },
           ),
         ),
       ),
     );
   }
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  SWIPE TO REPLY
 // ─────────────────────────────────────────────────────────────────────────────

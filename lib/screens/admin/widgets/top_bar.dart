@@ -8,7 +8,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:timeago/timeago.dart' as timeago;
-
+import '../../../services/notification_service.dart';
 import '../../../constants/admin_theme.dart';
 import '../admin_section.dart';
 
@@ -1722,6 +1722,14 @@ class _UserLiveChatWidgetState extends State<UserLiveChatWidget> {
         'read': false,
         'sessionId': _sessionId,
       });
+
+      // NEW: notify admin via push
+      await NotificationService.instance.notifyAdmin(
+        title: 'New message from $_name',
+        body: text,
+        studentUid: _uid,
+      );
+
       await Future.delayed(const Duration(milliseconds: 100));
       if (_scroll.hasClients) {
         _scroll.animateTo(

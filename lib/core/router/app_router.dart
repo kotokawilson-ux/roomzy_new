@@ -24,6 +24,7 @@ import 'app_shell.dart';
 import '../../screens/admin/chat/admin_live_chat_screen.dart';
 import '../../screens/landlord/dashboard/landlord_dashboard.dart';
 import '../../services/landlord_service.dart';
+import 'package:roomzy_find/screens/settings/settings_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  BACK HANDLER  –  unchanged
@@ -137,13 +138,13 @@ class AppRouter {
           builder: (context, state) => _wrap(const RegisterScreen()),
         ),
         GoRoute(
-          path: '/about',
-          builder: (context, state) => _wrap(const AboutScreen()),
-        ),
+            path: '/settings',
+            builder: (context, state) => const SettingsScreen()),
         GoRoute(
-          path: '/contact',
-          builder: (context, state) => _wrap(const ContactScreen()),
-        ),
+            path: '/about', builder: (context, state) => const AboutScreen()),
+        GoRoute(
+            path: '/contact',
+            builder: (context, state) => const ContactScreen()),
 
         // ── Role-specific dashboards (NO shell, NO bottom nav) ────────────
         GoRoute(
@@ -164,6 +165,7 @@ class AppRouter {
             GoRoute(
               path: '/home',
               pageBuilder: (context, state) => NoTransitionPage(
+                key: state.pageKey,
                 child: _wrapHome(const HomeScreen()),
               ),
             ),
@@ -172,6 +174,7 @@ class AppRouter {
             GoRoute(
               path: '/hostels',
               pageBuilder: (context, state) => NoTransitionPage(
+                key: state.pageKey,
                 child: _wrap(const HostelsScreen()),
               ),
               routes: [
@@ -189,6 +192,7 @@ class AppRouter {
             GoRoute(
               path: '/bookings',
               pageBuilder: (context, state) => NoTransitionPage(
+                key: state.pageKey,
                 child: _wrap(const BookingsScreen()),
               ),
               routes: [
@@ -207,6 +211,7 @@ class AppRouter {
             GoRoute(
               path: '/chat',
               pageBuilder: (context, state) => NoTransitionPage(
+                key: state.pageKey,
                 child: _wrap(const ChatScreen()),
               ),
             ),
@@ -215,6 +220,7 @@ class AppRouter {
             GoRoute(
               path: '/profile',
               pageBuilder: (context, state) => NoTransitionPage(
+                key: state.pageKey,
                 child: _wrap(const ProfileScreen()),
               ),
             ),
