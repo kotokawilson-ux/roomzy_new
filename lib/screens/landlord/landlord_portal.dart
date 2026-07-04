@@ -3,7 +3,7 @@
 // RoomzyFind — Landlord Portal Shell  (fully responsive)
 // Breakpoints:
 //   mobile  < 600 px  → bottom nav + full-screen drawer
-//   tablet  600–900   → collapsed sidebar (icons only)
+//   tablet  600–900   → collapsed sidebar (icons only), toggleable
 //   desktop > 900     → full sidebar, collapsible
 // ─────────────────────────────────────────────────────────────
 
@@ -90,8 +90,12 @@ class LandlordPortal extends StatefulWidget {
 class _LandlordPortalState extends State<LandlordPortal> {
   _Page _current = _Page.dashboard;
 
-  // On desktop: user-toggled. On tablet: forced collapsed.
-  bool _sidebarCollapsedByUser = false;
+  // User-toggled collapse state, shared by tablet + desktop.
+  // `null` means "no explicit choice yet" — falls back to a sensible
+  // per-layout default (tablet starts collapsed, desktop starts expanded).
+  bool? _collapsedOverride;
+
+  bool _defaultCollapsedFor(_Layout layout) => layout == _Layout.tablet;
 
   Landlord? _landlord;
   bool _landlordLoaded = false;
@@ -188,7 +192,11 @@ class _LandlordPortalState extends State<LandlordPortal> {
     _auth = auth;
     final mq = MediaQuery.of(context);
     final layout = _layoutOf(mq.size.width);
-    final collapsed = layout == _Layout.tablet ? true : _sidebarCollapsedByUser;
+
+    // Tablet and desktop both use the same user-toggleable collapse state
+    // now. Only the *default* (before the user has touched the toggle)
+    // differs: tablet starts icon-only, desktop starts expanded.
+    final collapsed = _collapsedOverride ?? _defaultCollapsedFor(layout);
 
     return Scaffold(
       backgroundColor: _C.pageBg,
@@ -238,13 +246,11 @@ class _LandlordPortalState extends State<LandlordPortal> {
                 landlord: _landlord,
                 onSelect: (p) => setState(() => _current = p),
                 onLogout: _logout,
-                onToggle: layout == _Layout.desktop
-                    ? () => setState(
-                          () => _sidebarCollapsedByUser =
-                              !_sidebarCollapsedByUser,
-                        )
-                    : () {}, // tablet: toggle hidden
-                showToggle: layout == _Layout.desktop,
+                // Both tablet and desktop can now toggle. Whatever the
+                // current effective state is, flip it and remember the
+                // explicit choice.
+                onToggle: () => setState(() => _collapsedOverride = !collapsed),
+                showToggle: true,
               ),
 
             // ── Main content ─────────────────────────────────

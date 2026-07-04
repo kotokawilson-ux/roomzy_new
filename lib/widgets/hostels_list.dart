@@ -73,6 +73,7 @@ class _HostelsListState extends State<HostelsList> {
   }
 
   void _startListener() {
+    _hostelsSub?.cancel();
     setState(() => _state = _LoadState.loading);
 
     _hostelsSub = FirebaseFirestore.instance

@@ -86,8 +86,14 @@ class _LoginScreenState extends State<LoginScreen>
         context.go('/admin');
       } else if (role == 'landlord') {
         context.go('/landlord');
-      } else {
+      } else if (role == 'student') {
         context.go('/home');
+      } else {
+        // Should be unreachable now that _signIn blocks bad profiles,
+        // but never silently fall through to a page.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Login failed. Please try again.')),
+        );
       }
     }
     // On failure, authService.errorMessage is set — the Consumer below rebuilds.

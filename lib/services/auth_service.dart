@@ -8,7 +8,7 @@ import 'package:firebase_core/firebase_core.dart';
 
 class AuthService extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  FirebaseFirestore _db = FirebaseFirestore.instance;
 
   UserModel? _currentUser;
   bool _isLoading = false;
@@ -43,6 +43,8 @@ class AuthService extends ChangeNotifier {
 
   // ─── Login ────────────────────────────────────────────────────
 
+  static const _validRoles = {'admin', 'landlord', 'student'};
+
   Future<bool> _signIn(String email, String password) async {
     _setLoading(true);
     _clearError();
@@ -51,10 +53,63 @@ class AuthService extends ChangeNotifier {
         email: email.trim(),
         password: password.trim(),
       );
-      await _fetchAndCacheProfile(cred.user!.uid);
-      if (_currentUser == null) {
-        debugPrint('AuthService: signed in but no Firestore profile found.');
+
+      bool profileOk;
+      try {
+        profileOk = await _fetchAndCacheProfile(cred.user!.uid);
+      } catch (e) {
+        final msg = e.toString();
+        final isCorruptedClient = msg.contains('INTERNAL ASSERTION FAILED') ||
+            msg.contains('ca9') ||
+            msg.contains('b815');
+
+        if (isCorruptedClient) {
+          // Known Firestore Web SDK bug: a listener's watch-target state
+          // gets desynced (usually from a stream being torn down while
+          // its target registration was still in flight elsewhere in the
+          // app), which corrupts the shared client for the rest of the
+          // session. Recover by tearing down and reinitializing the
+          // Firestore client, then retry the fetch once.
+          debugPrint(
+              'AuthService: detected corrupted Firestore client, resetting — $e');
+          try {
+            await _db.terminate();
+            _db = FirebaseFirestore.instance;
+            profileOk = await _fetchAndCacheProfile(cred.user!.uid);
+          } catch (e2) {
+            debugPrint('AuthService: retry after reset also failed — $e2');
+            _setError(
+                'Could not reach the server. Please fully close and reopen the app, then try again.');
+            return false;
+          }
+        } else {
+          debugPrint('AuthService: profile fetch errored during login — $e');
+          _setError(
+              'Could not reach the server. Please check your connection and try again.');
+          return false;
+        }
       }
+      // ── Safeguard: profile fetch SUCCEEDED but came back empty,
+      // has an unrecognized role, or is a landlord missing their
+      // landlordId → this is a genuinely broken/incomplete account.
+      // Block it and sign out.
+      final user = _currentUser;
+      final roleOk = profileOk &&
+          user != null &&
+          _validRoles.contains(user.role) &&
+          (user.role != 'landlord' ||
+              (user.landlordId != null && user.landlordId!.isNotEmpty));
+
+      if (!roleOk) {
+        debugPrint(
+            'AuthService: blocking login — invalid/incomplete profile for uid=${cred.user!.uid}');
+        await _auth.signOut();
+        _currentUser = null;
+        _setError(
+            'Your account isn\'t set up correctly. Please contact support.');
+        return false;
+      }
+
       return true;
     } on FirebaseAuthException catch (e) {
       _setError(_authError(e.code));
@@ -297,7 +352,7 @@ class AuthService extends ChangeNotifier {
 
   // ─── Internal ─────────────────────────────────────────────────
 
-  Future<void> _fetchAndCacheProfile(String uid) async {
+  Future<bool> _fetchAndCacheProfile(String uid) async {
     try {
       final doc = await _db.collection('users').doc(uid).get();
       if (doc.exists && doc.data() != null) {
@@ -305,11 +360,20 @@ class AuthService extends ChangeNotifier {
         debugPrint(
             'AuthService: profile loaded — uid=$uid role=${_currentUser?.role} landlordId=${_currentUser?.landlordId}');
         notifyListeners();
+        return true;
       } else {
         debugPrint('AuthService: no Firestore profile for uid: $uid');
+        _currentUser = null;
+        return false;
       }
     } catch (e) {
       debugPrint('AuthService: failed to fetch profile — $e');
+      _currentUser = null;
+      // A thrown exception means we couldn't determine the profile state
+      // at all (network/Firestore error) — this is NOT the same as "no
+      // profile exists". Rethrow so callers can tell the two apart instead
+      // of treating a connection hiccup as a bad account.
+      rethrow;
     }
   }
 

@@ -19,6 +19,8 @@ import 'panes/activity_log_pane.dart';
 import 'chat/admin_live_chat_screen.dart';
 import 'panes/revenue_pane.dart';
 import 'panes/payments_pane.dart';
+import 'panes/analytics_pane.dart';
+import 'panes/settings_pane.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN DASHBOARD SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,10 +140,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         AdminSection.users => const UsersPane(),
         AdminSection.activityLog => const ActivityLogPane(),
         AdminSection.liveChat => const AdminLiveChatScreen(),
-        AdminSection.analytics => const _PlaceholderPane(label: 'Analytics'),
+        AdminSection.analytics => const AnalyticsPane(),
         AdminSection.payments => const PaymentsPane(),
         AdminSection.revenue => const RevenuePane(),
-        AdminSection.settings => const _PlaceholderPane(label: 'Settings'),
+        AdminSection.settings => const SettingsPane(),
       };
 
   // ── Logout ────────────────────────────────────────────────────────────────

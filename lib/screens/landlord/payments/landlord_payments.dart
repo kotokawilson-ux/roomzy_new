@@ -461,8 +461,37 @@ class _LandlordPaymentsScreenState extends State<LandlordPaymentsScreen> {
 
   bool _checkingAny = false;
 
+  // Cached streams — created once (or only when their query inputs
+  // change), never inline in build(). Rebuilding a new Stream instance
+  // every build() is what caused the Firestore web internal assertion
+  // crash (ca9/b815) via StreamBuilder tearing down listeners before
+  // they finished attaching.
+  late Stream<DocumentSnapshot<Map<String, dynamic>>> _landlordStream;
+  late Stream<double> _balanceStream;
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _paymentsStream;
+  Timer? _rebuildDebounce; // ← ADD THIS LINE
+  @override
+  void initState() {
+    super.initState();
+    _landlordStream =
+        _db.collection('landlords').doc(widget.landlordId).snapshots();
+    _balanceStream = _availableBalanceStream(widget.landlordId);
+    _paymentsStream = _query.snapshots();
+  }
+
+  void _rebuildPaymentsStream() {
+    _rebuildDebounce?.cancel();
+    _rebuildDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      setState(() {
+        _paymentsStream = _query.snapshots();
+      });
+    });
+  }
+
   @override
   void dispose() {
+    _rebuildDebounce?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -671,6 +700,7 @@ class _LandlordPaymentsScreenState extends State<LandlordPaymentsScreen> {
       setState(() {
         _customRange = range;
         _quickRange = QuickRange.custom;
+        _rebuildPaymentsStream();
       });
     }
   }
@@ -728,7 +758,7 @@ class _LandlordPaymentsScreenState extends State<LandlordPaymentsScreen> {
     return Container(
       color: _C.pageBg,
       child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: _db.collection('landlords').doc(widget.landlordId).snapshots(),
+        stream: _landlordStream,
         builder: (context, landlordSnap) {
           final hasSubaccount = landlordSnap.data
                   ?.data()?['paystack_subaccount']
@@ -737,15 +767,18 @@ class _LandlordPaymentsScreenState extends State<LandlordPaymentsScreen> {
               true;
 
           return StreamBuilder<double>(
-            stream: _availableBalanceStream(widget.landlordId),
+            stream: _balanceStream,
             builder: (context, availSnap) {
               final available = availSnap.data ?? 0;
 
               return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: _query.snapshots(),
+                stream: _paymentsStream,
                 builder: (ctx, snap) {
                   final loading =
                       snap.connectionState == ConnectionState.waiting;
+                  if (snap.hasError) {
+                    debugPrint('❌ Payments stream error: ${snap.error}');
+                  }
                   final all = snap.hasData
                       ? snap.data!.docs
                           .map(PaymentRecord.fromDoc)
@@ -793,21 +826,30 @@ class _LandlordPaymentsScreenState extends State<LandlordPaymentsScreen> {
                                 quickRange: _quickRange,
                                 customRange: _customRange,
                                 searchCtrl: _searchCtrl,
-                                onStatusChanged: (v) =>
-                                    setState(() => _statusFilter = v),
-                                onMethodChanged: (v) =>
-                                    setState(() => _methodFilter = v),
-                                onSortChanged: (v) =>
-                                    setState(() => _sortOption = v),
+                                onStatusChanged: (v) => setState(() {
+                                  _statusFilter = v;
+                                  _rebuildPaymentsStream();
+                                }),
+                                onMethodChanged: (v) => setState(() {
+                                  _methodFilter = v;
+                                  _rebuildPaymentsStream();
+                                }),
+                                onSortChanged: (v) => setState(() =>
+                                    _sortOption =
+                                        v), // client-side only, no query change
                                 onQuickRangeChanged: (v) {
                                   if (v == QuickRange.custom) {
                                     _pickCustomRange();
                                   } else {
-                                    setState(() => _quickRange = v);
+                                    setState(() {
+                                      _quickRange = v;
+                                      _rebuildPaymentsStream();
+                                    });
                                   }
                                 },
-                                onSearchChanged: (v) =>
-                                    setState(() => _searchQuery = v),
+                                onSearchChanged: (v) => setState(() =>
+                                    _searchQuery =
+                                        v), // client-side only, no query change
                               ),
                               const SizedBox(height: 12),
                               Row(
@@ -1008,12 +1050,16 @@ class _HeroHeader extends StatelessWidget {
                 const Text('Available now',
                     style: TextStyle(color: Colors.white70, fontSize: 12.5)),
                 const Spacer(),
-                Text(
-                  _fmt.format(available),
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800),
+                Flexible(
+                  child: Text(
+                    _fmt.format(available),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800),
+                  ),
                 ),
               ],
             ),
