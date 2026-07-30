@@ -188,6 +188,8 @@ class PaymentRecord {
   final double amount;
   final String method; // 'momo' | 'manual'
   final String? provider; // 'mtn' | 'vodafone' | 'manual'
+  final String gateway; // ← add this: 'paystack' | 'moolre' | 'manual'
+
   final String reference;
   final PayStatus status;
   final String rawStatus;
@@ -234,6 +236,7 @@ class PaymentRecord {
     required this.amount,
     required this.method,
     this.provider,
+    required this.gateway, // ← add this
     required this.reference,
     required this.status,
     required this.rawStatus,
@@ -258,12 +261,15 @@ class PaymentRecord {
   });
 
   bool get isRefundable =>
-      status == PayStatus.paid && method != 'manual' && refundedAmount == null;
+      status == PayStatus.paid &&
+      method != 'manual' &&
+      gateway == 'paystack' &&
+      refundedAmount == null;
 
   /// Whether it's meaningful to offer a "Check Settlement" action at all —
   /// manual payments and refunded/failed payments never settle via Paystack.
   bool get isSettlementCheckable =>
-      status == PayStatus.paid && method != 'manual';
+      status == PayStatus.paid && method != 'manual' && gateway == 'paystack';
 
   bool get hasDisplayInfo => tenantName != null && hostelName != null;
 
@@ -283,6 +289,7 @@ class PaymentRecord {
       amount: (d['amount'] as num?)?.toDouble() ?? 0,
       method: d['method'] as String? ?? 'momo',
       provider: d['provider'] as String?,
+      gateway: d['gateway'] as String? ?? 'paystack', // ← add this
       reference: d['reference'] as String? ?? doc.id,
       status: _parseStatus(raw),
       rawStatus: raw,
@@ -318,6 +325,7 @@ class PaymentRecord {
         amount: amount,
         method: method,
         provider: provider,
+        gateway: gateway, // ← add this
         reference: reference,
         status: status,
         rawStatus: rawStatus,
@@ -871,7 +879,8 @@ class _TopBar extends StatelessWidget {
                         fontSize: isNarrow ? 16 : 18,
                         fontWeight: FontWeight.w700,
                         letterSpacing: -0.3)),
-                const Text('Live · Paystack-verified · Settlement tracked',
+                const Text(
+                    'Live · Multi-gateway · Settlement tracked for Paystack',
                     style: TextStyle(color: _textSecondary, fontSize: 12)),
               ],
             )
@@ -1749,7 +1758,18 @@ class _DataTable extends StatelessWidget {
                                     color: _textMuted, fontSize: 11)),
                           ],
                         )),
-                    Expanded(flex: 2, child: _MethodBadge(record: r)),
+                    Expanded(
+                      flex: 2,
+                      child: Wrap(
+                        spacing: 4,
+                        runSpacing: 2,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          _MethodBadge(record: r),
+                          _GatewayBadge(record: r),
+                        ],
+                      ),
+                    ),
                     Expanded(
                         flex: 3,
                         child: Row(children: [
@@ -1795,7 +1815,9 @@ class _DataTable extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
                             Tooltip(
-                              message: 'Verify with Paystack',
+                              message: r.gateway == 'moolre'
+                                  ? 'Verify with Moolre'
+                                  : 'Verify with Paystack',
                               child: InkWell(
                                 onTap: () => onVerify(r),
                                 borderRadius: BorderRadius.circular(6),
@@ -1927,6 +1949,7 @@ class _CardList extends StatelessWidget {
                   children: [
                     _StatusBadge(record: r),
                     _MethodBadge(record: r),
+                    _GatewayBadge(record: r),
                     _SettlementBadge(
                         record: r, onCheck: () => onCheckSettlement(r)),
                   ],
@@ -2006,6 +2029,34 @@ class _StatusBadge extends StatelessWidget {
             style:
                 TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w700)),
       ]),
+    );
+  }
+}
+
+/// Shows which payment gateway actually processed this transaction —
+/// distinct from `_MethodBadge`, which shows the mobile network (MTN/Vodafone)
+/// or 'Manual'. Hidden for manual payments since no gateway was involved.
+class _GatewayBadge extends StatelessWidget {
+  final PaymentRecord record;
+  const _GatewayBadge({required this.record});
+
+  @override
+  Widget build(BuildContext context) {
+    if (record.gateway == 'manual') return const SizedBox.shrink();
+    final isMoolre = record.gateway == 'moolre';
+    final color = isMoolre ? _warning : _accent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        isMoolre ? 'Moolre' : 'Paystack',
+        style:
+            TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color),
+      ),
     );
   }
 }
@@ -2179,6 +2230,13 @@ class _PaymentDetailSheet extends StatelessWidget {
                         ? 'Manual'
                         : (r.provider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash')),
                 _row(
+                    'Gateway',
+                    r.gateway == 'moolre'
+                        ? 'Moolre'
+                        : r.gateway == 'manual'
+                            ? 'Manual'
+                            : 'Paystack'), // ← add this
+                _row(
                     'Payment #',
                     '${r.paymentNumber}'
                         '${r.isFirstPayment ? ' · first' : ''}'
@@ -2290,7 +2348,9 @@ class _PaymentDetailSheet extends StatelessWidget {
                     child: OutlinedButton.icon(
                       onPressed: onVerify,
                       icon: const Icon(Icons.verified_rounded, size: 16),
-                      label: const Text('Verify with Paystack'),
+                      label: Text(record.gateway == 'moolre'
+                          ? 'Verify with Moolre'
+                          : 'Verify with Paystack'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: _teal,
                         side: const BorderSide(color: _teal),

@@ -3,9 +3,20 @@
 // Main ProfileScreen StatefulWidget: animation controllers, Firestore stream,
 // auth actions, and the top-level build / scaffold.
 // Imports all other profile_*.dart files.
+//
+// Changes from the previous version:
+//  • Loading state: shows skeleton cards instead of a flash of empty/default
+//    data on the very first frame, before Firestore responds.
+//  • Error state: snapshot.hasError is now handled with a retry affordance
+//    instead of silently falling back to defaults.
+//  • Delete Account now cascade-deletes the notifications subcollection
+//    (batched) before removing the user doc and the Auth account, so it
+//    doesn't leave orphaned data behind.
+//  • Pull-to-refresh on the scroll view.
+//  • Hero wiring: edit button opens the edit sheet, Bookings/Saved stat
+//    tiles navigate, joinedDate now comes from the real Firebase Auth
+//    account-creation timestamp instead of being unused.
 // ─────────────────────────────────────────────────────────────────────────────
-
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -66,14 +77,18 @@ class _ProfileScreenState extends State<ProfileScreen>
   // ── Unread notification count ───────────────────────────────────────────────
   int _unread = 0;
 
+  // ── Account deletion state ──────────────────────────────────────────────────
+  bool _deleting = false;
+
   // ── ImagePicker ─────────────────────────────────────────────────────────────
   final _picker = ImagePicker();
 
   // ── Firestore stream ─────────────────────────────────────────────────────────
-  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _profileStream;
+  // Non-final: the error-state retry button re-runs _initStream() to get a
+  // fresh Stream instance.
+  late Stream<DocumentSnapshot<Map<String, dynamic>>> _profileStream;
 
   // ── Rate-limit guard for _fetchUnread ────────────────────────────────────────
-  // FIX #9 (preview): prevents _fetchUnread firing on every snapshot.
   DateTime? _lastUnreadFetch;
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -127,8 +142,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   // ── Unread count ─────────────────────────────────────────────────────────────
-  // FIX #1: Added `if (!mounted) return` after every await.
-  // FIX #9 (preview): Guard added here; full throttle logic applied in build().
   Future<void> _fetchUnread() async {
     if (_uid.isEmpty) return;
 
@@ -140,7 +153,6 @@ class _ProfileScreenState extends State<ProfileScreen>
         .count()
         .get();
 
-    // ✅ FIX #1: widget may have been disposed while the query was in flight
     if (!mounted) return;
 
     setState(() => _unread = snap.count ?? 0);
@@ -148,17 +160,13 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   // ── Completion progress ──────────────────────────────────────────────────────
-  /// Called once per Firestore snapshot (via addPostFrameCallback so it never
-  /// interrupts a build pass).
   void _scheduleProgressUpdate(Map<String, dynamic> data) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // ✅ FIX #1: callback fires asynchronously — widget may be gone by then
       if (!mounted) return;
 
       final count = completionCount(data, _user?.email ?? '');
       final target = count / kCompletionLabels.length;
 
-      // Only restart the animation when the value actually changes.
       if ((target - _completionTarget).abs() < 0.001) return;
       setState(() => _completionTarget = target);
       _progressCtrl
@@ -168,25 +176,20 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   // ── Referral code ────────────────────────────────────────────────────────────
-  // FIX #1: Added `if (!mounted) return` after every await.
   Future<void> _ensureReferral(Map<String, dynamic> data) async {
     if (_uid.isEmpty) return;
 
     final existing = data['referralCode'] as String?;
     if (existing != null && existing.isNotEmpty) {
       if (_referralCode != existing) {
-        // ✅ FIX #1: even this sync setState is inside a method that may be
-        // called from a postFrameCallback — guard defensively.
         if (!mounted) return;
         setState(() => _referralCode = existing);
       }
       return;
     }
 
-    // Generate and persist a new code
     final code = generateReferralCode(_uid);
 
-    // ✅ FIX #1: setState before await is fine; guard after the write
     if (!mounted) return;
     setState(() => _referralCode = code);
 
@@ -195,13 +198,10 @@ class _ProfileScreenState extends State<ProfileScreen>
       SetOptions(merge: true),
     );
 
-    // ✅ FIX #1: the Firestore write is async — guard after it completes
     if (!mounted) return;
   }
 
   // ── Avatar upload ────────────────────────────────────────────────────────────
-  // FIX #1: Added `if (!mounted) return` after every await, including inside
-  // the onProgress callback and in the finally block.
   Future<void> _pickAndUpload() async {
     final picked = await _picker.pickImage(
       source: ImageSource.gallery,
@@ -210,12 +210,10 @@ class _ProfileScreenState extends State<ProfileScreen>
       imageQuality: 85,
     );
 
-    // ✅ FIX #1: image picker is async — user may have left the screen
     if (picked == null || !mounted) return;
 
     final bytes = await picked.readAsBytes();
 
-    // ✅ FIX #1: readAsBytes is async
     if (!mounted) return;
 
     final filename = picked.name;
@@ -230,14 +228,11 @@ class _ProfileScreenState extends State<ProfileScreen>
         bytes,
         filename,
         onProgress: (p) {
-          // ✅ FIX #1: progress callback fires repeatedly during upload;
-          // widget could be disposed between ticks
           if (!mounted) return;
           setState(() => _uploadProgress = p);
         },
       );
 
-      // ✅ FIX #1: cloudinaryUpload is async
       if (!mounted) return;
 
       // Append timestamp to bust Flutter's image cache
@@ -248,17 +243,14 @@ class _ProfileScreenState extends State<ProfileScreen>
         SetOptions(merge: true),
       );
 
-      // ✅ FIX #1: Firestore write is async
       if (!mounted) return;
 
       await _user?.updatePhotoURL(bustedUrl);
 
-      // ✅ FIX #1: updatePhotoURL is async
       if (!mounted) return;
 
-      _showSnack('Photo updated ✓', success: true);
+      KToast.show(context, 'Photo updated ✓', type: KToastType.success);
     } on UploadValidationException catch (e) {
-      // ✅ FIX #1: catch block also reached after awaits
       if (!mounted) return;
       _showSnack(e.message);
     } catch (e) {
@@ -266,7 +258,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       _showSnack('Upload failed. Please try again.');
       debugPrint('Avatar upload error: $e');
     } finally {
-      // ✅ FIX #1: finally always runs — guard before setState
       if (mounted) {
         setState(() {
           _uploading = false;
@@ -276,9 +267,8 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  // ── Snackbar helper ───────────────────────────────────────────────────────────
+  // ── Snackbar helper (used for errors — successes use KToast) ────────────────
   void _showSnack(String msg, {bool success = false}) {
-    // ✅ FIX #1: _showSnack is called from async methods — guard at entry
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -292,7 +282,6 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   // ── Logout ────────────────────────────────────────────────────────────────────
-  // FIX #1: Added `if (!mounted) return` after every await.
   Future<void> _logout() async {
     final confirmed = await showConfirmDialog(
       context,
@@ -302,19 +291,21 @@ class _ProfileScreenState extends State<ProfileScreen>
       isDestructive: false,
     );
 
-    // ✅ FIX #1: dialog is async
     if (confirmed != true || !mounted) return;
 
     await _auth.signOut();
 
-    // ✅ FIX #1: signOut is async
     if (!mounted) return;
 
     Navigator.pushReplacementNamed(context, KRoutes.login);
   }
 
   // ── Delete account ────────────────────────────────────────────────────────────
-  // FIX #1: Added `if (!mounted) return` after every await.
+  // Cascades: Firestore doesn't auto-delete subcollections when you delete a
+  // parent doc, so `notifications` under users/{uid} would otherwise be left
+  // behind as orphaned data forever. Batch-delete it first (chunked at 500 —
+  // Firestore's per-batch write limit), then the user doc, then the Auth
+  // account.
   Future<void> _deleteAccount() async {
     final confirmed = await showConfirmDialog(
       context,
@@ -325,34 +316,59 @@ class _ProfileScreenState extends State<ProfileScreen>
       isDestructive: true,
     );
 
-    // ✅ FIX #1: dialog is async
     if (confirmed != true || !mounted) return;
 
+    setState(() => _deleting = true);
+
     try {
+      await _deleteNotificationsSubcollection();
+
+      if (!mounted) return;
+
       await _store.collection('users').doc(_uid).delete();
 
-      // ✅ FIX #1: Firestore delete is async
       if (!mounted) return;
 
       await _user?.delete();
 
-      // ✅ FIX #1: Firebase Auth delete is async
       if (!mounted) return;
 
       Navigator.pushReplacementNamed(context, KRoutes.login);
     } on FirebaseAuthException catch (e) {
-      // ✅ FIX #1: catch block reached after awaits
       if (!mounted) return;
       _showSnack(
         e.code == 'requires-recent-login'
             ? 'Please log out and log back in before deleting your account.'
             : 'Could not delete account: ${e.message}',
       );
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('Could not delete account. Please try again.');
+      debugPrint('Delete account error: $e');
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
+  Future<void> _deleteNotificationsSubcollection() async {
+    final notifsRef =
+        _store.collection('users').doc(_uid).collection('notifications');
+
+    while (true) {
+      final snap = await notifsRef.limit(500).get();
+      if (snap.docs.isEmpty) return;
+
+      final batch = _store.batch();
+      for (final doc in snap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+
+      if (snap.docs.length < 500) return;
     }
   }
 
   // ── Notifications toggle ──────────────────────────────────────────────────────
-  // FIX #1: Added `if (!mounted) return` after the Firestore write.
   Future<void> _toggleNotifications(bool value) async {
     setState(() => _notificationsOn = value);
 
@@ -361,9 +377,16 @@ class _ProfileScreenState extends State<ProfileScreen>
       SetOptions(merge: true),
     );
 
-    // ✅ FIX #1: Firestore write is async — guard in case widget was disposed
-    // while the write was in flight (e.g. user navigated away quickly)
     if (!mounted) return;
+  }
+
+  // ── Pull to refresh ──────────────────────────────────────────────────────────
+  // The profile itself is a live Firestore stream, so a manual refresh isn't
+  // needed for its own fields — but the unread count is throttled to avoid
+  // hammering Firestore on every snapshot, so a pull-to-refresh forces an
+  // immediate re-check instead of waiting out the throttle window.
+  Future<void> _handleRefresh() async {
+    await _fetchUnread();
   }
 
   // ── dispose ───────────────────────────────────────────────────────────────────
@@ -385,28 +408,33 @@ class _ProfileScreenState extends State<ProfileScreen>
         body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: _profileStream,
           builder: (context, snapshot) {
+            // ── Error state ──────────────────────────────────────────────
+            if (snapshot.hasError) {
+              return _ErrorState(onRetry: () => setState(_initStream));
+            }
+
+            // ── Loading state (first frame only, before any data arrives) ──
+            final isInitialLoad =
+                snapshot.connectionState == ConnectionState.waiting &&
+                    !snapshot.hasData;
+            if (isInitialLoad) {
+              return const _LoadingState();
+            }
+
             final data = snapshot.data?.data() ?? {};
 
-            // Side-effects triggered by a new snapshot (never during build).
-            // FIX #9 (preview): _fetchUnread is now throttled — only fires
-            // when data changes AND at least 2 min have passed since last fetch.
             if (snapshot.hasData) {
               _scheduleProgressUpdate(data);
               _ensureReferral(data);
 
-              // Sync notifications toggle from Firestore
               final notifPref = data['notificationsEnabled'] as bool?;
               if (notifPref != null && notifPref != _notificationsOn) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  // ✅ FIX #1: postFrameCallback is async
                   if (!mounted) return;
                   setState(() => _notificationsOn = notifPref);
                 });
               }
 
-              // Throttled unread fetch: only re-fetch when enough time has
-              // passed since the last call (avoids a Firestore read on every
-              // single document snapshot).
               final shouldFetch = _lastUnreadFetch == null ||
                   DateTime.now().difference(_lastUnreadFetch!) >
                       const Duration(minutes: 2);
@@ -417,7 +445,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                 data['name'] as String? ?? _user?.displayName ?? 'User';
             final email = data['email'] as String? ?? _user?.email ?? '';
             final photoUrl = data['photoUrl'] as String? ?? _user?.photoURL;
-            final phone = data['phone'] as String? ?? '';
             final role = data['role'] as String? ?? 'Student';
             final points = (data['loyaltyPoints'] as num?)?.toInt() ?? 0;
             final bookings = (data['totalBookings'] as num?)?.toInt() ?? 0;
@@ -426,81 +453,166 @@ class _ProfileScreenState extends State<ProfileScreen>
 
             return FadeTransition(
               opacity: _fadeAnim,
-              child: CustomScrollView(
-                physics: const BouncingScrollPhysics(),
-                slivers: [
-                  // ── Hero header ──────────────────────────────────────────
-                  ProfileHero(
-                    name: name,
-                    email: email,
-                    photoUrl: photoUrl,
-                    role: role,
-                    bookings: bookings,
-                    saved: saved,
-                    rating: rating,
-                    unread: _unread,
-                    uploading: _uploading,
-                    uploadProgress: _uploadProgress,
-                    pulseAnim: _pulseAnim,
-                    onAvatarTap: _pickAndUpload,
-                    onNotifTap: () =>
-                        Navigator.pushNamed(context, '/notifications'),
-                    onShareTap: () => showReferralSheet(
-                      context,
-                      referralCode: _referralCode ?? generateReferralCode(_uid),
-                    ),
+              child: RefreshIndicator(
+                onRefresh: _handleRefresh,
+                color: kTeal,
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(
+                    parent: BouncingScrollPhysics(),
                   ),
+                  slivers: [
+                    // ── Hero header ──────────────────────────────────────
+                    ProfileHero(
+                      name: name,
+                      email: email,
+                      photoUrl: photoUrl,
+                      role: role,
+                      bookings: bookings,
+                      saved: saved,
+                      rating: rating,
+                      unread: _unread,
+                      uploading: _uploading,
+                      uploadProgress: _uploadProgress,
+                      pulseAnim: _pulseAnim,
+                      joinedDate: _user?.metadata.creationTime,
+                      onAvatarTap: _pickAndUpload,
+                      onNotifTap: () =>
+                          Navigator.pushNamed(context, '/notifications'),
+                      onShareTap: () => showReferralSheet(
+                        context,
+                        referralCode:
+                            _referralCode ?? generateReferralCode(_uid),
+                      ),
+                      onEditTap: () => showEditProfileSheet(
+                        context,
+                        uid: _uid,
+                        data: data,
+                      ),
+                      onBookingsTap: () =>
+                          Navigator.pushNamed(context, KRoutes.bookings),
+                      onSavedTap: () =>
+                          Navigator.pushNamed(context, KRoutes.saved),
+                    ),
 
-                  // ── Body sections ────────────────────────────────────────
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
-                    sliver: SliverList(
-                      delegate: SliverChildListDelegate([
-                        // Completion card
-                        ProfileCompletionCard(
-                          data: data,
-                          email: email,
-                          progressAnim: _progressAnim,
-                          completionTarget: _completionTarget,
-                          onEditTap: () => showEditProfileSheet(
-                            context,
+                    // ── Body sections ────────────────────────────────────
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+                      sliver: SliverList(
+                        delegate: SliverChildListDelegate([
+                          // Completion card
+                          ProfileCompletionCard(
+                            data: data,
+                            email: email,
+                            progressAnim: _progressAnim,
+                            completionTarget: _completionTarget,
+                            onEditTap: () => showEditProfileSheet(
+                              context,
+                              uid: _uid,
+                              data: data,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+
+                          // Loyalty card
+                          ProfileLoyaltyCard(
+                            points: points,
+                            shimmerAnim: _shimmerAnim,
+                          ),
+                          const SizedBox(height: 20),
+
+                          // Quick actions grid
+                          ProfileQuickActions(
+                            onTap: (route) =>
+                                Navigator.pushNamed(context, route),
+                          ),
+                          const SizedBox(height: 28),
+
+                          // Settings sections
+                          ProfileSettings(
+                            notificationsOn: _notificationsOn,
+                            onNotifToggle: _toggleNotifications,
+                            onLogout: _logout,
+                            onDeleteAccount: _deleting ? () {} : _deleteAccount,
+                            onTapRoute: (route) =>
+                                Navigator.pushNamed(context, route),
                             uid: _uid,
                             data: data,
                           ),
-                        ),
-                        const SizedBox(height: 20),
-
-                        // Loyalty card
-                        ProfileLoyaltyCard(
-                          points: points,
-                          shimmerAnim: _shimmerAnim,
-                        ),
-                        const SizedBox(height: 20),
-
-                        // Quick actions grid
-                        ProfileQuickActions(
-                          onTap: (route) => Navigator.pushNamed(context, route),
-                        ),
-                        const SizedBox(height: 28),
-
-                        // Settings sections
-                        ProfileSettings(
-                          notificationsOn: _notificationsOn,
-                          onNotifToggle: _toggleNotifications,
-                          onLogout: _logout,
-                          onDeleteAccount: _deleteAccount,
-                          onTapRoute: (route) =>
-                              Navigator.pushNamed(context, route),
-                          uid: _uid,
-                          data: data,
-                        ),
-                      ]),
+                        ]),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             );
           },
+        ),
+      );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  _LoadingState — skeleton shown before the first Firestore snapshot arrives
+// ══════════════════════════════════════════════════════════════════════════════
+class _LoadingState extends StatelessWidget {
+  const _LoadingState();
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+          children: const [
+            KShimmerCard(height: 110, showAvatar: true),
+            SizedBox(height: 20),
+            KShimmerCard(height: 90),
+            SizedBox(height: 20),
+            KShimmerCard(height: 160),
+            SizedBox(height: 20),
+            KShimmerCard(height: 90),
+          ],
+        ),
+      );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  _ErrorState — shown when the Firestore stream errors (permission-denied,
+//  offline, etc.) instead of silently falling back to empty defaults.
+// ══════════════════════════════════════════════════════════════════════════════
+class _ErrorState extends StatelessWidget {
+  const _ErrorState({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.wifi_off_rounded, size: 48, color: kTextTertiary),
+                const SizedBox(height: 16),
+                Text(
+                  "Couldn't load your profile",
+                  style: KText.labelLg,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Check your connection and try again.',
+                  style: KText.bodyXS,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                KButton(
+                  label: 'Retry',
+                  small: true,
+                  icon: Icons.refresh_rounded,
+                  onTap: onRetry,
+                ),
+              ],
+            ),
+          ),
         ),
       );
 }

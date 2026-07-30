@@ -7,7 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
+import '../utils/room_availability.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 
@@ -37,6 +37,13 @@ class _PopularPropertiesState extends State<PopularProperties> {
   StreamSubscription<QuerySnapshot>? _sub;
   List<Hostel> _hostels = [];
   _LoadState _state = _LoadState.loading;
+  Map<String, int> _availableCounts = {}; // ADD
+  late final RoomAvailabilityWatcher _roomWatcher = // ADD
+      RoomAvailabilityWatcher(onUpdate: (counts) {
+    // ADD
+    if (!mounted) return; // ADD
+    setState(() => _availableCounts = counts); // ADD
+  }); // ADD
 
   @override
   void initState() {
@@ -47,6 +54,7 @@ class _PopularPropertiesState extends State<PopularProperties> {
   @override
   void dispose() {
     _sub?.cancel();
+    _roomWatcher.cancel(); // ADD
     super.dispose();
   }
 
@@ -76,6 +84,7 @@ class _PopularPropertiesState extends State<PopularProperties> {
           _hostels = hostels;
           _state = hostels.isEmpty ? _LoadState.empty : _LoadState.success;
         });
+        _roomWatcher.watch(hostels.map((h) => h.id).toList()); // ADD
         if (mounted) _precacheImages();
       },
       onError: (e) {
@@ -194,6 +203,7 @@ class _PopularPropertiesState extends State<PopularProperties> {
               textSecondary: theme.textTheme.bodySmall?.color ?? Colors.grey,
               surfaceColor: surfaceColor,
               width: cardWidth,
+              liveAvailable: _availableCounts[hostel.id], // ADD
             ),
           )
           .toList(),
@@ -259,6 +269,7 @@ class _HostelCard extends StatelessWidget {
   final Color textSecondary;
   final Color surfaceColor;
   final double width;
+  final int? liveAvailable; // ADD
 
   const _HostelCard({
     required this.hostel,
@@ -266,6 +277,7 @@ class _HostelCard extends StatelessWidget {
     required this.textSecondary,
     required this.surfaceColor,
     required this.width,
+    this.liveAvailable, // ADD
   });
 
   @override

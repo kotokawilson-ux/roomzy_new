@@ -22,19 +22,14 @@ const Color kTextSecondary = kTextSecond;
 const Color kTextTertiary = Color(0xFFB0BEC5);
 const Color kRed = Color(0xFFE53935);
 
-// Per-section icon-background colours
+// Per-section icon-background colours (only tokens actually used across the
+// profile files are kept — kCyan/kSlate/kDeepPurple were unused and removed)
 const Color kPurpleBg = Color(0xFFF3E5F5);
 const Color kPurple = Color(0xFF7B1FA2);
 const Color kBlueBg = Color(0xFFE3F2FD);
 const Color kBlue = Color(0xFF1565C0);
-const Color kCyanBg = Color(0xFFE0F7FA);
-const Color kCyan = Color(0xFF00838F);
 const Color kGreenBg = Color(0xFFE8F5E9);
 const Color kGreen = Color(0xFF2E7D32);
-const Color kSlatesBg = Color(0xFFECEFF1);
-const Color kSlate = Color(0xFF37474F);
-const Color kDeepPurpleBg = Color(0xFFF3E5F5);
-const Color kDeepPurple = Color(0xFF6A1B9A);
 const Color kGoldBg = Color(0xFFFFF8E1);
 const Color kAccentBg = Color(0xFFFFF0EB);
 const Color kRedBg = Color(0xFFFFEBEE);
@@ -194,24 +189,11 @@ const kCompletionLabels = [
 ];
 
 // ── Referral-code generator ────────────────────────────────────────────────────
-// Fix #5: removed `// ignore: deprecated_member_use` suppressor and the
-// reliance on hashCode for seeding.
-//
-// The old approach used `uid.hashCode ^ uid.codeUnits.fold(...)`.
-// Problems:
-//   1. hashCode is NOT stable across Dart VM restarts or platforms —
-//      the same UID can produce a different code on iOS vs Android.
-//   2. Suppressing a deprecation warning silently rather than fixing it
-//      means you'll break when the deprecated API is removed.
-//
-// Fix: derive the seed purely from codeUnits (stable, no hashCode needed).
-// The same UID will always produce the same 8-character code on every
-// platform and Dart version.
-
 /// Generates a deterministic 8-character referral code from the user's UID.
+/// Seed is derived purely from codeUnits (no hashCode dependency), so the
+/// same UID always produces the same code on every platform / Dart version.
 String generateReferralCode(String uid) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  // Stable seed: fold over codeUnits only — no hashCode dependency.
   final seed = uid.codeUnits.fold(0, (int a, int b) => a * 31 + b);
   final rng = _SeededRandom(seed);
   return List.generate(8, (_) => chars[rng.nextInt(chars.length)]).join();

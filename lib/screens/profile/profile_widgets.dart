@@ -1,10 +1,15 @@
 // lib/profile/profile_widgets.dart
 // ─────────────────────────────────────────────────────────────────────────────
-// Reusable widgets — redesigned: spring physics, glassmorphic surfaces,
-// shimmer skeletons, token-driven theming, micro-interaction polish.
+// Reusable widgets — spring physics, glassmorphic surfaces, shimmer
+// skeletons, token-driven theming, micro-interaction polish.
+//
+// Trimmed: KToggle, KStatusPill, KPill, KNavButton, KStatWidget, KDivider,
+// KSheetRow, and KSettingsCard were never referenced anywhere in the profile
+// screens and have been removed. KShimmerCard and KToast were also unused
+// before this pass — they're now wired into profile_screen.dart for the
+// loading skeleton and upload-success toast.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,7 +20,6 @@ import 'profile_constants.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 const _kRadius = 18.0;
 const _kRadiusSm = 12.0;
-const _kRadiusXs = 8.0;
 const _kDuration100 = Duration(milliseconds: 100);
 const _kDuration200 = Duration(milliseconds: 200);
 const _kDuration300 = Duration(milliseconds: 300);
@@ -228,101 +232,6 @@ class _KButtonState extends State<KButton> with SingleTickerProviderStateMixin {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  KToggle — pill switch with spring thumb
-// ══════════════════════════════════════════════════════════════════════════════
-class KToggle extends StatefulWidget {
-  const KToggle(this.value, this.onChanged, {super.key});
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  State<KToggle> createState() => _KToggleState();
-}
-
-class _KToggleState extends State<KToggle> with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _thumb;
-  late final Animation<Color?> _track;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: _kDuration300,
-      value: widget.value ? 1 : 0,
-    );
-    _thumb = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack);
-    _track = ColorTween(
-      begin: const Color(0xFFD4DCE8),
-      end: kTeal,
-    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-  }
-
-  @override
-  void didUpdateWidget(KToggle old) {
-    super.didUpdateWidget(old);
-    if (old.value != widget.value) {
-      widget.value ? _ctrl.forward() : _ctrl.reverse();
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        label: widget.value ? 'Enabled' : 'Disabled',
-        toggled: widget.value,
-        child: GestureDetector(
-          onTap: () {
-            HapticFeedback.selectionClick();
-            widget.onChanged(!widget.value);
-          },
-          child: AnimatedBuilder(
-            animation: _ctrl,
-            builder: (_, __) => Container(
-              width: 50,
-              height: 28,
-              decoration: BoxDecoration(
-                color: _track.value,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(3),
-                child: Align(
-                  alignment: Alignment.lerp(
-                    Alignment.centerLeft,
-                    Alignment.centerRight,
-                    _thumb.value,
-                  )!,
-                  child: Container(
-                    width: 22,
-                    height: 22,
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color(0x22000000),
-                          blurRadius: 6,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 //  KArrow
 // ══════════════════════════════════════════════════════════════════════════════
 class KArrow extends StatelessWidget {
@@ -341,260 +250,6 @@ class KArrow extends StatelessWidget {
           color: kTextTertiary,
           size: 17,
         ),
-      );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KStatusPill — icon-prefixed status chip with shimmer on pending
-// ══════════════════════════════════════════════════════════════════════════════
-enum KPillStatus { verified, pending, danger }
-
-class KStatusPill extends StatefulWidget {
-  const KStatusPill(this.label, {super.key, required this.status});
-  const KStatusPill.ok(this.label, {super.key, required bool ok})
-      : status = ok ? KPillStatus.verified : KPillStatus.pending;
-
-  final String label;
-  final KPillStatus status;
-
-  @override
-  State<KStatusPill> createState() => _KStatusPillState();
-}
-
-class _KStatusPillState extends State<KStatusPill>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _shimmer;
-
-  @override
-  void initState() {
-    super.initState();
-    _shimmer = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1600),
-    );
-    if (widget.status == KPillStatus.pending) {
-      _shimmer.repeat();
-    }
-  }
-
-  @override
-  void dispose() {
-    _shimmer.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final (bg, fg, icon) = switch (widget.status) {
-      KPillStatus.verified => (
-          const Color(0xFFE6F9F4),
-          kGreen,
-          Icons.verified_rounded,
-        ),
-      KPillStatus.pending => (
-          const Color(0xFFFFF3E0),
-          const Color(0xFFE65100),
-          Icons.schedule_rounded,
-        ),
-      KPillStatus.danger => (
-          const Color(0xFFFFEBEE),
-          kRed,
-          Icons.report_rounded,
-        ),
-    };
-
-    final pill = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: fg.withValues(alpha: .15)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: fg),
-          const SizedBox(width: 5),
-          Text(
-            widget.label,
-            style: KText.labelXS.copyWith(
-              color: fg,
-              fontWeight: FontWeight.w700,
-              letterSpacing: .3,
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (widget.status != KPillStatus.pending) return pill;
-
-    return AnimatedBuilder(
-      animation: _shimmer,
-      builder: (_, child) => ShaderMask(
-        shaderCallback: (bounds) => LinearGradient(
-          colors: [
-            Colors.white.withValues(alpha: 0),
-            Colors.white.withValues(alpha: .35),
-            Colors.white.withValues(alpha: 0),
-          ],
-          stops: const [0, .5, 1],
-          begin: Alignment(-2 + _shimmer.value * 4, 0),
-          end: Alignment(-1 + _shimmer.value * 4, 0),
-        ).createShader(bounds),
-        blendMode: BlendMode.srcATop,
-        child: child,
-      ),
-      child: pill,
-    );
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KPill — generic role / category badge
-// ══════════════════════════════════════════════════════════════════════════════
-class KPill extends StatelessWidget {
-  const KPill(
-    this.label, {
-    super.key,
-    required this.background,
-    required this.textColor,
-    this.icon,
-  });
-
-  final String label;
-  final Color background;
-  final Color textColor;
-  final IconData? icon;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: textColor.withValues(alpha: .12)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 13, color: textColor),
-              const SizedBox(width: 4),
-            ],
-            Text(
-              label,
-              style: KText.labelSm.copyWith(
-                color: textColor,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KNavButton — frosted circular nav button
-// ══════════════════════════════════════════════════════════════════════════════
-class KNavButton extends StatefulWidget {
-  const KNavButton({super.key, required this.icon, required this.onTap});
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  State<KNavButton> createState() => _KNavButtonState();
-}
-
-class _KNavButtonState extends State<KNavButton> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        button: true,
-        child: GestureDetector(
-          onTapDown: (_) => setState(() => _pressed = true),
-          onTapUp: (_) {
-            setState(() => _pressed = false);
-            HapticFeedback.lightImpact();
-            widget.onTap();
-          },
-          onTapCancel: () => setState(() => _pressed = false),
-          child: AnimatedContainer(
-            duration: _kDuration100,
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: _pressed
-                  ? Colors.white.withValues(alpha: .3)
-                  : Colors.white.withValues(alpha: .18),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.white.withValues(alpha: .3),
-              ),
-            ),
-            child: Icon(widget.icon, color: Colors.white, size: 18),
-          ),
-        ),
-      );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KStatWidget — animated counter stat
-// ══════════════════════════════════════════════════════════════════════════════
-class KStatWidget extends StatelessWidget {
-  const KStatWidget(this.value, this.label, {super.key, this.onDark = false});
-
-  final String value;
-  final String label;
-  final bool onDark;
-
-  @override
-  Widget build(BuildContext context) {
-    if (onDark) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(value, style: KText.onDarkValue),
-          const SizedBox(height: 2),
-          Text(label, style: KText.onDarkCaption),
-        ],
-      );
-    }
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Column(
-          children: [
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-                color: kTextPrimary,
-                letterSpacing: -.5,
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(label, style: KText.caption),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KDivider — vertical divider for stat rows
-// ══════════════════════════════════════════════════════════════════════════════
-class KDivider extends StatelessWidget {
-  const KDivider({super.key});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: 0.5,
-        height: 32,
-        color: kBorder,
       );
 }
 
@@ -941,13 +596,10 @@ class _KInputFieldState extends State<KInputField> {
               labelText: widget.label,
               labelStyle: KText.bodyS,
               errorText: widget.errorText,
-              prefixIcon: AnimatedContainer(
-                duration: _kDuration200,
-                child: Icon(
-                  widget.icon,
-                  size: 18,
-                  color: _focused ? kTeal : kTextSecond,
-                ),
+              prefixIcon: Icon(
+                widget.icon,
+                size: 18,
+                color: _focused ? kTeal : kTextSecond,
               ),
               suffixIcon: widget.suffixIcon,
               contentPadding:
@@ -970,71 +622,6 @@ class _KInputFieldState extends State<KInputField> {
               ),
               filled: true,
               fillColor: _focused ? Colors.white : const Color(0xFFF7F9FC),
-            ),
-          ),
-        ),
-      );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KSheetRow — tappable bottom-sheet row
-// ══════════════════════════════════════════════════════════════════════════════
-class KSheetRow extends StatefulWidget {
-  const KSheetRow(this.icon, this.color, this.label, this.onTap, {super.key});
-
-  final IconData icon;
-  final Color color;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  State<KSheetRow> createState() => _KSheetRowState();
-}
-
-class _KSheetRowState extends State<KSheetRow> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        button: true,
-        label: widget.label,
-        child: GestureDetector(
-          onTapDown: (_) => setState(() => _pressed = true),
-          onTapUp: (_) {
-            setState(() => _pressed = false);
-            HapticFeedback.selectionClick();
-            widget.onTap();
-          },
-          onTapCancel: () => setState(() => _pressed = false),
-          child: AnimatedContainer(
-            duration: _kDuration100,
-            decoration: BoxDecoration(
-              color: _pressed
-                  ? widget.color.withValues(alpha: .05)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(_kRadiusSm),
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 4),
-            child: Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: widget.color.withValues(alpha: .1),
-                    borderRadius: BorderRadius.circular(_kRadiusSm),
-                  ),
-                  child: Icon(widget.icon, color: widget.color, size: 20),
-                ),
-                const SizedBox(width: 14),
-                Text(widget.label, style: KText.labelLg),
-                const Spacer(),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: widget.color.withValues(alpha: .5),
-                  size: 18,
-                ),
-              ],
             ),
           ),
         ),
@@ -1189,34 +776,6 @@ class _KSettingsRowState extends State<KSettingsRow>
       ),
     );
   }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  KSettingsCard — groups KSettingsRows with dividers
-// ══════════════════════════════════════════════════════════════════════════════
-class KSettingsCard extends StatelessWidget {
-  const KSettingsCard({super.key, required this.rows});
-  final List<KSettingsRow> rows;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        decoration: _surfaceDecoration(),
-        clipBehavior: Clip.hardEdge,
-        child: Column(
-          children: [
-            for (int i = 0; i < rows.length; i++) ...[
-              rows[i],
-              if (i < rows.length - 1)
-                const Divider(
-                  height: 0.5,
-                  thickness: 0.5,
-                  indent: 74,
-                  color: Color(0xFFF1F4F8),
-                ),
-            ],
-          ],
-        ),
-      );
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1382,7 +941,10 @@ class _KQuickActionCardState extends State<KQuickActionCard>
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  KShimmerCard — skeleton placeholder while data loads
+//  KShimmerCard — skeleton placeholder while data loads.
+//  Used by ProfileScreen on the very first frame (before the Firestore
+//  StreamBuilder has any data) so users never see a flash of an empty/
+//  default profile.
 // ══════════════════════════════════════════════════════════════════════════════
 class KShimmerCard extends StatefulWidget {
   const KShimmerCard({

@@ -1,7 +1,10 @@
 // lib/profile/profile_upload.dart
 // ─────────────────────────────────────────────────────────────────────────────
-// Cloudinary image upload with progress, file validation, and the two
-// CustomPainters used in the profile screen.
+// Cloudinary image upload with progress + file validation, and the
+// RingPainter used by the profile-completion card.
+//
+// HeroPainter was removed here — it was never referenced anywhere;
+// profile_hero.dart paints its own background via _MeshNoisePainter.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:convert';
@@ -10,8 +13,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-
-import 'profile_constants.dart';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 // Put your real values in a .env / build-config and inject via --dart-define.
@@ -35,21 +36,15 @@ class UploadValidationException implements Exception {
 }
 
 /// Throws [UploadValidationException] if the file fails type or size checks.
-///
-/// Fix #2: extension is checked FIRST — it's a zero-cost string op.
-/// Size is checked second — it requires knowing [bytes.length] but the
-/// caller already has the bytes in memory at this point.
-/// The important thing is that we never reach the network with an invalid type.
+/// Type is checked first (zero-cost string op) so we never hit the network
+/// with an invalid type; size is checked second.
 void validateUpload(Uint8List bytes, String filename) {
-  // ✅ 1. Type check first — fast, no memory penalty
   final ext = _extension(filename).toLowerCase();
   if (!_kAllowedExts.contains(ext)) {
     throw UploadValidationException(
       'Unsupported file type "$ext". Use JPG, PNG, or WebP.',
     );
   }
-
-  // ✅ 2. Size check second
   if (bytes.length > _kMaxBytes) {
     throw const UploadValidationException('Image must be under 5 MB.');
   }
@@ -69,7 +64,6 @@ Future<String> cloudinaryUpload(
   String filename, {
   void Function(double progress)? onProgress,
 }) async {
-  // Validate before hitting the network
   validateUpload(bytes, filename);
 
   final safeFilename = filename.isNotEmpty
@@ -88,20 +82,15 @@ Future<String> cloudinaryUpload(
 
   final streamed = await request.send(); // throws on network error
 
-  // Fix #3: BytesBuilder instead of List<int> + addAll.
-  //
-  // The old pattern — chunks.addAll(chunk) — copies the entire accumulated
-  // list on every iteration: O(n²) total allocations. On a 5 MB file over
-  // a slow connection that arrives in ~1 KB chunks, that's ~5 000 copy ops
-  // and peak memory usage of roughly 2× the file size.
-  //
-  // BytesBuilder.add() amortises allocations like a StringBuffer: O(n) total.
-  final builder = BytesBuilder(copy: false); // ✅ zero-copy until takeBytes()
+  // BytesBuilder amortises allocations like a StringBuffer: O(n) total,
+  // vs. List<int> + addAll which copies the whole accumulated list on
+  // every chunk (O(n²)).
+  final builder = BytesBuilder(copy: false);
   int received = 0;
   final total = streamed.contentLength ?? bytes.length;
 
   await for (final chunk in streamed.stream) {
-    builder.add(chunk); // ✅ O(1) per chunk
+    builder.add(chunk);
     received += chunk.length;
     // Clamp to 0.95 so the caller's UI doesn't flash "done" before we parse.
     onProgress?.call((received / total).clamp(0.0, 0.95));
@@ -113,7 +102,7 @@ Future<String> cloudinaryUpload(
     throw Exception('Upload failed (HTTP ${streamed.statusCode}).');
   }
 
-  final responseBytes = builder.takeBytes(); // ✅ single allocation
+  final responseBytes = builder.takeBytes();
   onProgress?.call(1.0); // only signal done after parse-ready
 
   final json = jsonDecode(utf8.decode(responseBytes)) as Map<String, dynamic>;
@@ -124,27 +113,7 @@ Future<String> cloudinaryUpload(
   return url;
 }
 
-// ── Painters ───────────────────────────────────────────────────────────────────
-
-/// Subtle dot-grid painted behind the hero gradient.
-class HeroPainter extends CustomPainter {
-  const HeroPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = Colors.white.withValues(alpha: .04);
-    const spacing = 26.0;
-    // Only draw dots that fall inside the canvas (no wasted overdraw).
-    for (double x = 0; x <= size.width; x += spacing) {
-      for (double y = 0; y <= size.height; y += spacing) {
-        canvas.drawCircle(Offset(x, y), 1.5, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(HeroPainter _) => false;
-}
+// ── Painter ────────────────────────────────────────────────────────────────────
 
 /// Animated ring used in the profile-completion widget.
 class RingPainter extends CustomPainter {

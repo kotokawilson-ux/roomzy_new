@@ -1,7 +1,9 @@
 // lib/profile/profile_cards.dart
 // ─────────────────────────────────────────────────────────────────────────────
 // ProfileCompletionCard  — animated ring + missing-field checklist
-// ProfileLoyaltyCard     — shimmer gradient card with tier + progress bar
+// ProfileLoyaltyCard     — shimmer gradient card with tier + progress bar,
+//                          plus a tap-for-info affordance explaining how
+//                          points are earned
 // ProfileQuickActions    — 2×2 tappable grid (bookings, saved, payments, support)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -32,9 +34,6 @@ class ProfileCompletionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Fix #4a: compute once in build, not inside AnimatedBuilder.
-    // completionCount and kCompletionLabels.length are pure/cheap but there's
-    // no reason to recompute them on every animation tick.
     final count = completionCount(data, email);
     final total = kCompletionLabels.length;
     final pct = ((count / total) * 100).round();
@@ -47,7 +46,6 @@ class ProfileCompletionCard extends StatelessWidget {
           // ── Header row ──────────────────────────────────────────────────
           Row(
             children: [
-              // Animated ring — only the painter rebuilds on tick
               SizedBox(
                 width: 72,
                 height: 72,
@@ -67,9 +65,6 @@ class ProfileCompletionCard extends StatelessWidget {
                           ),
                           child: const SizedBox.expand(),
                         ),
-                        // Fix #4b: these Text widgets don't depend on the
-                        // animation value — pull them out of the builder so
-                        // they don't rebuild on every tick.
                         _RingLabel(pct: pct, count: count, total: total),
                       ],
                     );
@@ -77,8 +72,6 @@ class ProfileCompletionCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 16),
-
-              // Title + subtitle
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -122,7 +115,6 @@ class ProfileCompletionCard extends StatelessWidget {
   }
 }
 
-// Fix #4b: static label widget — zero rebuilds from the animation ticker.
 class _RingLabel extends StatelessWidget {
   const _RingLabel({
     required this.pct,
@@ -151,7 +143,6 @@ class _RingLabel extends StatelessWidget {
       );
 }
 
-// ── Missing fields checklist ────────────────────────────────────────────────
 class _MissingFieldsList extends StatelessWidget {
   const _MissingFieldsList({
     required this.data,
@@ -161,8 +152,6 @@ class _MissingFieldsList extends StatelessWidget {
   final Map<String, dynamic> data;
   final String email;
 
-  // Fix #4c: use a method rather than a getter so the linter doesn't
-  // flag a potentially-expensive getter on an immutable widget.
   List<bool> _filled() => [
         (data['email'] as String? ?? email).isNotEmpty,
         (data['phone'] as String? ?? '').isNotEmpty,
@@ -239,8 +228,6 @@ class ProfileLoyaltyCard extends StatelessWidget {
   final int points;
   final Animation<double> shimmerAnim;
 
-  // Fix #4d: pure helpers moved to static so they can't accidentally
-  // capture instance state and are trivially unit-testable.
   static LoyaltyTier? _nextTier(LoyaltyTier current) {
     final idx = kTiers.indexOf(current);
     return (idx >= 0 && idx < kTiers.length - 1) ? kTiers[idx + 1] : null;
@@ -251,10 +238,32 @@ class ProfileLoyaltyCard extends StatelessWidget {
     return ((pts - tier.min) / (tier.max - tier.min)).clamp(0.0, 1.0);
   }
 
+  void _showInfo(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('How points work', style: KText.labelLg),
+        content: Text(
+          'You earn loyalty points for every completed booking, on-time '
+          'payment, and friend you refer. Points move you up through '
+          'Bronze, Silver, Gold, and Platinum tiers — higher tiers unlock '
+          'perks like priority support and early access to listings.',
+          style: KText.bodyXS,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Got it', style: TextStyle(color: kTeal)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Fix #4e: compute tier/progress once in build, not inside
-    // _ShimmerBar's AnimatedBuilder (which fires on every shimmer tick).
     final tier = tierFor(points);
     final nextTier = _nextTier(tier);
     final progress = _progress(tier, points);
@@ -283,28 +292,35 @@ class ProfileLoyaltyCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Loyalty Rewards', style: KText.onDarkCaption),
-                  const SizedBox(height: 6),
                   Row(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: tier.color.withValues(alpha: .25),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: tier.color.withValues(alpha: .5),
-                          ),
-                        ),
-                        child: Text(
-                          tier.label,
-                          style: KText.labelSm.copyWith(color: tier.color),
+                      Text('Loyalty Rewards', style: KText.onDarkCaption),
+                      const SizedBox(width: 5),
+                      GestureDetector(
+                        onTap: () => _showInfo(context),
+                        child: Icon(
+                          Icons.info_outline_rounded,
+                          size: 13,
+                          color: Colors.white.withValues(alpha: .6),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Text(tier.label, style: KText.onDarkSub),
                     ],
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: tier.color.withValues(alpha: .25),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: tier.color.withValues(alpha: .5),
+                      ),
+                    ),
+                    child: Text(
+                      tier.label,
+                      style: KText.labelSm.copyWith(color: tier.color),
+                    ),
                   ),
                 ],
               ),
@@ -365,8 +381,6 @@ class _ShimmerBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
         animation: shimmerAnim,
-        // Fix #4f: pass the static track as the child so it isn't rebuilt
-        // on every shimmer tick — only the fill gradient needs to repaint.
         child: Container(
           height: 8,
           width: double.infinity,

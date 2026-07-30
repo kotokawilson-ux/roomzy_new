@@ -6,7 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:responsive_framework/responsive_framework.dart';
-
+import '../utils/room_availability.dart';
 import '../core/theme/app_theme.dart';
 import '../models/models.dart';
 import 'dart:async';
@@ -48,6 +48,13 @@ class _HostelsListState extends State<HostelsList> {
   List<Hostel> _filtered = [];
   _LoadState _state = _LoadState.loading;
   StreamSubscription? _hostelsSub;
+  Map<String, int> _availableCounts = {}; // ADD
+  late final RoomAvailabilityWatcher _roomWatcher = // ADD
+      RoomAvailabilityWatcher(onUpdate: (counts) {
+    // ADD
+    if (!mounted) return; // ADD
+    setState(() => _availableCounts = counts); // ADD
+  }); // ADD
 
   @override
   void initState() {
@@ -58,6 +65,7 @@ class _HostelsListState extends State<HostelsList> {
   @override
   void dispose() {
     _hostelsSub?.cancel();
+    _roomWatcher.cancel(); // ADD
     super.dispose();
   }
 
@@ -102,7 +110,7 @@ class _HostelsListState extends State<HostelsList> {
           _hostels = hostels;
           _state = _LoadState.success;
         });
-
+        _roomWatcher.watch(hostels.map((h) => h.id).toList()); // ADD
         _applyFilters(widget.searchQuery, widget.budgetFilter);
         if (mounted) _precacheImages();
       },
@@ -287,8 +295,11 @@ class _HostelsListState extends State<HostelsList> {
         physics: const NeverScrollableScrollPhysics(),
         itemCount: _filtered.length,
         separatorBuilder: (_, __) => SizedBox(height: spacing),
-        itemBuilder: (_, index) =>
-            _HostelCard(hostel: _filtered[index], theme: theme),
+        itemBuilder: (_, index) => _HostelCard(
+          hostel: _filtered[index],
+          theme: theme,
+          liveAvailable: _availableCounts[_filtered[index].id],
+        ),
       );
     }
 
@@ -302,8 +313,11 @@ class _HostelsListState extends State<HostelsList> {
         mainAxisSpacing: spacing,
         childAspectRatio: 0.66,
       ),
-      itemBuilder: (_, index) =>
-          _HostelCard(hostel: _filtered[index], theme: theme),
+      itemBuilder: (_, index) => _HostelCard(
+        hostel: _filtered[index],
+        theme: theme,
+        liveAvailable: _availableCounts[_filtered[index].id],
+      ),
     );
   }
 
@@ -455,15 +469,20 @@ class _ResultsHeader extends StatelessWidget {
 class _HostelCard extends StatelessWidget {
   final Hostel hostel;
   final ThemeData theme;
-
-  const _HostelCard({required this.hostel, required this.theme});
+  final int? liveAvailable; // ADD
+  const _HostelCard({
+    required this.hostel,
+    required this.theme,
+    this.liveAvailable, // ADD
+  });
 
   @override
   Widget build(BuildContext context) {
     final textPrimary = theme.textTheme.bodyMedium?.color ?? Colors.black;
     final textSecondary = theme.textTheme.bodySmall?.color ?? Colors.grey;
     final surfaceColor = theme.cardColor;
-    final available = hostel.roomsAvailable;
+    final available =
+        liveAvailable ?? hostel.roomsAvailable; // CHANGE this line
 
     final screenWidth = MediaQuery.of(context).size.width;
     final isMobile = screenWidth < 600;

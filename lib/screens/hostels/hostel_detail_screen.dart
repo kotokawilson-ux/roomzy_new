@@ -2129,7 +2129,7 @@ class _BookingSheetState extends State<_BookingSheet>
   String _payRef = _generateReference();
   StreamSubscription<DocumentSnapshot>? _bookingListener;
   bool _confirming = false;
-
+  String _paymentGateway = 'paystack'; // 'paystack' | 'moolre' | 'manual'
   bool get _isTestNumber =>
       _kTestMomoNumbers.contains(_momo.text.trim().replaceAll(' ', ''));
   String _normalizeMomo(String raw) {
@@ -2614,7 +2614,14 @@ class _BookingSheetState extends State<_BookingSheet>
       );
 
       final chargeData = jsonDecode(chargeRes.body);
+      debugPrint('RAW charge-momo response: ${chargeRes.body}');
       final status = chargeData['status'];
+      _paymentGateway = chargeData['gateway'] ??
+          'paystack'; // ← new field on _BookingSheetState
+
+      // Use the gateway's own reference (Moolre returns externalref, Paystack
+      // echoes back the same one we sent) — never trust _payRef past this point.
+      final gatewayReference = chargeData['reference'] as String? ?? _payRef;
 
       if (status == 'send_otp') {
         setState(() => _busy = false);
@@ -2629,23 +2636,29 @@ class _BookingSheetState extends State<_BookingSheet>
         final otpRes = await http.post(
           Uri.parse('$_kBackendUrl/submit-otp'),
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'otp': otp, 'reference': _payRef}),
+          body: jsonEncode({'otp': otp, 'reference': gatewayReference}),
         );
         final otpData = jsonDecode(otpRes.body);
 
-        if (otpData['status'] == 'success') {
-          _bookingListener?.cancel(); // ← ADD THIS
-          await _onPaymentSuccess(_payRef);
+        if (otpRes.statusCode == 200 &&
+            otpData['status'] == 'awaiting_approval') {
+          // OTP verified and the PIN-approval prompt was sent to the customer's
+          // phone. Do NOT mark the booking paid here — _bookingListener (already
+          // running) will pick up payment_status once the Moolre webhook confirms
+          // the customer approved with their PIN. Just start polling verify-payment
+          // as a backup in case the webhook is slow/misses.
+          await _pollPaymentStatus(gatewayReference);
         } else {
-          await _pollPaymentStatus(_payRef);
+          throw Exception(
+              otpData['error'] ?? 'OTP verification failed. Please try again.');
         }
       } else if (status == 'pay_offline' || status == 'pending') {
-        await _pollPaymentStatus(_payRef);
+        await _pollPaymentStatus(gatewayReference);
       } else if (status == 'success') {
-        _bookingListener?.cancel(); // ← ADD THIS
-        await _onPaymentSuccess(_payRef);
+        _bookingListener?.cancel();
+        await _onPaymentSuccess(gatewayReference);
       } else {
-        throw Exception(chargeData['message'] ?? 'Payment failed. Try again.');
+        throw Exception(chargeData['error'] ?? 'Payment failed. Try again.');
       }
     } catch (e) {
       _bookingListener?.cancel();
@@ -2773,7 +2786,8 @@ class _BookingSheetState extends State<_BookingSheet>
   }
 
   Future<void> _pollPaymentStatus(String reference) async {
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 24; i++) {
+      // up to 120s total wait for customer PIN entry
       await Future.delayed(const Duration(seconds: 5));
       if (!mounted) return;
       final res = await http.post(
@@ -2785,27 +2799,23 @@ class _BookingSheetState extends State<_BookingSheet>
       debugPrint('verify-payment response: $data');
       final status = data['status'];
       if (status == 'success') {
-        _bookingListener?.cancel(); // ← ADD THIS
+        _bookingListener?.cancel();
         await _onPaymentSuccess(reference);
         return;
       }
       if (status == 'failed') {
-        // Only stop on failed after at least 30 seconds (6 attempts)
-        // MTN sometimes sends failed then corrects itself
-        if (i >= 6) {
-          _bookingListener?.cancel();
-          if (!mounted) return;
-          _goToStep(1);
-          _showPaymentFailedDialog(data['gateway_response'], data['message']);
-          return;
-        }
-        // Otherwise keep polling — MTN may still confirm
-        continue;
+        // Per Moolre docs: txstatus=2 is a definitive failure signal, safe
+        // to trust immediately — no grace period needed.
+        _bookingListener?.cancel();
+        if (!mounted) return;
+        _goToStep(1);
+        _showPaymentFailedDialog(data['gateway_response'], data['message']);
+        return;
       }
+      // status == 'pending' (txstatus 0) → keep polling, this is normal
+      // while the customer hasn't approved yet.
     }
     if (!mounted) return;
-    // Don't go back to step 1 — the booking listener is still active
-    // and will auto-confirm once the webhook updates Firestore.
     setState(() => _confirming = true);
   }
 
@@ -2940,6 +2950,7 @@ class _BookingSheetState extends State<_BookingSheet>
         'amount': _amountToPay,
         'method': 'momo',
         'provider': _momoProvider,
+        'gateway': _paymentGateway, // ← add this
         'reference': reference,
         'status': 'paid',
         // ── Denormalized display fields (avoids N+1 reads in admin pane) ─────
@@ -3121,6 +3132,7 @@ class _BookingSheetState extends State<_BookingSheet>
       batch.set(paymentRef, {
         'amount': _amountToPay,
         'method': 'manual',
+        'gateway': 'manual', // ← add this
         'reference': ref,
         'status': 'pending_verification',
         'note': _payMode == 0

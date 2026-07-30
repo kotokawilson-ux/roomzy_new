@@ -4,7 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../../../utils/activity_logger.dart';
 import '../../services/auth_service.dart';
-
+import 'package:onesignal_flutter/onesignal_flutter.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN:
 //  • Deep forest green (#0D3D2B) hero panel + warm cream (#F8F6F1) form panel
@@ -83,6 +84,7 @@ class _LoginScreenState extends State<LoginScreen>
       );
       final role = authService.userRole;
       if (role == 'admin') {
+        await _registerAdminPushId(authService.currentUser?.id);
         context.go('/admin');
       } else if (role == 'landlord') {
         context.go('/landlord');
@@ -858,3 +860,17 @@ TextStyle _body({
       height: height ?? 1.5,
       letterSpacing: 0.1,
     );
+Future<void> _registerAdminPushId(String? uid) async {
+  if (uid == null) return;
+  try {
+    final playerId = OneSignal.User.pushSubscription.id;
+    if (playerId == null) return; // not subscribed yet / permission not granted
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .update({'onesignal_player_id': playerId});
+  } catch (e) {
+    debugPrint('Failed to register admin push id: $e');
+  }
+}

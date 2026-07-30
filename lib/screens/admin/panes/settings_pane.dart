@@ -185,6 +185,7 @@ class _SettingsPaneState extends State<SettingsPane> {
                   twoCol: twoCol,
                   sections: [
                     _PaystackConfigSection(),
+                    _PaymentProviderSection(initial: _platform), // ← new
                     _PlatformFeaturesSection(initial: _platform),
                     _BookingPolicySection(initial: _bookingPolicy),
                     _PayoutSafetySection(initial: _payouts),
@@ -1583,7 +1584,11 @@ class _SystemInfoCard extends StatelessWidget {
             'Firestore — they live in Vercel environment variables.',
         children: [
           _InfoRow(label: 'Backend', value: _kBackendUrl, canCopy: true),
-          const _InfoRow(label: 'Payments provider', value: 'Paystack (MoMo)'),
+          // Replace with:
+          const _InfoRow(
+            label: 'Payments provider',
+            value: 'Set via Payment Gateway card above',
+          ),
           const _InfoRow(label: 'Push provider', value: 'OneSignal'),
           const _InfoRow(label: 'Image hosting', value: 'Cloudinary'),
           const _InfoRow(label: 'Database', value: 'Firebase Firestore'),
@@ -1681,6 +1686,142 @@ class _EnvVarRow extends StatelessWidget {
         const Text('••••••••',
             style: TextStyle(fontSize: 12, color: _kTextMuted)),
       ]),
+    );
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// 1B. PAYMENT PROVIDER SWITCH — the single flag lib/paymentProvider.js reads
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Writes settings/platform.payment_provider ("paystack" | "moolre").
+// getProvider() in the backend reads this live on every charge/verify/OTP
+// call, so flipping this takes effect instantly — no redeploy, no app
+// update, zero visible change for students/landlords (both show as
+// "Mobile Money" either way).
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PaymentProviderSection extends StatefulWidget {
+  final Map<String, dynamic> initial;
+  const _PaymentProviderSection({required this.initial});
+
+  @override
+  State<_PaymentProviderSection> createState() =>
+      _PaymentProviderSectionState();
+}
+
+class _PaymentProviderSectionState extends State<_PaymentProviderSection> {
+  late String _provider; // 'paystack' | 'moolre'
+  bool _saving = false;
+  bool _saved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _provider = widget.initial['payment_provider']?.toString() ?? 'paystack';
+  }
+
+  Future<void> _save() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Switch payment gateway?',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+        content: Text(
+          'Every new student payment will route through '
+          '${_provider == 'moolre' ? 'Moolre' : 'Paystack'} immediately after '
+          'saving. Existing pending/in-progress payments are not affected.',
+          style: const TextStyle(fontSize: 13, color: _kTextLight, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: _kGreenAccent),
+            child: const Text('Confirm', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _saving = true);
+    try {
+      await _db.collection('settings').doc('platform').set({
+        'payment_provider': _provider,
+        'updated_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      setState(() {
+        _saved = true;
+        _saving = false;
+      });
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) setState(() => _saved = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        _showSnack(context, 'Save failed: $e', isError: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsCard(
+      icon: Icons.swap_horiz_rounded,
+      color: _kGreenAccent,
+      title: 'Payment Gateway',
+      description: 'Controls which provider handles every student Mobile Money '
+          'payment platform-wide. Landlord payouts stay on Paystack '
+          'regardless of this setting. Takes effect the moment you save — '
+          'no app update needed for students or landlords.',
+      children: [
+        Row(children: [
+          Expanded(
+            child: _ModeChip(
+              label: 'Paystack',
+              selected: _provider == 'paystack',
+              color: _kBlue,
+              onTap: () => setState(() => _provider = 'paystack'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _ModeChip(
+              label: 'Moolre',
+              selected: _provider == 'moolre',
+              color: _kGreenAccent,
+              onTap: () => setState(() => _provider = 'moolre'),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: _kBlue.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _kBlue.withOpacity(0.2)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.info_outline_rounded, size: 14, color: _kBlue),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Moolre API credentials (username, public key, account '
+                'number, callback secret) live in Vercel environment '
+                'variables, not here — same security model as the '
+                'Paystack secret key.',
+                style: TextStyle(fontSize: 11, color: _kBlue.withOpacity(0.9)),
+              ),
+            ),
+          ]),
+        ),
+      ],
+      footer: _SaveButton(
+          saving: _saving, saved: _saved, onTap: _save, color: _kGreenAccent),
     );
   }
 }

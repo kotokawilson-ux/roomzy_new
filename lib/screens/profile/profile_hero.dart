@@ -1,7 +1,19 @@
 // lib/profile/profile_hero.dart
 // ─────────────────────────────────────────────────────────────────────────────
-// ProfileHero — Advanced gradient SliverAppBar with parallax, shimmer avatar
-// ring, animated stats, glassmorphic overlays, and haptic interactions.
+// ProfileHero — gradient SliverAppBar with parallax, shimmer avatar ring,
+// animated stats, glassmorphic overlays, and haptic interactions.
+//
+// Trimmed from the previous version: the follower/follow-button system and
+// `location` field were dead props (nothing in ProfileScreen ever supplied
+// them — there's no social "follow" concept on a hostel-booking profile).
+// The always-repeating orbit/float orb decorations were removed too — they
+// ran continuously even when scrolled off-screen for pure decoration. What's
+// left is calmer and reads as more premium: shimmer ring + a single
+// entrance fade/slide.
+//
+// New: `joinedDate` is now wired to real data (Firebase Auth account
+// creation time) instead of being an unused prop, stat tiles are tappable,
+// and there's a quick Edit button next to the name.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:math' as math;
@@ -12,7 +24,6 @@ import 'package:flutter/services.dart';
 
 import 'profile_constants.dart';
 import 'profile_widgets.dart';
-import 'profile_upload.dart';
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  ProfileHero
@@ -34,15 +45,12 @@ class ProfileHero extends StatefulWidget {
     required this.onAvatarTap,
     required this.onNotifTap,
     required this.onShareTap,
+    this.onEditTap,
+    this.onBookingsTap,
+    this.onSavedTap,
     this.scrollController,
-    this.accentColor,
     this.coverGradientColors,
     this.joinedDate,
-    this.location,
-    this.followersCount,
-    this.isFollowing = false,
-    this.onFollowTap,
-    this.onEditTap,
   });
 
   final String name;
@@ -59,15 +67,12 @@ class ProfileHero extends StatefulWidget {
   final VoidCallback onAvatarTap;
   final VoidCallback onNotifTap;
   final VoidCallback onShareTap;
+  final VoidCallback? onEditTap;
+  final VoidCallback? onBookingsTap;
+  final VoidCallback? onSavedTap;
   final ScrollController? scrollController;
-  final Color? accentColor;
   final List<Color>? coverGradientColors;
   final DateTime? joinedDate;
-  final String? location;
-  final int? followersCount;
-  final bool isFollowing;
-  final VoidCallback? onFollowTap;
-  final VoidCallback? onEditTap;
 
   @override
   State<ProfileHero> createState() => _ProfileHeroState();
@@ -77,14 +82,11 @@ class _ProfileHeroState extends State<ProfileHero>
     with TickerProviderStateMixin {
   late final AnimationController _shimmerCtrl;
   late final AnimationController _entranceCtrl;
-  late final AnimationController _orbitCtrl;
-  late final AnimationController _floatCtrl;
 
   late final Animation<double> _shimmerAnim;
   late final Animation<double> _fadeIn;
   late final Animation<Offset> _slideUp;
   late final Animation<double> _statsReveal;
-  late final Animation<double> _floatAnim;
 
   double _parallaxOffset = 0;
 
@@ -101,16 +103,6 @@ class _ProfileHeroState extends State<ProfileHero>
       vsync: this,
       duration: const Duration(milliseconds: 1100),
     )..forward();
-
-    _orbitCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 12),
-    )..repeat();
-
-    _floatCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 3200),
-    )..repeat(reverse: true);
 
     _shimmerAnim = Tween<double>(begin: -2, end: 2).animate(
       CurvedAnimation(parent: _shimmerCtrl, curve: Curves.easeInOutSine),
@@ -134,10 +126,6 @@ class _ProfileHeroState extends State<ProfileHero>
       curve: const Interval(0.45, 1.0, curve: Curves.easeOutBack),
     );
 
-    _floatAnim = Tween<double>(begin: -4, end: 4).animate(
-      CurvedAnimation(parent: _floatCtrl, curve: Curves.easeInOutSine),
-    );
-
     widget.scrollController?.addListener(_onScroll);
   }
 
@@ -153,8 +141,6 @@ class _ProfileHeroState extends State<ProfileHero>
   void dispose() {
     _shimmerCtrl.dispose();
     _entranceCtrl.dispose();
-    _orbitCtrl.dispose();
-    _floatCtrl.dispose();
     widget.scrollController?.removeListener(_onScroll);
     super.dispose();
   }
@@ -195,84 +181,69 @@ class _ProfileHeroState extends State<ProfileHero>
         parallaxOffset: _parallaxOffset,
         gradientColors: widget.coverGradientColors ?? kHeroGradientColors,
         child: AnimatedBuilder(
-          animation: Listenable.merge(
-              [_entranceCtrl, _shimmerCtrl, _orbitCtrl, _floatCtrl]),
+          animation: Listenable.merge([_entranceCtrl, _shimmerCtrl]),
           builder: (context, _) {
-            return Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // Floating orb decorations
-                _OrbDecoration(
-                  orbitAnim: _orbitCtrl,
-                  floatAnim: _floatAnim,
-                  accentColor: widget.accentColor ?? kAccent,
-                ),
-
-                SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        FadeTransition(
-                          opacity: _fadeIn,
-                          child: _TopBar(
-                            unread: widget.unread,
-                            onNotifTap: () {
-                              HapticFeedback.lightImpact();
-                              widget.onNotifTap();
-                            },
-                            onShareTap: () {
-                              HapticFeedback.lightImpact();
-                              widget.onShareTap();
-                            },
-                          ),
-                        ),
-                        const SizedBox(height: 28),
-                        SlideTransition(
-                          position: _slideUp,
-                          child: FadeTransition(
-                            opacity: _fadeIn,
-                            child: _AvatarAndName(
-                              name: widget.name,
-                              email: widget.email,
-                              photoUrl: widget.photoUrl,
-                              roleTheme: _roleTheme,
-                              uploading: widget.uploading,
-                              uploadProgress: widget.uploadProgress,
-                              pulseAnim: widget.pulseAnim,
-                              shimmerAnim: _shimmerAnim,
-                              onAvatarTap: () {
-                                HapticFeedback.mediumImpact();
-                                widget.onAvatarTap();
-                              },
-                              location: widget.location,
-                              joinedDate: widget.joinedDate,
-                              isFollowing: widget.isFollowing,
-                              onFollowTap: widget.onFollowTap,
-                              onEditTap: widget.onEditTap,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 28),
-                        ScaleTransition(
-                          scale: _statsReveal,
-                          child: FadeTransition(
-                            opacity: _statsReveal,
-                            child: _StatsRow(
-                              bookings: widget.bookings,
-                              saved: widget.saved,
-                              rating: _ratingLabel,
-                              followers: widget.followersCount,
-                            ),
-                          ),
-                        ),
-                      ],
+            return SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    FadeTransition(
+                      opacity: _fadeIn,
+                      child: _TopBar(
+                        unread: widget.unread,
+                        onNotifTap: () {
+                          HapticFeedback.lightImpact();
+                          widget.onNotifTap();
+                        },
+                        onShareTap: () {
+                          HapticFeedback.lightImpact();
+                          widget.onShareTap();
+                        },
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 28),
+                    SlideTransition(
+                      position: _slideUp,
+                      child: FadeTransition(
+                        opacity: _fadeIn,
+                        child: _AvatarAndName(
+                          name: widget.name,
+                          email: widget.email,
+                          photoUrl: widget.photoUrl,
+                          roleTheme: _roleTheme,
+                          uploading: widget.uploading,
+                          uploadProgress: widget.uploadProgress,
+                          pulseAnim: widget.pulseAnim,
+                          shimmerAnim: _shimmerAnim,
+                          onAvatarTap: () {
+                            HapticFeedback.mediumImpact();
+                            widget.onAvatarTap();
+                          },
+                          joinedDate: widget.joinedDate,
+                          onEditTap: widget.onEditTap,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    ScaleTransition(
+                      scale: _statsReveal,
+                      child: FadeTransition(
+                        opacity: _statsReveal,
+                        child: _StatsRow(
+                          bookings: widget.bookings,
+                          saved: widget.saved,
+                          rating: _ratingLabel,
+                          onBookingsTap: widget.onBookingsTap,
+                          onSavedTap: widget.onSavedTap,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             );
           },
         ),
@@ -282,7 +253,7 @@ class _ProfileHeroState extends State<ProfileHero>
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  _HeroShell — parallax container with mesh gradient + noise painter
+//  _HeroShell — parallax container with mesh gradient + dot-grid painter
 // ══════════════════════════════════════════════════════════════════════════════
 class _HeroShell extends StatelessWidget {
   const _HeroShell({
@@ -309,10 +280,7 @@ class _HeroShell extends StatelessWidget {
         ),
         child: CustomPaint(
           painter: _MeshNoisePainter(offset: parallaxOffset),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 0, sigmaY: 0),
-            child: child,
-          ),
+          child: child,
         ),
       ),
     );
@@ -320,7 +288,9 @@ class _HeroShell extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  _MeshNoisePainter — dot grid + sweeping arc + noise overlay
+//  _MeshNoisePainter — dot grid + radial glow. Only repaints when the
+//  parallax scroll offset changes, so it's cheap while the user isn't
+//  actively scrolling — no perpetual animation ticker behind it.
 // ══════════════════════════════════════════════════════════════════════════════
 class _MeshNoisePainter extends CustomPainter {
   const _MeshNoisePainter({this.offset = 0});
@@ -332,7 +302,6 @@ class _MeshNoisePainter extends CustomPainter {
       ..color = Colors.white.withValues(alpha: .055)
       ..style = PaintingStyle.fill;
 
-    // Dot grid with parallax
     const spacing = 28.0;
     final rows = (size.height / spacing).ceil() + 2;
     final cols = (size.width / spacing).ceil() + 2;
@@ -344,20 +313,6 @@ class _MeshNoisePainter extends CustomPainter {
           dotPaint,
         );
       }
-    }
-
-    // Diagonal accent stroke
-    final strokePaint = Paint()
-      ..color = Colors.white.withValues(alpha: .06)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-    for (var i = -4; i < 12; i++) {
-      final x = i * 80.0;
-      canvas.drawLine(
-        Offset(x - offset * 0.5, 0),
-        Offset(x + size.height * 0.6 - offset * 0.5, size.height),
-        strokePaint,
-      );
     }
 
     // Radial glow at top-right
@@ -381,95 +336,7 @@ class _MeshNoisePainter extends CustomPainter {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  _OrbDecoration — floating translucent orbs that orbit slowly
-// ══════════════════════════════════════════════════════════════════════════════
-class _OrbDecoration extends StatelessWidget {
-  const _OrbDecoration({
-    required this.orbitAnim,
-    required this.floatAnim,
-    required this.accentColor,
-  });
-
-  final Animation<double> orbitAnim;
-  final Animation<double> floatAnim;
-  final Color accentColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: AnimatedBuilder(
-          animation: Listenable.merge([orbitAnim, floatAnim]),
-          builder: (_, __) {
-            final t = orbitAnim.value * 2 * math.pi;
-            return Stack(
-              children: [
-                // Large background orb
-                Positioned(
-                  right: -60 + math.sin(t * 0.4) * 18,
-                  top: -40 + floatAnim.value,
-                  child: _Orb(
-                    size: 200,
-                    color: accentColor.withValues(alpha: .12),
-                    blur: 40,
-                  ),
-                ),
-                // Medium orb
-                Positioned(
-                  left: -30 + math.cos(t * 0.3) * 12,
-                  bottom: 60 + math.sin(t * 0.5) * 8,
-                  child: _Orb(
-                    size: 130,
-                    color: Colors.white.withValues(alpha: .07),
-                    blur: 30,
-                  ),
-                ),
-                // Small accent orb
-                Positioned(
-                  right: 40 + math.cos(t * 0.6) * 10,
-                  bottom: 80 + math.sin(t * 0.7) * 6,
-                  child: _Orb(
-                    size: 60,
-                    color: accentColor.withValues(alpha: .18),
-                    blur: 20,
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _Orb extends StatelessWidget {
-  const _Orb({
-    required this.size,
-    required this.color,
-    required this.blur,
-  });
-
-  final double size;
-  final Color color;
-  final double blur;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          boxShadow: [
-            BoxShadow(color: color, blurRadius: blur, spreadRadius: blur * 0.3)
-          ],
-        ),
-      );
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  _TopBar — back + notification badge + share + optional edit
+//  _TopBar — back + notification badge + share
 // ══════════════════════════════════════════════════════════════════════════════
 class _TopBar extends StatelessWidget {
   const _TopBar({
@@ -621,7 +488,7 @@ class _NotifButton extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  _AvatarAndName — shimmer ring + name + meta + action buttons
+//  _AvatarAndName — shimmer ring + name + meta + edit button
 // ══════════════════════════════════════════════════════════════════════════════
 class _AvatarAndName extends StatelessWidget {
   const _AvatarAndName({
@@ -634,10 +501,7 @@ class _AvatarAndName extends StatelessWidget {
     required this.pulseAnim,
     required this.shimmerAnim,
     required this.onAvatarTap,
-    this.location,
     this.joinedDate,
-    this.isFollowing = false,
-    this.onFollowTap,
     this.onEditTap,
   });
 
@@ -650,10 +514,7 @@ class _AvatarAndName extends StatelessWidget {
   final Animation<double> pulseAnim;
   final Animation<double> shimmerAnim;
   final VoidCallback onAvatarTap;
-  final String? location;
   final DateTime? joinedDate;
-  final bool isFollowing;
-  final VoidCallback? onFollowTap;
   final VoidCallback? onEditTap;
 
   @override
@@ -714,38 +575,16 @@ class _AvatarAndName extends StatelessWidget {
                 _RolePill(theme: roleTheme),
                 const SizedBox(height: 10),
 
-                // Meta row
-                if (location != null || joinedDate != null)
-                  _MetaRow(location: location, joinedDate: joinedDate),
+                if (joinedDate != null) _MetaChip(joinedDate: joinedDate!),
 
                 const SizedBox(height: 12),
 
-                // Action buttons
-                Row(
-                  children: [
-                    if (onEditTap != null)
-                      _MiniActionButton(
-                        label: 'Edit',
-                        icon: Icons.edit_rounded,
-                        onTap: onEditTap!,
-                        filled: true,
-                      ),
-                    if (onFollowTap != null) ...[
-                      if (onEditTap != null) const SizedBox(width: 8),
-                      _MiniActionButton(
-                        label: isFollowing ? 'Following' : 'Follow',
-                        icon: isFollowing
-                            ? Icons.check_rounded
-                            : Icons.person_add_rounded,
-                        onTap: () {
-                          HapticFeedback.mediumImpact();
-                          onFollowTap!();
-                        },
-                        filled: !isFollowing,
-                      ),
-                    ],
-                  ],
-                ),
+                if (onEditTap != null)
+                  _MiniActionButton(
+                    label: 'Edit Profile',
+                    icon: Icons.edit_rounded,
+                    onTap: onEditTap!,
+                  ),
               ],
             ),
           ),
@@ -956,61 +795,24 @@ class _RolePill extends StatelessWidget {
       );
 }
 
-class _MetaRow extends StatelessWidget {
-  const _MetaRow({this.location, this.joinedDate});
-  final String? location;
-  final DateTime? joinedDate;
-
-  String _formatJoined(DateTime d) {
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec'
-    ];
-    return '${months[d.month - 1]} ${d.year}';
-  }
-
-  @override
-  Widget build(BuildContext context) => Wrap(
-        spacing: 12,
-        runSpacing: 4,
-        children: [
-          if (location != null)
-            _MetaChip(
-              icon: Icons.location_on_rounded,
-              label: location!,
-            ),
-          if (joinedDate != null)
-            _MetaChip(
-              icon: Icons.calendar_today_rounded,
-              label: 'Joined ${_formatJoined(joinedDate!)}',
-            ),
-        ],
-      );
-}
-
 class _MetaChip extends StatelessWidget {
-  const _MetaChip({required this.icon, required this.label});
-  final IconData icon;
-  final String label;
+  const _MetaChip({required this.joinedDate});
+  final DateTime joinedDate;
+
+  static const _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', // ignore: format
+  ];
 
   @override
   Widget build(BuildContext context) => Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 11, color: Colors.white.withValues(alpha: .55)),
+          Icon(Icons.calendar_today_rounded,
+              size: 11, color: Colors.white.withValues(alpha: .55)),
           const SizedBox(width: 4),
           Text(
-            label,
+            'Joined ${_months[joinedDate.month - 1]} ${joinedDate.year}',
             style: TextStyle(
               fontSize: 11,
               color: Colors.white.withValues(alpha: .6),
@@ -1026,13 +828,11 @@ class _MiniActionButton extends StatefulWidget {
     required this.label,
     required this.icon,
     required this.onTap,
-    this.filled = true,
   });
 
   final String label;
   final IconData icon;
   final VoidCallback onTap;
-  final bool filled;
 
   @override
   State<_MiniActionButton> createState() => _MiniActionButtonState();
@@ -1063,6 +863,7 @@ class _MiniActionButtonState extends State<_MiniActionButton>
         onTapDown: (_) => _pressCtrl.forward(),
         onTapUp: (_) async {
           await _pressCtrl.reverse();
+          HapticFeedback.mediumImpact();
           widget.onTap();
         },
         onTapCancel: () => _pressCtrl.reverse(),
@@ -1076,25 +877,19 @@ class _MiniActionButtonState extends State<_MiniActionButton>
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 decoration: BoxDecoration(
-                  color: widget.filled
-                      ? kAccent.withValues(alpha: .85)
-                      : Colors.white.withValues(alpha: .12),
+                  color: kAccent.withValues(alpha: .85),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                    color: widget.filled
-                        ? kAccent.withValues(alpha: .4)
-                        : Colors.white.withValues(alpha: .22),
+                    color: kAccent.withValues(alpha: .4),
                     width: 1,
                   ),
-                  boxShadow: widget.filled
-                      ? [
-                          BoxShadow(
-                            color: kAccent.withValues(alpha: .35),
-                            blurRadius: 10,
-                            offset: const Offset(0, 3),
-                          )
-                        ]
-                      : null,
+                  boxShadow: [
+                    BoxShadow(
+                      color: kAccent.withValues(alpha: .35),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1120,33 +915,39 @@ class _MiniActionButtonState extends State<_MiniActionButton>
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  _StatsRow — animated counter tiles with glassmorphic cards
+//  _StatsRow — animated counter tiles with glassmorphic cards, tappable
 // ══════════════════════════════════════════════════════════════════════════════
 class _StatsRow extends StatelessWidget {
   const _StatsRow({
     required this.bookings,
     required this.saved,
     required this.rating,
-    this.followers,
+    this.onBookingsTap,
+    this.onSavedTap,
   });
 
   final int bookings;
   final int saved;
   final String rating;
-  final int? followers;
+  final VoidCallback? onBookingsTap;
+  final VoidCallback? onSavedTap;
 
   @override
   Widget build(BuildContext context) {
     final stats = [
-      (value: '$bookings', label: 'Bookings', icon: Icons.bookmark_rounded),
-      (value: '$saved', label: 'Saved', icon: Icons.favorite_rounded),
-      (value: rating, label: 'Rating', icon: Icons.star_rounded),
-      if (followers != null)
-        (
-          value: _formatFollowers(followers!),
-          label: 'Followers',
-          icon: Icons.people_rounded
-        ),
+      (
+        value: '$bookings',
+        label: 'Bookings',
+        icon: Icons.bookmark_rounded,
+        onTap: onBookingsTap,
+      ),
+      (
+        value: '$saved',
+        label: 'Saved',
+        icon: Icons.favorite_rounded,
+        onTap: onSavedTap,
+      ),
+      (value: rating, label: 'Rating', icon: Icons.star_rounded, onTap: null),
     ];
 
     return ClipRRect(
@@ -1179,6 +980,7 @@ class _StatsRow extends StatelessWidget {
                       label: stats[i].label,
                       icon: stats[i].icon,
                       delay: Duration(milliseconds: 100 * i),
+                      onTap: stats[i].onTap,
                     ),
                   ),
                   if (i < stats.length - 1)
@@ -1195,12 +997,6 @@ class _StatsRow extends StatelessWidget {
       ),
     );
   }
-
-  String _formatFollowers(int n) {
-    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
-    return '$n';
-  }
 }
 
 class _AnimatedStatTile extends StatefulWidget {
@@ -1209,12 +1005,14 @@ class _AnimatedStatTile extends StatefulWidget {
     required this.label,
     required this.icon,
     required this.delay,
+    this.onTap,
   });
 
   final String value;
   final String label;
   final IconData icon;
   final Duration delay;
+  final VoidCallback? onTap;
 
   @override
   State<_AnimatedStatTile> createState() => _AnimatedStatTileState();
@@ -1224,7 +1022,6 @@ class _AnimatedStatTileState extends State<_AnimatedStatTile>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _fadeScale;
-  bool _started = false;
 
   @override
   void initState() {
@@ -1233,10 +1030,7 @@ class _AnimatedStatTileState extends State<_AnimatedStatTile>
         vsync: this, duration: const Duration(milliseconds: 500));
     _fadeScale = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack);
     Future.delayed(widget.delay, () {
-      if (mounted) {
-        _ctrl.forward();
-        setState(() => _started = true);
-      }
+      if (mounted) _ctrl.forward();
     });
   }
 
@@ -1247,41 +1041,57 @@ class _AnimatedStatTileState extends State<_AnimatedStatTile>
   }
 
   @override
-  Widget build(BuildContext context) => ScaleTransition(
-        scale: _fadeScale,
-        child: FadeTransition(
-          opacity: _fadeScale,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(widget.icon,
-                    size: 15, color: Colors.white.withValues(alpha: .55)),
-                const SizedBox(height: 5),
-                Text(
-                  widget.value,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                    letterSpacing: -0.5,
-                    height: 1,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  widget.label,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white.withValues(alpha: .55),
-                    letterSpacing: 0.6,
-                  ),
-                ),
-              ],
+  Widget build(BuildContext context) {
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(widget.icon,
+              size: 15, color: Colors.white.withValues(alpha: .55)),
+          const SizedBox(height: 5),
+          Text(
+            widget.value,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+              letterSpacing: -0.5,
+              height: 1,
             ),
           ),
-        ),
-      );
+          const SizedBox(height: 3),
+          Text(
+            widget.label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: Colors.white.withValues(alpha: .55),
+              letterSpacing: 0.6,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return ScaleTransition(
+      scale: _fadeScale,
+      child: FadeTransition(
+        opacity: _fadeScale,
+        child: widget.onTap == null
+            ? content
+            : Semantics(
+                button: true,
+                label: '${widget.value} ${widget.label}',
+                child: InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    widget.onTap!();
+                  },
+                  child: content,
+                ),
+              ),
+      ),
+    );
+  }
 }
