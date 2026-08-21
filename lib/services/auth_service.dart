@@ -179,6 +179,112 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  // ─── Register (Landlord — self-service) ───────────────────────
+  //
+  // Lets a landlord sign themselves up from the app, no admin
+  // involvement required. This is different from
+  // `createLandlordAccount` (below), which is the admin-driven flow.
+  //
+  // Flow:
+  //   1. Create the Firebase Auth account directly (this signs the
+  //      new landlord in immediately, same as registerStudent).
+  //   2. Create the `landlords` doc — stamped with
+  //      `registered_by: 'self'` and `verified: false` so the admin
+  //      panel can flag it for review.
+  //   3. Create the `users` doc with role: 'landlord' + landlord_id
+  //      pointing back at the landlord doc.
+  //
+  // If step 2 or 3 fails after the Auth account was already created,
+  // we best-effort delete the orphaned Auth account so the person can
+  // simply try registering again with the same email.
+
+  Future<bool> registerLandlord({
+    required String businessName,
+    required String email,
+    required String phone,
+    required String address,
+    required String password,
+  }) async {
+    _setLoading(true);
+    _clearError();
+
+    User? createdUser;
+    try {
+      final cred = await _auth.createUserWithEmailAndPassword(
+        email: email.trim(),
+        password: password.trim(),
+      );
+      createdUser = cred.user;
+      final uid = createdUser!.uid;
+
+      final landlordCode = _generateLandlordCode(businessName, phone);
+
+      final landlordRef = await _db.collection('landlords').add({
+        'full_name': businessName.trim(),
+        'email': email.trim(),
+        'phone': phone.trim(),
+        'address': address.trim(),
+        'landlord_code': landlordCode,
+        'profile_image': '',
+        'auth_uid': uid,
+        'registered_at': FieldValue.serverTimestamp(),
+        // Self-service signup — flagged for admin review until verified.
+        'registered_by': 'self',
+        'verified': false,
+      });
+
+      await _db.collection('users').doc(uid).set({
+        'uid': uid,
+        'username': businessName.trim(),
+        'email': email.trim(),
+        'phone': phone.trim(),
+        'role': 'landlord',
+        'landlord_id': landlordRef.id,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      _currentUser = UserModel(
+        id: uid,
+        username: businessName.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        role: 'landlord',
+        landlordId: landlordRef.id,
+      );
+      _sessionLoaded = true;
+      notifyListeners();
+      return true;
+    } on FirebaseAuthException catch (e) {
+      _setError(_authError(e.code));
+      return false;
+    } catch (e) {
+      debugPrint('AuthService: landlord self-registration failed — $e');
+      // Roll back the Auth account so a retry with the same email
+      // doesn't hit "email-already-in-use" for a broken registration.
+      try {
+        await createdUser?.delete();
+      } catch (_) {
+        // If deletion needs a recent login we can't force it here —
+        // not fatal, the person can still contact support.
+      }
+      _setError('Registration failed. Please try again.');
+      return false;
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  /// Mirrors the admin dialog's auto-code logic: uppercase name (no
+  /// spaces) + last 3 digits of phone, so self-registered and
+  /// admin-created landlords get consistent-looking codes.
+  String _generateLandlordCode(String name, String phone) {
+    final n = name.trim().replaceAll(' ', '').toUpperCase();
+    final p = phone.trim();
+    if (n.isEmpty) return 'LL${DateTime.now().millisecondsSinceEpoch}';
+    if (p.length >= 3) return '$n-${p.substring(p.length - 3)}';
+    return n.length > 6 ? n.substring(0, 6) : n;
+  }
+
   // ─── Create Landlord Account (Admin only) ─────────────────────
   //
   // Flow:
@@ -235,6 +341,8 @@ class AuthService extends ChangeNotifier {
       // ── 3. Stamp auth_uid onto the landlords doc ──────────────
       await _db.collection('landlords').doc(landlordDocId).update({
         'auth_uid': newUid,
+        'registered_by': 'admin',
+        'verified': true,
       });
 
       debugPrint(
@@ -329,7 +437,111 @@ class AuthService extends ChangeNotifier {
       _setLoading(false);
     }
   }
+  // ─── Update Landlord Profile (name/phone/address) ─────────────
+  //
+  // Unlike the generic `updateProfile` above (which only touches the
+  // `users` doc), this also syncs the `landlords/{id}` doc — that's
+  // the collection the admin panels (LandlordsPane, UsersPane) actually
+  // read from, so without this a landlord's own edits would silently
+  // never show up for admins.
 
+  Future<({bool success, String? error})> updateLandlordProfile({
+    required String fullName,
+    required String phone,
+    required String address,
+  }) async {
+    final uid = _auth.currentUser?.uid;
+    final landlordId = _currentUser?.landlordId;
+    if (uid == null) return (success: false, error: 'Not logged in.');
+    if (landlordId == null) {
+      return (success: false, error: 'No linked landlord record.');
+    }
+
+    _setLoading(true);
+    _clearError();
+    try {
+      await _db.collection('users').doc(uid).update({
+        'username': fullName.trim(),
+        'phone': phone.trim(),
+      });
+      await _db.collection('landlords').doc(landlordId).update({
+        'full_name': fullName.trim(),
+        'phone': phone.trim(),
+        'address': address.trim(),
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+
+      _currentUser = _currentUser?.copyWith(
+        username: fullName.trim(),
+        phone: phone.trim(),
+      );
+      notifyListeners();
+      return (success: true, error: null);
+    } catch (e) {
+      final msg = 'Profile update failed. Please try again.';
+      _setError(msg);
+      return (success: false, error: msg);
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  // ─── Change Email ───────────────────────────────────────────────
+  //
+  // Requires re-auth like changePassword. Uses verifyBeforeUpdateEmail
+  // rather than the old updateEmail() — Firebase now requires this on
+  // most projects. IMPORTANT: this sends a confirmation link to the
+  // NEW address; the Auth login email does NOT change until that link
+  // is clicked. We stamp a `pending_email` field on both docs so the
+  // UI (and admin, if you want to surface it later) can show "change
+  // in progress" without prematurely overwriting the still-active
+  // login email.
+
+  Future<({bool success, String? error})> changeEmail({
+    required String currentPassword,
+    required String newEmail,
+  }) async {
+    final firebaseUser = _auth.currentUser;
+    if (firebaseUser == null || firebaseUser.email == null) {
+      return (success: false, error: 'Not logged in.');
+    }
+    final uid = firebaseUser.uid;
+    final trimmedNewEmail = newEmail.trim();
+
+    _setLoading(true);
+    _clearError();
+    try {
+      final credential = EmailAuthProvider.credential(
+        email: firebaseUser.email!,
+        password: currentPassword.trim(),
+      );
+      await firebaseUser.reauthenticateWithCredential(credential);
+
+      await firebaseUser.verifyBeforeUpdateEmail(trimmedNewEmail);
+
+      await _db.collection('users').doc(uid).update({
+        'pending_email': trimmedNewEmail,
+      });
+      if (_currentUser?.landlordId != null) {
+        await _db
+            .collection('landlords')
+            .doc(_currentUser!.landlordId)
+            .update({'pending_email': trimmedNewEmail});
+      }
+
+      return (success: true, error: null);
+    } on FirebaseAuthException catch (e) {
+      final msg = _authError(e.code);
+      _setError(msg);
+      return (success: false, error: msg);
+    } catch (e) {
+      final msg = 'Email change failed. Please try again.';
+      _setError(msg);
+      return (success: false, error: msg);
+    } finally {
+      _setLoading(false);
+    }
+  }
   // ─── Logout ───────────────────────────────────────────────────
 
   Future<void> logout() async {

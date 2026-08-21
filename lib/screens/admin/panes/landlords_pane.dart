@@ -296,6 +296,7 @@ class _LandlordsPaneState extends State<LandlordsPane> {
                     confirmDelete(context, 'landlords', docs[i].id);
                   },
                   onViewHostels: () => _showHostelsSheet(context, docs[i]),
+                  onVerify: () => _verifyLandlord(docs[i]),
                 ),
               );
             },
@@ -310,6 +311,20 @@ class _LandlordsPaneState extends State<LandlordsPane> {
         context: context,
         builder: (_) => _LandlordDialog(parentContext: context),
       );
+
+  Future<void> _verifyLandlord(
+      QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
+    await doc.reference.update({'verified': true});
+    final name = doc.data()['full_name']?.toString() ?? 'Unknown';
+    await ActivityLogger.log(
+        action: 'Verified Landlord', details: 'Name: $name');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$name marked as verified'),
+        backgroundColor: kGreen,
+      ));
+    }
+  }
 
   void _openEdit(QueryDocumentSnapshot<Map<String, dynamic>> doc) => showDialog(
         context: context,
@@ -456,12 +471,14 @@ class _LandlordCard extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onViewHostels,
+    required this.onVerify,
   });
 
   final QueryDocumentSnapshot<Map<String, dynamic>> doc;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onViewHostels;
+  final VoidCallback onVerify;
 
   @override
   Widget build(BuildContext context) {
@@ -483,6 +500,8 @@ class _LandlordCard extends StatelessWidget {
     if (registeredAt is Timestamp) {
       registeredStr = DateFormat('dd MMM yyyy').format(registeredAt.toDate());
     }
+    final verified = d['verified'] == true;
+    final registeredBy = d['registered_by']?.toString() ?? 'admin';
 
     final initials = name.trim().isNotEmpty
         ? name
@@ -556,21 +575,71 @@ class _LandlordCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: kGreen.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          code,
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: kGreen,
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: kGreen.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              code,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: kGreen,
+                              ),
+                            ),
                           ),
-                        ),
+                          if (registeredBy == 'self')
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Text(
+                                'SELF-REGISTERED',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.blue,
+                                ),
+                              ),
+                            ),
+                          if (!verified)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF7ED),
+                                borderRadius: BorderRadius.circular(20),
+                                border:
+                                    Border.all(color: const Color(0xFFFED7AA)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.hourglass_top_rounded,
+                                      size: 9, color: Color(0xFFEA580C)),
+                                  SizedBox(width: 3),
+                                  Text(
+                                    'PENDING REVIEW',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFFEA580C),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
@@ -610,6 +679,13 @@ class _LandlordCard extends StatelessWidget {
                       color: Colors.blue,
                       onTap: onViewHostels,
                     ),
+                    if (!verified)
+                      _CardBtn(
+                        icon: Icons.verified_rounded,
+                        label: 'Verify',
+                        color: Colors.green,
+                        onTap: onVerify,
+                      ),
                     _CardBtn(
                       icon: Icons.edit_outlined,
                       label: 'Edit',

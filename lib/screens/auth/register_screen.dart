@@ -154,8 +154,9 @@ class _RegisterScreenState extends State<RegisterScreen>
         onTogglePass: () => setState(() => _passVisible = !_passVisible),
         onToggleConfirmPass: () =>
             setState(() => _confirmPassVisible = !_confirmPassVisible),
-        onSubmit: _submit,
+                onSubmit: _submit,
         onLogin: () => context.go('/login'),
+        onLandlordRegister: () => context.go('/landlord-register'),
         narrow: narrow,
       ),
     );
@@ -362,6 +363,7 @@ class _FormPanel extends StatelessWidget {
     required this.onToggleConfirmPass,
     required this.onSubmit,
     required this.onLogin,
+    required this.onLandlordRegister,
     required this.narrow,
   });
 
@@ -374,6 +376,7 @@ class _FormPanel extends StatelessWidget {
   final bool passVisible, confirmPassVisible, loading, narrow;
   final String? error;
   final VoidCallback onTogglePass, onToggleConfirmPass, onLogin;
+  final VoidCallback onLandlordRegister;
   final Future<void> Function() onSubmit;
 
   static const _green = Color(0xFF0D3D2B);
@@ -538,7 +541,7 @@ class _FormPanel extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
 
-                  // Already have account
+                                   // Already have an account
                   _FadeSlide(
                     anim: anims[7],
                     child: Center(
@@ -557,6 +560,21 @@ class _FormPanel extends StatelessWidget {
                                     weight: FontWeight.w700)),
                           ),
                         ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _FadeSlide(
+                    anim: anims[7],
+                    child: Center(
+                      child: GestureDetector(
+                        onTap: onLandlordRegister,
+                        child: Text(
+                            'List a property instead? Register as a landlord',
+                            style: _body(
+                                color: _green,
+                                size: 13,
+                                weight: FontWeight.w600)),
                       ),
                     ),
                   ),

@@ -188,6 +188,7 @@ class _UsersPaneState extends State<UsersPane>
                           docs: landlords,
                           totalLandlords: landlordDocs.length,
                           onDelete: (doc) => _confirmDelete(context, doc),
+                          onVerify: (doc) => _verifyLandlord(context, doc),
                         ),
                         _StudentsTab(
                           docs: students,
@@ -254,6 +255,17 @@ class _UsersPaneState extends State<UsersPane>
         },
       ),
     );
+  }
+
+  // ── Verify landlord ───────────────────────────────────────────────────────
+  Future<void> _verifyLandlord(
+      BuildContext ctx, QueryDocumentSnapshot doc) async {
+    final data = doc.data() as Map<String, dynamic>;
+    final name = data['full_name'] ?? data['username'] ?? 'this landlord';
+    await doc.reference.update({'verified': true});
+    if (ctx.mounted) {
+      _showSnack(ctx, '$name marked as verified.', const Color(0xFF1B4332));
+    }
   }
 
   // ── Delete confirm ────────────────────────────────────────────────────────
@@ -471,10 +483,12 @@ class _LandlordsTab extends StatelessWidget {
     required this.docs,
     required this.totalLandlords,
     required this.onDelete,
+    required this.onVerify,
   });
   final List<QueryDocumentSnapshot> docs;
   final int totalLandlords;
   final void Function(QueryDocumentSnapshot) onDelete;
+  final void Function(QueryDocumentSnapshot) onVerify;
 
   @override
   Widget build(BuildContext context) {
@@ -501,6 +515,7 @@ class _LandlordsTab extends StatelessWidget {
                     index: i,
                     doc: docs[i],
                     onDelete: onDelete,
+                    onVerify: onVerify,
                   ),
                 ),
         ),
@@ -574,10 +589,12 @@ class _LandlordCard extends StatelessWidget {
     required this.index,
     required this.doc,
     required this.onDelete,
+    required this.onVerify,
   });
   final int index;
   final QueryDocumentSnapshot doc;
   final void Function(QueryDocumentSnapshot) onDelete;
+  final void Function(QueryDocumentSnapshot) onVerify;
 
   static const _avatarColors = [
     Color(0xFF6A1B9A),
@@ -600,6 +617,7 @@ class _LandlordCard extends StatelessWidget {
     // Extra landlord-specific fields
     final hostelCount = d['hostelCount']?.toString() ?? '—';
     final verified = d['verified'] == true;
+    final registeredBy = d['registered_by']?.toString() ?? 'admin';
 
     return Container(
       decoration: BoxDecoration(
@@ -682,7 +700,7 @@ class _LandlordCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      // Verified badge
+                      // Verified / pending badge
                       if (verified)
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -707,7 +725,49 @@ class _LandlordCard extends StatelessWidget {
                                       color: Color(0xFF1B4332))),
                             ],
                           ),
+                        )
+                      else
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF7ED),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: const Color(0xFFFED7AA), width: 0.8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.hourglass_top_rounded,
+                                  size: 9, color: Color(0xFFEA580C)),
+                              SizedBox(width: 3),
+                              Text('pending review',
+                                  style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFFEA580C))),
+                            ],
+                          ),
                         ),
+                      if (registeredBy == 'self') ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: Colors.blue.shade200, width: 0.8),
+                          ),
+                          child: Text('self-registered',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.blue.shade700)),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 3),
@@ -749,12 +809,26 @@ class _LandlordCard extends StatelessWidget {
             ),
             const SizedBox(width: 10),
 
-            // Delete button
-            _ActionIconBtn(
-              icon: Icons.person_remove_outlined,
-              color: Colors.red.shade600,
-              bgColor: Colors.red.shade50,
-              onTap: () => onDelete(doc),
+            const SizedBox(width: 10),
+
+            // Verify + Delete buttons
+            Column(
+              children: [
+                if (!verified)
+                  _ActionIconBtn(
+                    icon: Icons.verified_rounded,
+                    color: Colors.green.shade700,
+                    bgColor: Colors.green.shade50,
+                    onTap: () => onVerify(doc),
+                  ),
+                if (!verified) const SizedBox(height: 8),
+                _ActionIconBtn(
+                  icon: Icons.person_remove_outlined,
+                  color: Colors.red.shade600,
+                  bgColor: Colors.red.shade50,
+                  onTap: () => onDelete(doc),
+                ),
+              ],
             ),
           ],
         ),

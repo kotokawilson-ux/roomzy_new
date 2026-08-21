@@ -1,50 +1,55 @@
-// lib/screens/auth/login_screen.dart
+// lib/screens/auth/landlord_register_screen.dart
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import '../../../../utils/activity_logger.dart';
+
 import '../../services/auth_service.dart';
-import 'package:onesignal_flutter/onesignal_flutter.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../utils/activity_logger.dart';
 // ─────────────────────────────────────────────────────────────────────────────
-// DESIGN:
-//  • Deep forest green (#0D3D2B) hero panel + warm cream (#F8F6F1) form panel
-//  • Desktop: side-by-side split layout | Mobile: stacked compact hero + form
-//  • Decorative overlapping circles for depth on the green panel
-//  • Staggered fade+slide entrance animations via AnimationController
-//  • Press-scale micro-interaction on the login button
+// LandlordRegisterScreen — self-service landlord signup.
+//  • Same green/cream split aesthetic as LoginScreen / RegisterScreen
+//  • Fields: business/full name, email, phone, address, password, confirm
+//  • Wired to AuthService.registerLandlord()
+//  • New landlords land in `verified: false` state — a "Pending Review"
+//    banner explains this, and the admin panel surfaces it for approval.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+class LandlordRegisterScreen extends StatefulWidget {
+  const LandlordRegisterScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<LandlordRegisterScreen> createState() =>
+      _LandlordRegisterScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen>
+class _LandlordRegisterScreenState extends State<LandlordRegisterScreen>
     with SingleTickerProviderStateMixin {
-  // ── Palette ─────────────────────────────────────────────────────────────
   static const _green = Color(0xFF0D3D2B);
   static const _cream = Color(0xFFF8F6F1);
 
-  // ── Entrance animation ───────────────────────────────────────────────────
   late final AnimationController _ctrl;
   late final List<Animation<double>> _anims;
 
-  // ── Form state ───────────────────────────────────────────────────────────
+  final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _confirmPassCtrl = TextEditingController();
+
   bool _passVisible = false;
+  bool _confirmPassVisible = false;
+  bool _loading = false;
+  String? _localError;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1100));
-    _anims = List.generate(6, (i) {
-      final start = (i * 0.13).clamp(0.0, 0.9);
-      final end = (start + 0.5).clamp(0.0, 1.0);
+    _anims = List.generate(9, (i) {
+      final start = (i * 0.09).clamp(0.0, 0.9);
+      final end = (start + 0.45).clamp(0.0, 1.0);
       return CurvedAnimation(
           parent: _ctrl,
           curve: Interval(start, end, curve: Curves.easeOutCubic));
@@ -55,69 +60,58 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void dispose() {
     _ctrl.dispose();
+    _nameCtrl.dispose();
     _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    _addressCtrl.dispose();
     _passCtrl.dispose();
+    _confirmPassCtrl.dispose();
     super.dispose();
   }
 
-  // ── UPDATED: role-based redirect after login ─────────────────────────────
   Future<void> _submit() async {
-    final email = _emailCtrl.text.trim();
-    final pass = _passCtrl.text.trim();
+    setState(() => _localError = null);
 
-    if (email.isEmpty || pass.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill in all fields.')),
-      );
+    final name = _nameCtrl.text.trim();
+    final email = _emailCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    final address = _addressCtrl.text.trim();
+    final pass = _passCtrl.text.trim();
+    final confirm = _confirmPassCtrl.text.trim();
+
+    if (name.isEmpty || email.isEmpty || phone.isEmpty || pass.isEmpty) {
+      setState(() => _localError = 'Please fill in all required fields.');
+      return;
+    }
+    if (pass != confirm) {
+      setState(() => _localError = 'Passwords do not match.');
+      return;
+    }
+    if (pass.length < 6) {
+      setState(() => _localError = 'Password must be at least 6 characters.');
       return;
     }
 
+    setState(() => _loading = true);
     final authService = context.read<AuthService>();
-    final success = await authService.loginStudent(email, pass);
-
+    final success = await authService.registerLandlord(
+      businessName: name,
+      email: email,
+      phone: phone,
+      address: address,
+      password: pass,
+    );
     if (!mounted) return;
+    setState(() => _loading = false);
 
     if (success) {
       await ActivityLogger.log(
-        action: 'User Login',
-        details: 'Email: $email, Role: ${authService.userRole}',
+        action: 'Landlord Self-Registered',
+        details: 'Name: $name, Email: $email',
       );
-      final role = authService.userRole;
-      if (role == 'admin') {
-        await _registerAdminPushId(authService.currentUser?.id);
-        context.go('/admin');
-      } else if (role == 'landlord') {
-        context.go('/landlord');
-      } else if (role == 'student') {
-        context.go('/home');
-      } else {
-        // Should be unreachable now that _signIn blocks bad profiles,
-        // but never silently fall through to a page.
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Login failed. Please try again.')),
-        );
-      }
+      context.go('/landlord');
     }
-    // On failure, authService.errorMessage is set — the Consumer below rebuilds.
-  }
-
-  Future<void> _forgotPassword() async {
-    if (_emailCtrl.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Enter your email first, then tap Forgot Password.')),
-      );
-      return;
-    }
-    final authService = context.read<AuthService>();
-    final error = await authService.sendPasswordReset(_emailCtrl.text.trim());
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(error ?? 'Password reset email sent! Check your inbox.'),
-        backgroundColor: error != null ? Colors.red : const Color(0xFF0D3D2B),
-      ),
-    );
+    // On failure, authService.errorMessage is set → Consumer rebuilds.
   }
 
   @override
@@ -149,16 +143,22 @@ class _LoginScreenState extends State<LoginScreen>
     return Consumer<AuthService>(
       builder: (context, auth, _) => _FormPanel(
         anims: _anims,
+        nameCtrl: _nameCtrl,
         emailCtrl: _emailCtrl,
+        phoneCtrl: _phoneCtrl,
+        addressCtrl: _addressCtrl,
         passCtrl: _passCtrl,
+        confirmPassCtrl: _confirmPassCtrl,
         passVisible: _passVisible,
-        loading: auth.isLoading,
-        error: auth.errorMessage,
+        confirmPassVisible: _confirmPassVisible,
+        loading: _loading || auth.isLoading,
+        error: _localError ?? auth.errorMessage,
         onTogglePass: () => setState(() => _passVisible = !_passVisible),
+        onToggleConfirmPass: () =>
+            setState(() => _confirmPassVisible = !_confirmPassVisible),
         onSubmit: _submit,
-        onForgotPassword: _forgotPassword,
-        onRegister: () => context.go('/register'),
-        onLandlordRegister: () => context.go('/landlord-register'),
+        onLogin: () => context.go('/login'),
+        onStudentInstead: () => context.go('/register'),
         narrow: narrow,
       ),
     );
@@ -166,7 +166,7 @@ class _LoginScreenState extends State<LoginScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HERO PANEL (desktop full-height left panel)
+// HERO PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 class _HeroPanel extends StatelessWidget {
   const _HeroPanel({required this.anims});
@@ -193,30 +193,25 @@ class _HeroPanel extends StatelessWidget {
           ),
           child: Stack(children: [
             _circle(
-                size: 240,
-                top: -80,
-                right: -80,
+                size: 220,
+                top: -70,
+                right: -70,
                 color: Colors.white.withOpacity(0.04)),
             _circle(
-                size: 170,
-                bottom: 80,
-                right: -50,
+                size: 160,
+                bottom: 100,
+                right: -40,
                 color: _greenAccent.withOpacity(0.13)),
             _circle(
-                size: 210,
-                bottom: -60,
-                left: 30,
+                size: 200,
+                bottom: -50,
+                left: 20,
                 color: Colors.white.withOpacity(0.04)),
             _circle(
-                size: 70,
-                top: 130,
-                right: 70,
+                size: 60,
+                top: 120,
+                right: 80,
                 color: _greenAccent.withOpacity(0.22)),
-            _circle(
-                size: 40,
-                top: 200,
-                left: 60,
-                color: Colors.white.withOpacity(0.08)),
             Positioned.fill(
               child: SafeArea(
                 child: Padding(
@@ -230,7 +225,7 @@ class _HeroPanel extends StatelessWidget {
                       const SizedBox(height: 44),
                       _FadeSlide(
                         anim: anims[1],
-                        child: Text('Find your\nperfect room.',
+                        child: Text('List your\nproperty.',
                             style: _display(
                                 color: Colors.white, size: 42, height: 1.15)),
                       ),
@@ -238,8 +233,9 @@ class _HeroPanel extends StatelessWidget {
                       _FadeSlide(
                         anim: anims[2],
                         child: Text(
-                          'Student-friendly hostels & shared\n'
-                          'accommodation — all in one place.',
+                          'Reach thousands of students looking\n'
+                          'for their next home — manage it\n'
+                          'all from one dashboard.',
                           style: _body(
                               color: Colors.white.withOpacity(0.72), size: 15),
                         ),
@@ -289,7 +285,7 @@ class _HeroPanel extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPACT HERO (mobile top strip)
+// COMPACT HERO (mobile)
 // ─────────────────────────────────────────────────────────────────────────────
 class _CompactHero extends StatelessWidget {
   const _CompactHero({required this.anim});
@@ -335,7 +331,7 @@ class _CompactHero extends StatelessWidget {
                   children: [
                     const _Logo(onDark: true, compact: true),
                     const SizedBox(height: 12),
-                    Text('Find your perfect room.',
+                    Text('List your property.',
                         style: _display(
                             color: Colors.white, size: 22, height: 1.2)),
                   ],
@@ -355,27 +351,35 @@ class _CompactHero extends StatelessWidget {
 class _FormPanel extends StatelessWidget {
   const _FormPanel({
     required this.anims,
+    required this.nameCtrl,
     required this.emailCtrl,
+    required this.phoneCtrl,
+    required this.addressCtrl,
     required this.passCtrl,
+    required this.confirmPassCtrl,
     required this.passVisible,
+    required this.confirmPassVisible,
     required this.loading,
     required this.error,
     required this.onTogglePass,
+    required this.onToggleConfirmPass,
     required this.onSubmit,
-    required this.onForgotPassword,
-    required this.onRegister,
-    required this.onLandlordRegister,
+    required this.onLogin,
+    required this.onStudentInstead,
     required this.narrow,
   });
 
   final List<Animation<double>> anims;
-  final TextEditingController emailCtrl, passCtrl;
-  final bool passVisible, loading, narrow;
+  final TextEditingController nameCtrl,
+      emailCtrl,
+      phoneCtrl,
+      addressCtrl,
+      passCtrl,
+      confirmPassCtrl;
+  final bool passVisible, confirmPassVisible, loading, narrow;
   final String? error;
-  final VoidCallback onTogglePass;
-  final VoidCallback onForgotPassword;
-  final VoidCallback onRegister;
-  final VoidCallback onLandlordRegister;
+  final VoidCallback onTogglePass, onToggleConfirmPass, onLogin;
+  final VoidCallback onStudentInstead;
   final Future<void> Function() onSubmit;
 
   static const _green = Color(0xFF0D3D2B);
@@ -403,29 +407,58 @@ class _FormPanel extends StatelessWidget {
                         child: _Logo(onDark: false),
                       ),
                     ),
+
                   _FadeSlide(
                     anim: anims[1],
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Welcome back',
+                        Text('Become a landlord',
                             style: _display(
-                                color: _green, size: narrow ? 28 : 34)),
+                                color: _green, size: narrow ? 26 : 32)),
                         const SizedBox(height: 6),
-                        Text('Sign in to continue to your account',
+                        Text('Register your hostel and start listing rooms',
                             style: _body(
                                 color: const Color(0xFF888580), size: 14)),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 34),
+                  const SizedBox(height: 22),
+
+                  // Pending-review notice — sets the right expectation
+                  // before they even submit.
+                  _FadeSlide(
+                    anim: anims[1],
+                    child: _NoticeBanner(
+                      icon: Icons.shield_outlined,
+                      message:
+                          'Your dashboard is available right away, but new landlord accounts are reviewed by our team shortly after signup.',
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+
+                  // Error banner
                   if (error != null)
                     _FadeSlide(
                       anim: anims[1],
                       child: _ErrorBanner(message: error!),
                     ),
+
+                  // Business / full name
                   _FadeSlide(
                     anim: anims[2],
+                    child: _InputField(
+                      controller: nameCtrl,
+                      label: 'Business / Full Name',
+                      hint: 'e.g. Kofi Mensah or Golden Gate Hostel',
+                      icon: Icons.person_outline_rounded,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Email
+                  _FadeSlide(
+                    anim: anims[3],
                     child: _InputField(
                       controller: emailCtrl,
                       label: 'Email',
@@ -434,13 +467,40 @@ class _FormPanel extends StatelessWidget {
                       keyboardType: TextInputType.emailAddress,
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 16),
+
+                  // Phone
                   _FadeSlide(
-                    anim: anims[3],
+                    anim: anims[4],
+                    child: _InputField(
+                      controller: phoneCtrl,
+                      label: 'Phone Number',
+                      hint: 'Enter your phone number',
+                      icon: Icons.phone_outlined,
+                      keyboardType: TextInputType.phone,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Address
+                  _FadeSlide(
+                    anim: anims[5],
+                    child: _InputField(
+                      controller: addressCtrl,
+                      label: 'Address (optional)',
+                      hint: 'Where are you based?',
+                      icon: Icons.location_on_outlined,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Password
+                  _FadeSlide(
+                    anim: anims[6],
                     child: _InputField(
                       controller: passCtrl,
                       label: 'Password',
-                      hint: 'Enter your password',
+                      hint: 'Create a password (min. 6 chars)',
                       icon: Icons.lock_outline_rounded,
                       obscure: !passVisible,
                       suffix: GestureDetector(
@@ -458,14 +518,48 @@ class _FormPanel extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
+
+                  // Confirm password
                   _FadeSlide(
-                    anim: anims[3],
-                    child: Align(
-                      alignment: Alignment.centerRight,
+                    anim: anims[7],
+                    child: _InputField(
+                      controller: confirmPassCtrl,
+                      label: 'Confirm Password',
+                      hint: 'Repeat your password',
+                      icon: Icons.lock_outline_rounded,
+                      obscure: !confirmPassVisible,
+                      suffix: GestureDetector(
+                        onTap: onToggleConfirmPass,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 14),
+                          child: Icon(
+                            confirmPassVisible
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                            color: const Color(0xFFAAAAAA),
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+
+                  // Register button
+                  _FadeSlide(
+                    anim: anims[8],
+                    child: _RegisterButton(loading: loading, onTap: onSubmit),
+                  ),
+                  const SizedBox(height: 24),
+
+                  _FadeSlide(
+                    anim: anims[8],
+                    child: Center(
                       child: GestureDetector(
-                        onTap: onForgotPassword,
-                        child: Text('Forgot password?',
+                        onTap: onStudentInstead,
+                        child: Text('Looking for a room instead? Sign up as a student',
+                            textAlign: TextAlign.center,
                             style: _body(
                                 color: _green,
                                 size: 13,
@@ -473,14 +567,10 @@ class _FormPanel extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 20),
+
                   _FadeSlide(
-                    anim: anims[4],
-                    child: _SignInButton(loading: loading, onTap: onSubmit),
-                  ),
-                  const SizedBox(height: 30),
-                  _FadeSlide(
-                    anim: anims[4],
+                    anim: anims[8],
                     child: Row(children: [
                       Expanded(child: Divider(color: Colors.grey[300])),
                       Padding(
@@ -492,40 +582,27 @@ class _FormPanel extends StatelessWidget {
                       Expanded(child: Divider(color: Colors.grey[300])),
                     ]),
                   ),
-                  const SizedBox(height: 30),
+                  const SizedBox(height: 24),
+
+                  // Already have account
                   _FadeSlide(
-                    anim: anims[5],
+                    anim: anims[8],
                     child: Center(
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text("Don't have an account? ",
+                          Text('Already have an account? ',
                               style: _body(
                                   color: const Color(0xFF888580), size: 14)),
                           GestureDetector(
-                            onTap: onRegister,
-                            child: Text('Sign up',
+                            onTap: onLogin,
+                            child: Text('Sign in',
                                 style: _body(
                                     color: _green,
                                     size: 14,
                                     weight: FontWeight.w700)),
                           ),
                         ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  _FadeSlide(
-                    anim: anims[5],
-                    child: Center(
-                      child: GestureDetector(
-                        onTap: onLandlordRegister,
-                        child: Text(
-                            'List a property instead? Register as a landlord',
-                            style: _body(
-                                color: _green,
-                                size: 13,
-                                weight: FontWeight.w600)),
                       ),
                     ),
                   ),
@@ -541,21 +618,54 @@ class _FormPanel extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SIGN IN BUTTON with press-scale micro-interaction
+// NOTICE BANNER (pending-review explainer)
 // ─────────────────────────────────────────────────────────────────────────────
-class _SignInButton extends StatefulWidget {
-  const _SignInButton({required this.loading, required this.onTap});
+class _NoticeBanner extends StatelessWidget {
+  const _NoticeBanner({required this.icon, required this.message});
+  final IconData icon;
+  final String message;
+
+  static const _green = Color(0xFF0D3D2B);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: _green.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _green.withOpacity(0.18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: _green),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(message,
+                style: _body(color: _green, size: 12.5, height: 1.5)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGISTER BUTTON
+// ─────────────────────────────────────────────────────────────────────────────
+class _RegisterButton extends StatefulWidget {
+  const _RegisterButton({required this.loading, required this.onTap});
   final bool loading;
   final Future<void> Function() onTap;
 
   @override
-  State<_SignInButton> createState() => _SignInButtonState();
+  State<_RegisterButton> createState() => _RegisterButtonState();
 }
 
-class _SignInButtonState extends State<_SignInButton>
+class _RegisterButtonState extends State<_RegisterButton>
     with SingleTickerProviderStateMixin {
   static const _green = Color(0xFF0D3D2B);
-
   late final AnimationController _press;
   late final Animation<double> _scale;
 
@@ -614,10 +724,10 @@ class _SignInButtonState extends State<_SignInButton>
                 : Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('Sign In',
+                      Text('Create Landlord Account',
                           style: _body(
                               color: Colors.white,
-                              size: 16,
+                              size: 15,
                               weight: FontWeight.w700)),
                       const SizedBox(width: 8),
                       const Icon(Icons.arrow_forward_rounded,
@@ -632,7 +742,7 @@ class _SignInButtonState extends State<_SignInButton>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INPUT FIELD
+// SHARED SMALL WIDGETS
 // ─────────────────────────────────────────────────────────────────────────────
 class _InputField extends StatelessWidget {
   const _InputField({
@@ -705,9 +815,6 @@ class _InputField extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// LOGO
-// ─────────────────────────────────────────────────────────────────────────────
 class _Logo extends StatelessWidget {
   const _Logo({required this.onDark, this.compact = false});
   final bool onDark, compact;
@@ -753,13 +860,9 @@ class _Logo extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STAT CHIP (hero panel)
-// ─────────────────────────────────────────────────────────────────────────────
 class _Stat extends StatelessWidget {
   const _Stat({required this.value, required this.label});
   final String value, label;
-
   static const _greenAccent = Color(0xFF34C77B);
 
   @override
@@ -776,9 +879,6 @@ class _Stat extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ERROR BANNER
-// ─────────────────────────────────────────────────────────────────────────────
 class _ErrorBanner extends StatelessWidget {
   const _ErrorBanner({required this.message});
   final String message;
@@ -786,7 +886,7 @@ class _ErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 20),
+      margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: const Color(0xFFFFF0F0),
@@ -808,9 +908,6 @@ class _ErrorBanner extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DECORATIVE CIRCLE
-// ─────────────────────────────────────────────────────────────────────────────
 class _DecorCircle extends StatelessWidget {
   const _DecorCircle({required this.size, required this.color});
   final double size;
@@ -824,9 +921,6 @@ class _DecorCircle extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FADE + SLIDE ENTRANCE WIDGET
-// ─────────────────────────────────────────────────────────────────────────────
 class _FadeSlide extends StatelessWidget {
   const _FadeSlide({required this.anim, required this.child});
   final Animation<double> anim;
@@ -847,9 +941,6 @@ class _FadeSlide extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TYPOGRAPHY HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
 TextStyle _display({
   required Color color,
   required double size,
@@ -878,17 +969,3 @@ TextStyle _body({
       height: height ?? 1.5,
       letterSpacing: 0.1,
     );
-Future<void> _registerAdminPushId(String? uid) async {
-  if (uid == null) return;
-  try {
-    final playerId = OneSignal.User.pushSubscription.id;
-    if (playerId == null) return; // not subscribed yet / permission not granted
-
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .update({'onesignal_player_id': playerId});
-  } catch (e) {
-    debugPrint('Failed to register admin push id: $e');
-  }
-}

@@ -8,6 +8,7 @@ import '../../services/auth_service.dart';
 import '../../screens/home/home_screen.dart';
 import '../../screens/auth/login_screen.dart';
 import '../../screens/auth/register_screen.dart';
+import '../../screens/auth/landlord_register_screen.dart';
 import '../../screens/hostels/hostels_screen.dart';
 import '../../screens/hostels/hostel_detail_screen.dart';
 import '../../screens/bookings/bookings_screen.dart';
@@ -111,7 +112,14 @@ class AppRouter {
         final isLoggedIn = authService.isLoggedIn;
         final path = state.uri.path;
 
+        // NOTE: '/landlord-register' must stay public (unauthenticated users
+        // need to reach it), so we can't just use startsWith('/landlord') —
+        // that string-matches '/landlord-register' too and was bouncing
+        // people straight back to /login before they ever saw the form.
+        final isPublicLandlordRoute = path == '/landlord-register';
+
         if (!isLoggedIn &&
+            !isPublicLandlordRoute &&
             (path.startsWith('/bookings') ||
                 path.startsWith('/profile') ||
                 path.startsWith('/chat') || // ← NEW: protect chat route
@@ -119,7 +127,6 @@ class AppRouter {
                 path.startsWith('/landlord'))) {
           return '/login';
         }
-
         return null;
       },
 
@@ -136,6 +143,10 @@ class AppRouter {
         GoRoute(
           path: '/register',
           builder: (context, state) => _wrap(const RegisterScreen()),
+        ),
+        GoRoute(
+          path: '/landlord-register',
+          builder: (context, state) => _wrap(const LandlordRegisterScreen()),
         ),
         GoRoute(
             path: '/settings',

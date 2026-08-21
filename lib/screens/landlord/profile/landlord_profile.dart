@@ -9,10 +9,49 @@ import '../../../services/auth_service.dart';
 import '../../../services/landlord_service.dart';
 import '../../../models/models.dart';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:image_picker/image_picker.dart';
 
 const _kBackendUrl = 'https://roomzy-backend-eight.vercel.app/api';
+const _kCloudName = 'dfv9yibba';
+const _kUploadPreset = 'ml_default';
+
+Future<String?> _pickAndUploadProfilePhoto() async {
+  final picker = ImagePicker();
+  final XFile? picked = await picker.pickImage(
+    source: ImageSource.gallery,
+    imageQuality: 85,
+  );
+  if (picked == null) return null;
+
+  final Uint8List bytes = await picked.readAsBytes();
+  final String filename = picked.name.isNotEmpty
+      ? picked.name
+      : 'upload_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+  final uri = Uri.parse(
+    'https://api.cloudinary.com/v1_1/$_kCloudName/image/upload',
+  );
+
+  final req = http.MultipartRequest('POST', uri)
+    ..fields['upload_preset'] = _kUploadPreset
+    ..fields['folder'] = 'landlords/profiles'
+    ..files.add(
+      http.MultipartFile.fromBytes('file', bytes, filename: filename),
+    );
+
+  try {
+    final res = await req.send();
+    final body = await res.stream.bytesToString();
+    final json = jsonDecode(body) as Map<String, dynamic>;
+    if (res.statusCode == 200) return json['secure_url'] as String?;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
 
 class _PayoutSection extends StatefulWidget {
   const _PayoutSection({required this.landlordId});
@@ -369,6 +408,651 @@ class _PayoutSectionState extends State<_PayoutSection> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// EDIT PROFILE SECTION (name / phone / address)
+class _EditProfileSection extends StatefulWidget {
+  const _EditProfileSection({
+    required this.landlordId,
+    required this.authService,
+    required this.onSaved,
+  });
+
+  final String landlordId;
+  final AuthService authService;
+  final VoidCallback onSaved;
+
+  @override
+  State<_EditProfileSection> createState() => _EditProfileSectionState();
+}
+
+class _EditProfileSectionState extends State<_EditProfileSection> {
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  final _address = TextEditingController();
+  final _profileImage = TextEditingController();
+  bool _loading = true;
+  bool _saving = false;
+  bool _uploadingPhoto = false;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final doc = await FirebaseFirestore.instance
+        .collection('landlords')
+        .doc(widget.landlordId)
+        .get();
+    if (!mounted) return;
+    final d = doc.data();
+    _name.text = d?['full_name']?.toString() ?? '';
+    _phone.text = d?['phone']?.toString() ?? '';
+    _address.text = d?['address']?.toString() ?? '';
+    _profileImage.text = d?['profile_image']?.toString() ?? '';
+    setState(() => _loading = false);
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    _address.dispose();
+    _profileImage.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickPhoto() async {
+    setState(() => _uploadingPhoto = true);
+    try {
+      final url = await _pickAndUploadProfilePhoto();
+      if (url != null) {
+        await FirebaseFirestore.instance
+            .collection('landlords')
+            .doc(widget.landlordId)
+            .update({'profile_image': url});
+        if (!mounted) return;
+        setState(() => _profileImage.text = url);
+        widget.onSaved();
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
+  Future<void> _save() async {
+    if (_name.text.trim().isEmpty || _phone.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Name and phone are required'),
+        backgroundColor: _C.red,
+      ));
+      return;
+    }
+    setState(() => _saving = true);
+    final result = await widget.authService.updateLandlordProfile(
+      fullName: _name.text.trim(),
+      phone: _phone.text.trim(),
+      address: _address.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (result.success) widget.onSaved();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(
+          result.success ? 'Profile updated' : result.error ?? 'Update failed'),
+      backgroundColor: result.success ? _C.green : _C.red,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: _C.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _C.border),
+        ),
+        child: const Center(
+            child: CircularProgressIndicator(color: _C.green, strokeWidth: 2)),
+      );
+    }
+    return Container(
+      decoration: BoxDecoration(
+        color: _C.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Row(children: [
+            const Icon(Icons.edit_outlined, size: 16, color: _C.green),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('Edit Profile',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _C.textDark)),
+            ),
+          ]),
+        ),
+        const Divider(height: 20, color: _C.border),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Center(
+              child: Column(
+                children: [
+                  Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _C.greenFaint,
+                          border: Border.all(color: _C.greenLight, width: 2),
+                        ),
+                        child: ClipOval(
+                          child: _profileImage.text.trim().isNotEmpty
+                              ? Image.network(_profileImage.text.trim(),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => const Icon(
+                                      Icons.person,
+                                      color: _C.green,
+                                      size: 32))
+                              : const Icon(Icons.person,
+                                  color: _C.green, size: 32),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: _uploadingPhoto ? null : _pickPhoto,
+                        child: Container(
+                          width: 26,
+                          height: 26,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _uploadingPhoto
+                                ? Colors.grey.shade400
+                                : _C.green,
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: _uploadingPhoto
+                              ? const Padding(
+                                  padding: EdgeInsets.all(5),
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white),
+                                )
+                              : const Icon(Icons.camera_alt_rounded,
+                                  size: 13, color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _uploadingPhoto ? 'Uploading…' : 'Tap to change photo',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: _uploadingPhoto ? _C.green : _C.textLight),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            _ProfileField(
+                label: 'Full Name',
+                controller: _name,
+                icon: Icons.person_outline_rounded),
+            const SizedBox(height: 12),
+            _ProfileField(
+                label: 'Phone',
+                controller: _phone,
+                icon: Icons.phone_outlined,
+                keyboardType: TextInputType.phone),
+            const SizedBox(height: 12),
+            _ProfileField(
+                label: 'Address',
+                controller: _address,
+                icon: Icons.location_on_outlined),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.save_rounded,
+                        size: 16, color: Colors.white),
+                label: Text(_saving ? 'Saving…' : 'Save Changes',
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _C.green,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ProfileField extends StatelessWidget {
+  const _ProfileField({
+    required this.label,
+    required this.controller,
+    required this.icon,
+    this.keyboardType,
+  });
+  final String label;
+  final TextEditingController controller;
+  final IconData icon;
+  final TextInputType? keyboardType;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label,
+          style: const TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w600, color: _C.textLight)),
+      const SizedBox(height: 6),
+      TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        style: const TextStyle(fontSize: 13, color: _C.textDark),
+        decoration: InputDecoration(
+          prefixIcon: Icon(icon, size: 17, color: _C.green),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: _C.border)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: _C.border)),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: _C.green, width: 1.5)),
+          filled: true,
+          fillColor: const Color(0xFFF9FAFB),
+        ),
+      ),
+    ]);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SECURITY SECTION (change email / password / forgot password)
+// ─────────────────────────────────────────────────────────────
+class _SecuritySection extends StatelessWidget {
+  const _SecuritySection(
+      {required this.authService, required this.currentEmail});
+  final AuthService authService;
+  final String? currentEmail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _C.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _C.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+          child: Row(children: [
+            const Icon(Icons.security_outlined, size: 16, color: _C.green),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('Login & Security',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _C.textDark)),
+            ),
+          ]),
+        ),
+        const Divider(height: 20, color: _C.border),
+        _SettingsTile(
+          icon: Icons.email_outlined,
+          label: 'Change Email',
+          onTap: () => showDialog(
+            context: context,
+            builder: (_) => _ChangeEmailDialog(
+                authService: authService, currentEmail: currentEmail ?? ''),
+          ),
+        ),
+        _SettingsTile(
+          icon: Icons.lock_outline_rounded,
+          label: 'Change Password',
+          onTap: () => showDialog(
+            context: context,
+            builder: (_) => _ChangePasswordDialog(
+                authService: authService, currentEmail: currentEmail ?? ''),
+          ),
+        ),
+        const SizedBox(height: 4),
+      ]),
+    );
+  }
+}
+
+class _ChangeEmailDialog extends StatefulWidget {
+  const _ChangeEmailDialog(
+      {required this.authService, required this.currentEmail});
+  final AuthService authService;
+  final String currentEmail;
+
+  @override
+  State<_ChangeEmailDialog> createState() => _ChangeEmailDialogState();
+}
+
+class _ChangeEmailDialogState extends State<_ChangeEmailDialog> {
+  final _newEmail = TextEditingController();
+  final _password = TextEditingController();
+  bool _obscure = true;
+  bool _saving = false;
+  String? _error;
+  bool _sent = false;
+
+  @override
+  void dispose() {
+    _newEmail.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_newEmail.text.trim().isEmpty || _password.text.trim().isEmpty) {
+      setState(() => _error = 'Enter your new email and current password.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final result = await widget.authService.changeEmail(
+      currentPassword: _password.text.trim(),
+      newEmail: _newEmail.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      if (result.success) {
+        _sent = true;
+      } else {
+        _error = result.error;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('Change Email',
+          style: TextStyle(
+              fontSize: 16, fontWeight: FontWeight.w700, color: _C.textDark)),
+      content: _sent
+          ? Text(
+              'We sent a confirmation link to ${_newEmail.text.trim()}. Open it to finish the change — your login email stays as ${widget.currentEmail} until then.',
+              style: const TextStyle(fontSize: 13, color: _C.textLight),
+            )
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Current login email: ${widget.currentEmail}',
+                    style: const TextStyle(fontSize: 12, color: _C.textLight)),
+                const SizedBox(height: 12),
+                if (_error != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                        color: _C.redLight,
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Text(_error!,
+                        style: const TextStyle(fontSize: 12, color: _C.red)),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                TextField(
+                  controller: _newEmail,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                      labelText: 'New email', isDense: true),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _password,
+                  obscureText: _obscure,
+                  decoration: InputDecoration(
+                    labelText: 'Current password',
+                    isDense: true,
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                          _obscure
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
+                          size: 18),
+                      onPressed: () => setState(() => _obscure = !_obscure),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+      actions: _sent
+          ? [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _C.green, foregroundColor: Colors.white),
+                child: const Text('Done'),
+              ),
+            ]
+          : [
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: _saving ? null : _submit,
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _C.green, foregroundColor: Colors.white),
+                child: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Text('Send Confirmation'),
+              ),
+            ],
+    );
+  }
+}
+
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog(
+      {required this.authService, required this.currentEmail});
+  final AuthService authService;
+  final String currentEmail;
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final _current = TextEditingController();
+  final _newPass = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _saving = false;
+  String? _error;
+  bool _resetSent = false;
+
+  @override
+  void dispose() {
+    _current.dispose();
+    _newPass.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_current.text.trim().isEmpty || _newPass.text.trim().isEmpty) {
+      setState(() => _error = 'Fill in both password fields.');
+      return;
+    }
+    if (_newPass.text.trim().length < 6) {
+      setState(() => _error = 'New password must be at least 6 characters.');
+      return;
+    }
+    if (_newPass.text.trim() != _confirm.text.trim()) {
+      setState(() => _error = 'Passwords do not match.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final result = await widget.authService.changePassword(
+      currentPassword: _current.text.trim(),
+      newPassword: _newPass.text.trim(),
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (result.success) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Password updated'),
+        backgroundColor: _C.green,
+      ));
+    } else {
+      setState(() => _error = result.error);
+    }
+  }
+
+  Future<void> _forgotPassword() async {
+    setState(() => _saving = true);
+    final error =
+        await widget.authService.sendPasswordReset(widget.currentEmail);
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      _resetSent = error == null;
+      _error = error;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('Change Password',
+          style: TextStyle(
+              fontSize: 16, fontWeight: FontWeight.w700, color: _C.textDark)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_resetSent)
+            Text(
+                'Password reset email sent to ${widget.currentEmail}. Check your inbox.',
+                style: const TextStyle(fontSize: 13, color: _C.green))
+          else ...[
+            if (_error != null) ...[
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                    color: _C.redLight, borderRadius: BorderRadius.circular(8)),
+                child: Text(_error!,
+                    style: const TextStyle(fontSize: 12, color: _C.red)),
+              ),
+              const SizedBox(height: 10),
+            ],
+            TextField(
+              controller: _current,
+              obscureText: true,
+              decoration: const InputDecoration(
+                  labelText: 'Current password', isDense: true),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _newPass,
+              obscureText: true,
+              decoration: const InputDecoration(
+                  labelText: 'New password', isDense: true),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _confirm,
+              obscureText: true,
+              decoration: const InputDecoration(
+                  labelText: 'Confirm new password', isDense: true),
+            ),
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: _saving ? null : _forgotPassword,
+              child: const Text(
+                  "Forgot your current password? Email me a reset link",
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _C.green,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ],
+      ),
+      actions: _resetSent
+          ? [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _C.green, foregroundColor: Colors.white),
+                child: const Text('Done'),
+              ),
+            ]
+          : [
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: _saving ? null : _submit,
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _C.green, foregroundColor: Colors.white),
+                child: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : const Text('Update'),
+              ),
+            ],
+    );
+  }
+}
+
 // ── Colour tokens ─────────────────────────────────────────────
 class _C {
   static const pageBg = Color(0xFFF5F5F0);
@@ -405,6 +1089,9 @@ class LandlordProfileScreen extends StatefulWidget {
 
 class _LandlordProfileScreenState extends State<LandlordProfileScreen> {
   bool _signingOut = false;
+  Key _futureKey = UniqueKey();
+
+  void _refreshProfile() => setState(() => _futureKey = UniqueKey());
 
   Future<void> _signOut() async {
     final confirmed = await showDialog<bool>(
@@ -464,6 +1151,7 @@ class _LandlordProfileScreenState extends State<LandlordProfileScreen> {
         ),
       ),
       body: FutureBuilder<Landlord?>(
+        key: _futureKey,
         future: widget.service.getLandlord(widget.landlordId),
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
@@ -494,7 +1182,18 @@ class _LandlordProfileScreenState extends State<LandlordProfileScreen> {
                 ),
                 const SizedBox(height: 16),
                 _PayoutSection(landlordId: widget.landlordId),
-                 const SizedBox(height: 16),
+                const SizedBox(height: 16),
+                _EditProfileSection(
+                  landlordId: widget.landlordId,
+                  authService: widget.authService,
+                  onSaved: _refreshProfile,
+                ),
+                const SizedBox(height: 16),
+                _SecuritySection(
+                  authService: widget.authService,
+                  currentEmail: landlord.email,
+                ),
+                const SizedBox(height: 16),
               ],
 
               // ── Settings ─────────────────────────────────
@@ -505,11 +1204,6 @@ class _LandlordProfileScreenState extends State<LandlordProfileScreen> {
                   _SettingsTile(
                     icon: Icons.notifications_outlined,
                     label: 'Notifications',
-                    onTap: () => _showComingSoon(context),
-                  ),
-                  _SettingsTile(
-                    icon: Icons.lock_outline_rounded,
-                    label: 'Change Password',
                     onTap: () => _showComingSoon(context),
                   ),
                   _SettingsTile(
