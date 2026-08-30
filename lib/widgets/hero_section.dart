@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:animated_text_kit/animated_text_kit.dart';
@@ -11,24 +14,53 @@ class HeroSection extends StatefulWidget {
 }
 
 class _HeroSectionState extends State<HeroSection> {
-  // Unsplash auto-optimization:
-  // - w=1600     → cap width to screen size
-  // - q=80       → compress quality (barely noticeable visually)
-  // - fm=webp    → serve WebP for smaller file size
-  // - fit=crop   → smart crop to fill frame
-  static const List<String> _images = [
+  // Bundled fallback — used until the settings/site_images doc loads, and
+  // whenever it's missing or its home_hero_images field is empty, so the
+  // carousel never shows a blank frame.
+  static const List<String> _defaultImages = [
     'https://i.ibb.co/hJph6Xyc/h1.jpg',
     'https://i.ibb.co/fzcNGgwq/hostel.jpg',
   ];
 
+  // The admin-editable Site Images card in settings writes here — this
+  // stream keeps the carousel in sync with it live, no redeploy needed.
+  List<String> _images = _defaultImages;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = FirebaseFirestore.instance
+        .collection('settings')
+        .doc('site_images')
+        .snapshots()
+        .listen((snap) {
+      final raw = snap.data()?['hero_images'];
+      if (raw is List && raw.isNotEmpty) {
+        final urls = raw.map((e) => e.toString()).toList();
+        for (final url in urls) {
+          CachedNetworkImageProvider(url).resolve(const ImageConfiguration());
+        }
+        if (mounted) setState(() => _images = urls);
+      }
+    });
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Precache both hero images as soon as the widget mounts
-    // so by the time the carousel starts they're already in memory
+    // Precache whatever we currently have (defaults, until/unless the
+    // Firestore listener above replaces them) as soon as the widget mounts
+    // so by the time the carousel starts they're already in memory.
     for (final url in _images) {
       CachedNetworkImageProvider(url).resolve(const ImageConfiguration());
     }
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
   }
 
   @override

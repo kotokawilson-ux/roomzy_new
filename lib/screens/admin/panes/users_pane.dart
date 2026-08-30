@@ -1,11 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../../../constants/admin_theme.dart';
 import '../../../../utils/admin_helpers.dart';
 import '../widgets/shared_widgets.dart';
 import '../../../../utils/admin_helpers.dart';
 import '../../../../utils/activity_logger.dart';
+import '../../../../services/auth_service.dart'; // NEW — adjust path to match your project
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,7 +43,7 @@ String _initials(String name) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// USERS PANE  — tabbed: Admins | Students
+// USERS PANE  — tabbed: Admins | Landlords | Students
 // ─────────────────────────────────────────────────────────────────────────────
 
 class UsersPane extends StatefulWidget {
@@ -59,7 +62,7 @@ class _UsersPaneState extends State<UsersPane>
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 3, vsync: this); // was 2
+    _tab = TabController(length: 3, vsync: this);
     _tab.addListener(() => setState(() {}));
   }
 
@@ -72,6 +75,10 @@ class _UsersPaneState extends State<UsersPane>
 
   @override
   Widget build(BuildContext context) {
+    // NEW — who's looking at this panel, and what are they allowed to do?
+    final isSuperAdmin = context.watch<AuthService>().userRole == 'super_admin';
+    final myUid = FirebaseAuth.instance.currentUser?.uid;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF2F4F0),
       body: Column(
@@ -80,6 +87,7 @@ class _UsersPaneState extends State<UsersPane>
           _UsersHeader(
             tab: _tab,
             onAddAdmin: () => _showAdminDialog(context, null),
+            canManageAdmins: isSuperAdmin, // NEW
           ),
 
           // ── Search bar ──────────────────────────────────────────────────
@@ -123,15 +131,22 @@ class _UsersPaneState extends State<UsersPane>
                     final allDocs = usersSnap.data?.docs ?? [];
                     final landlordDocs = landlordsSnap.data?.docs ?? [];
 
-                    // Split users by role
+                    // Split users by role — 'admin' tab now shows BOTH
+                    // admin and super_admin accounts together.
+                    bool isAdminRole(String r) =>
+                        r == 'admin' || r == 'super_admin';
+
                     var admins = allDocs
-                        .where((d) =>
+                        .where((d) => isAdminRole(
                             ((d.data() as Map)['role'] ?? '')
                                 .toString()
-                                .toLowerCase() ==
-                            'admin')
+                                .toLowerCase()))
                         .toList();
-
+                    // Option B: regular admins only see their own card.
+                    // Super admins still see everyone.
+                    if (!isSuperAdmin) {
+                      admins = admins.where((d) => d.id == myUid).toList();
+                    }
                     var students = allDocs.where((d) {
                       final r = ((d.data() as Map)['role'] ?? 'student')
                           .toString()
@@ -175,12 +190,13 @@ class _UsersPaneState extends State<UsersPane>
                         _AdminsTab(
                           docs: admins,
                           totalAdmins: allDocs
-                              .where((d) =>
+                              .where((d) => isAdminRole(
                                   ((d.data() as Map)['role'] ?? '')
                                       .toString()
-                                      .toLowerCase() ==
-                                  'admin')
+                                      .toLowerCase()))
                               .length,
+                          canManage: isSuperAdmin, // NEW
+                          myUid: myUid, // NEW
                           onEdit: (doc) => _showAdminDialog(context, doc),
                           onDelete: (doc) => _confirmDelete(context, doc),
                         ),
@@ -214,42 +230,69 @@ class _UsersPaneState extends State<UsersPane>
 
   // ── Add / Edit Admin dialog ───────────────────────────────────────────────
   void _showAdminDialog(BuildContext ctx, QueryDocumentSnapshot? doc) {
+    final isSuperAdmin = ctx.read<AuthService>().userRole == 'super_admin';
+    if (!isSuperAdmin) return;
+
     showDialog(
       context: ctx,
       barrierDismissible: false,
       builder: (_) => _AdminFormDialog(
         existingDoc: doc,
-        onSave: (username, email, password) async {
+        onSave: (username, email, password, role) async {
           Navigator.pop(ctx);
+          final authService = ctx.read<AuthService>();
+
           if (doc == null) {
-            // Add new admin
-            await db.collection('users').add({
-              'username': username,
-              'email': email,
-              'password': password,
-              'role': 'admin',
-              'createdAt': FieldValue.serverTimestamp(),
-            });
-            await ActivityLogger.log(
-              action: 'Created Admin',
-              details: 'Username: $username, Email: $email',
+            // Add new admin — creates a REAL Firebase Auth account
+            // (via a secondary app instance so the super admin's own
+            // session stays signed in) plus the Firestore users doc.
+            final result = await authService.createAdminAccount(
+              username: username,
+              email: email,
+              password: password,
+              role: role,
             );
 
-            if (ctx.mounted) {
-              _showSnack(ctx, 'Admin "$username" added.', kGreen);
+            if (!ctx.mounted) return;
+
+            if (result.success) {
+              await ActivityLogger.log(
+                action:
+                    'Created ${role == 'super_admin' ? 'Super Admin' : 'Admin'}',
+                details: 'Username: $username, Email: $email',
+              );
+              _showSnack(
+                  ctx,
+                  '${role == 'super_admin' ? 'Super admin' : 'Admin'} "$username" added.',
+                  kGreen);
+            } else {
+              _showSnack(ctx, result.error ?? 'Failed to create admin.',
+                  Colors.red.shade600);
             }
           } else {
-            // Edit ex
-            // isting
-
+            // Edit existing admin — the Auth account already exists,
+            // so we only update the Firestore profile fields here.
+            // A client app can't silently overwrite someone else's
+            // password (Firebase Auth only allows a user to change
+            // their OWN password) — if a new password was entered,
+            // send that admin a password-reset email instead.
             final updates = <String, dynamic>{
               'username': username,
               'email': email,
+              'role': role,
             };
-            if (password.isNotEmpty) updates['password'] = password;
             await db.collection('users').doc(doc.id).update(updates);
+
+            String message = 'Admin "$username" updated.';
+            if (password.isNotEmpty) {
+              final resetError = await authService.sendPasswordReset(email);
+              message = resetError == null
+                  ? 'Admin "$username" updated. A password reset email was sent to $email.'
+                  : 'Admin "$username" updated, but the password reset email failed: $resetError';
+            }
+
             if (ctx.mounted) {
-              _showSnack(ctx, 'Admin "$username" updated.', kGreen);
+              _showSnack(ctx, message, kGreen);
             }
           }
         },
@@ -309,12 +352,19 @@ class _UsersPaneState extends State<UsersPane>
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _UsersHeader extends StatelessWidget {
-  const _UsersHeader({required this.tab, required this.onAddAdmin});
+  const _UsersHeader({
+    required this.tab,
+    required this.onAddAdmin,
+    required this.canManageAdmins, // NEW
+  });
   final TabController tab;
   final VoidCallback onAddAdmin;
+  final bool canManageAdmins; // NEW
 
   @override
   Widget build(BuildContext context) {
+    final showAddButton = tab.index == 0 && canManageAdmins; // NEW
+
     return Container(
       color: const Color(0xFF1B4332),
       child: Column(
@@ -335,12 +385,12 @@ class _UsersHeader extends StatelessWidget {
                       fontWeight: FontWeight.w700),
                 ),
                 const Spacer(),
-                // Add Admin button — only visible on admin tab
+                // Add Admin button — only visible on admin tab AND to super admins
                 AnimatedOpacity(
-                  opacity: tab.index == 0 ? 1.0 : 0.0,
+                  opacity: showAddButton ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 200),
                   child: IgnorePointer(
-                    ignoring: tab.index != 0,
+                    ignoring: !showAddButton,
                     child: GestureDetector(
                       onTap: onAddAdmin,
                       child: Container(
@@ -395,7 +445,6 @@ class _UsersHeader extends StatelessWidget {
                 ),
               ),
               Tab(
-                // NEW
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -844,11 +893,15 @@ class _AdminsTab extends StatelessWidget {
   const _AdminsTab({
     required this.docs,
     required this.totalAdmins,
+    required this.canManage, // NEW
+    required this.myUid, // NEW
     required this.onEdit,
     required this.onDelete,
   });
   final List<QueryDocumentSnapshot> docs;
   final int totalAdmins;
+  final bool canManage; // NEW
+  final String? myUid; // NEW
   final void Function(QueryDocumentSnapshot) onEdit;
   final void Function(QueryDocumentSnapshot) onDelete;
 
@@ -860,7 +913,7 @@ class _AdminsTab extends StatelessWidget {
         // Stats banner
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: _AdminStatBanner(total: totalAdmins),
+          child: _AdminStatBanner(total: totalAdmins, isSuperAdmin: canManage),
         ),
         const SizedBox(height: 14),
 
@@ -878,6 +931,8 @@ class _AdminsTab extends StatelessWidget {
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (_, i) => _AdminCard(
                     doc: docs[i],
+                    canManage: canManage, // NEW
+                    isSelf: docs[i].id == myUid, // NEW
                     onEdit: onEdit,
                     onDelete: onDelete,
                   ),
@@ -889,8 +944,9 @@ class _AdminsTab extends StatelessWidget {
 }
 
 class _AdminStatBanner extends StatelessWidget {
-  const _AdminStatBanner({required this.total});
+  const _AdminStatBanner({required this.total, required this.isSuperAdmin});
   final int total;
+  final bool isSuperAdmin; // NEW
 
   @override
   Widget build(BuildContext context) {
@@ -944,9 +1000,10 @@ class _AdminStatBanner extends StatelessWidget {
             ],
           ),
           const Spacer(),
-          const Text(
-            'Super Admin Panel',
-            style: TextStyle(
+          Text(
+            // NEW — honest label depending on who's actually viewing
+            isSuperAdmin ? 'Super Admin Panel' : 'View only',
+            style: const TextStyle(
                 color: Colors.white54,
                 fontSize: 11,
                 fontWeight: FontWeight.w500),
@@ -960,10 +1017,14 @@ class _AdminStatBanner extends StatelessWidget {
 class _AdminCard extends StatelessWidget {
   const _AdminCard({
     required this.doc,
+    required this.canManage, // NEW
+    required this.isSelf, // NEW
     required this.onEdit,
     required this.onDelete,
   });
   final QueryDocumentSnapshot doc;
+  final bool canManage; // NEW
+  final bool isSelf; // NEW
   final void Function(QueryDocumentSnapshot) onEdit;
   final void Function(QueryDocumentSnapshot) onDelete;
 
@@ -973,6 +1034,8 @@ class _AdminCard extends StatelessWidget {
     final username = d['username'] ?? '—';
     final email = d['email'] ?? '—';
     final joined = _fmtDate(d['createdAt']);
+    final role = (d['role'] ?? 'admin').toString().toLowerCase();
+    final isSuperAdminAccount = role == 'super_admin'; // NEW
 
     return Container(
       decoration: BoxDecoration(
@@ -1033,29 +1096,61 @@ class _AdminCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 6),
+                      // NEW — badge reflects actual role
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
-                          color: Colors.purple.shade50,
+                          color: isSuperAdminAccount
+                              ? Colors.amber.shade50
+                              : Colors.purple.shade50,
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(
-                              color: Colors.purple.shade200, width: 0.8),
+                              color: isSuperAdminAccount
+                                  ? Colors.amber.shade300
+                                  : Colors.purple.shade200,
+                              width: 0.8),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.shield_rounded,
-                                size: 9, color: Colors.purple.shade700),
+                            Icon(
+                                isSuperAdminAccount
+                                    ? Icons.workspace_premium_rounded
+                                    : Icons.shield_rounded,
+                                size: 9,
+                                color: isSuperAdminAccount
+                                    ? Colors.amber.shade800
+                                    : Colors.purple.shade700),
                             const SizedBox(width: 3),
-                            Text('admin',
+                            Text(isSuperAdminAccount ? 'super admin' : 'admin',
                                 style: TextStyle(
                                     fontSize: 9,
                                     fontWeight: FontWeight.w700,
-                                    color: Colors.purple.shade700)),
+                                    color: isSuperAdminAccount
+                                        ? Colors.amber.shade800
+                                        : Colors.purple.shade700)),
                           ],
                         ),
                       ),
+                      if (isSelf) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: Colors.blue.shade200, width: 0.8),
+                          ),
+                          child: Text('you',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.blue.shade700)),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 3),
@@ -1082,24 +1177,28 @@ class _AdminCard extends StatelessWidget {
               ),
             ),
 
-            // Action buttons
-            Column(
-              children: [
-                _ActionIconBtn(
-                  icon: Icons.edit_rounded,
-                  color: const Color(0xFF1B4332),
-                  bgColor: const Color(0xFFD8F3DC),
-                  onTap: () => onEdit(doc),
-                ),
-                const SizedBox(height: 8),
-                _ActionIconBtn(
-                  icon: Icons.delete_outline_rounded,
-                  color: Colors.red.shade600,
-                  bgColor: Colors.red.shade50,
-                  onTap: () => onDelete(doc),
-                ),
-              ],
-            ),
+            // NEW — action buttons only for super admins; self-delete blocked
+            if (canManage)
+              Column(
+                children: [
+                  _ActionIconBtn(
+                    icon: Icons.edit_rounded,
+                    color: const Color(0xFF1B4332),
+                    bgColor: const Color(0xFFD8F3DC),
+                    onTap: () => onEdit(doc),
+                  ),
+                  const SizedBox(height: 8),
+                  _ActionIconBtn(
+                    icon: Icons.delete_outline_rounded,
+                    color: isSelf ? Colors.grey.shade400 : Colors.red.shade600,
+                    bgColor: isSelf ? Colors.grey.shade100 : Colors.red.shade50,
+                    onTap: isSelf ? () {} : () => onDelete(doc),
+                  ),
+                ],
+              )
+            else
+              Icon(Icons.visibility_outlined,
+                  size: 16, color: Colors.grey.shade400),
           ],
         ),
       ),
@@ -1396,7 +1495,9 @@ class _AdminFormDialog extends StatefulWidget {
     required this.onSave,
   });
   final QueryDocumentSnapshot? existingDoc;
-  final void Function(String username, String email, String password) onSave;
+  // NEW — role is now part of the save payload
+  final void Function(
+      String username, String email, String password, String role) onSave;
 
   @override
   State<_AdminFormDialog> createState() => _AdminFormDialogState();
@@ -1408,6 +1509,7 @@ class _AdminFormDialogState extends State<_AdminFormDialog> {
   late final TextEditingController _emailCtrl;
   final _passwordCtrl = TextEditingController();
   bool _obscure = true;
+  String _role = 'admin'; // NEW
 
   bool get isEdit => widget.existingDoc != null;
 
@@ -1419,6 +1521,7 @@ class _AdminFormDialogState extends State<_AdminFormDialog> {
         : <String, dynamic>{};
     _usernameCtrl = TextEditingController(text: d['username'] ?? '');
     _emailCtrl = TextEditingController(text: d['email'] ?? '');
+    _role = (d['role'] as String?) ?? 'admin'; // NEW
   }
 
   @override
@@ -1494,6 +1597,38 @@ class _AdminFormDialogState extends State<_AdminFormDialog> {
                 ),
                 const SizedBox(height: 14),
 
+                // NEW — Role picker. This dialog is only ever shown to
+                // super admins (gated in _UsersPaneState._showAdminDialog
+                // and by hiding the Add Admin button), so no extra
+                // permission check is needed inside the dialog itself.
+                Text('Role',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151))),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  value: _role,
+                  items: const [
+                    DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                    DropdownMenuItem(
+                        value: 'super_admin', child: Text('Super Admin')),
+                  ],
+                  onChanged: (v) => setState(() => _role = v ?? 'admin'),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: const Color(0xFFF9FAFB),
+                    contentPadding:
+                        const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(
+                          color: Color(0xFFE5E7EB), width: 0.8),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+
                 // Password
                 _PasswordField(
                   controller: _passwordCtrl,
@@ -1539,6 +1674,7 @@ class _AdminFormDialogState extends State<_AdminFormDialog> {
                               _usernameCtrl.text.trim(),
                               _emailCtrl.text.trim(),
                               _passwordCtrl.text,
+                              _role, // NEW
                             );
                           }
                         },

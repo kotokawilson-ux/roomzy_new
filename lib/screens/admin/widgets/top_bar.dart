@@ -11,7 +11,9 @@ import 'package:timeago/timeago.dart' as timeago;
 import '../../../services/notification_service.dart';
 import '../../../constants/admin_theme.dart';
 import '../admin_section.dart';
-
+import 'package:provider/provider.dart';
+import '../../../services/auth_service.dart';
+import '../profile/admin_profile.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // CLOUDINARY CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
@@ -777,6 +779,20 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
     widget.onClose();
   }
 
+  void _viewFullProfile() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    widget.onClose();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AdminProfileScreen(
+          uid: uid,
+          authService: context.read<AuthService>(),
+        ),
+      ),
+    );
+  }
+
   Future<void> _logout() async {
     widget.onClose();
     await FirebaseAuth.instance.signOut();
@@ -1007,9 +1023,12 @@ class _ProfileDropdownState extends State<_ProfileDropdown>
                         ],
                       ),
                     ),
-
-                  // ── Menu items ──────────────────────────────────────────
                   if (!_editing) ...[
+                    _MenuItem(
+                      icon: Icons.account_circle_outlined,
+                      label: 'View Full Profile',
+                      onTap: _viewFullProfile,
+                    ),
                     _MenuItem(
                       icon: Icons.edit_outlined,
                       label: 'Edit Profile',

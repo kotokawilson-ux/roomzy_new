@@ -40,6 +40,34 @@ class AboutScreen extends StatelessWidget {
     ),
   ];
 
+  static const _steps = [
+    (
+      Icons.search_rounded,
+      'Search Hostels',
+      'Browse verified hostels near your school, filter by price, room type, and amenities.'
+    ),
+    (
+      Icons.bookmark_add_rounded,
+      'Pre-Book Your Room',
+      'Reserve it instantly so no one else takes your spot while you decide.'
+    ),
+    (
+      Icons.payments_rounded,
+      'Confirm & Pay Securely',
+      'Complete your booking with MTN MoMo or Vodafone Cash. Every transaction is protected.'
+    ),
+    (
+      Icons.verified_rounded,
+      'Secure Your Spot',
+      'Get instant confirmation and booking details. The room is officially yours.'
+    ),
+    (
+      Icons.home_work_rounded,
+      'Move In & Settle',
+      'Show up on move-in day with everything sorted. Support is there if you need it.'
+    ),
+  ];
+
   Future<void> _openUrl(String url) async {
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
@@ -112,6 +140,80 @@ class AboutScreen extends StatelessWidget {
               'secure mobile money payments, and support at every step — from '
               'browsing rooms to moving in.',
               style: TextStyle(fontSize: 14, color: _kTextMuted, height: 1.7),
+            ),
+          ),
+          const SizedBox(height: 28),
+
+          // ── How it works ───────────────────────────────────────────────
+          const Text('How it works',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: _kTextMuted,
+                  letterSpacing: 0.4)),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 4),
+            decoration: BoxDecoration(
+              color: _kCard,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _kBorder),
+            ),
+            child: Column(
+              children: List.generate(_steps.length, (i) {
+                final step = _steps[i];
+                final isLast = i == _steps.length - 1;
+                return Padding(
+                  padding: EdgeInsets.only(bottom: isLast ? 16 : 0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Column(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: _kPrimary.withOpacity(0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(step.$1, color: _kPrimary, size: 18),
+                          ),
+                          if (!isLast)
+                            Container(
+                              width: 2,
+                              height: 44,
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              color: _kBorder,
+                            ),
+                        ],
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.only(bottom: isLast ? 0 : 24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(step.$2,
+                                  style: const TextStyle(
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: _kDark)),
+                              const SizedBox(height: 3),
+                              Text(step.$3,
+                                  style: const TextStyle(
+                                      fontSize: 12.5,
+                                      color: _kTextMuted,
+                                      height: 1.45)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
             ),
           ),
           const SizedBox(height: 28),

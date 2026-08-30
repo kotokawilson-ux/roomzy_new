@@ -1186,20 +1186,23 @@ class _DetailSheetState extends State<_DetailSheet> {
       }
     }
   }
-String _fmtDate(DateTime d) => DateFormat('dd MMM yyyy, hh:mm a').format(d);
-String _fmtShort(DateTime d) => DateFormat('dd MMM yy, hh:mm a').format(d);
 
-String _balanceDueDisplay(Map<String, dynamic> d) {
-  final due = d['balance_due_date'];
-  final unit = d['balance_due_unit'];
-  if (due is Timestamp) {
-    if (unit == 'on_arrival') return 'Due on Arrival (${_fmtDate(due.toDate())})';
-    return _fmtDate(due.toDate());
+  String _fmtDate(DateTime d) => DateFormat('dd MMM yyyy, hh:mm a').format(d);
+  String _fmtShort(DateTime d) => DateFormat('dd MMM yy, hh:mm a').format(d);
+
+  String _balanceDueDisplay(Map<String, dynamic> d) {
+    final due = d['balance_due_date'];
+    final unit = d['balance_due_unit'];
+    if (due is Timestamp) {
+      if (unit == 'on_arrival')
+        return 'Due on Arrival (${_fmtDate(due.toDate())})';
+      return _fmtDate(due.toDate());
+    }
+    final moveIn = d['move_in_date'];
+    if (moveIn == null) return 'Pending — set once move-in date is confirmed';
+    return 'Not set — hostel has no balance deadline configured';
   }
-  final moveIn = d['move_in_date'];
-  if (moveIn == null) return 'Pending — set once move-in date is confirmed';
-  return 'Not set — hostel has no balance deadline configured';
-}
+
   Future<void> _setMoveInDate(BuildContext ctx, Map<String, dynamic> d) async {
     final picked = await showDatePicker(
       context: ctx,
@@ -1217,7 +1220,6 @@ String _balanceDueDisplay(Map<String, dynamic> d) {
       ),
     );
     if (picked == null) return;
-
 
     try {
       final snap = await _db.collection('bookings').doc(widget.docId).get();
@@ -2626,6 +2628,120 @@ class _ConfirmDialog extends StatelessWidget {
   }
 }
 
+class _TypedDeleteDialog extends StatefulWidget {
+  final String title;
+  final String message;
+  const _TypedDeleteDialog({required this.title, required this.message});
+  @override
+  State<_TypedDeleteDialog> createState() => _TypedDeleteDialogState();
+}
+
+class _TypedDeleteDialogState extends State<_TypedDeleteDialog> {
+  final _ctrl = TextEditingController();
+  bool _valid = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+                color: _kRed.withOpacity(0.1), shape: BoxShape.circle),
+            child:
+                const Icon(Icons.warning_amber_rounded, color: _kRed, size: 30),
+          ),
+          const SizedBox(height: 16),
+          Text(widget.title,
+              style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: _kTextDark)),
+          const SizedBox(height: 8),
+          Text(widget.message,
+              textAlign: TextAlign.center,
+              style:
+                  const TextStyle(fontSize: 13, color: _kTextMid, height: 1.5)),
+          const SizedBox(height: 16),
+          const Text.rich(TextSpan(
+            text: 'Type ',
+            style: TextStyle(fontSize: 12, color: _kTextMid),
+            children: [
+              TextSpan(
+                  text: 'DELETE',
+                  style: TextStyle(fontWeight: FontWeight.w800, color: _kRed)),
+              TextSpan(text: ' to confirm'),
+            ],
+          )),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            textCapitalization: TextCapitalization.characters,
+            onChanged: (v) => setState(() => _valid = v.trim() == 'DELETE'),
+            decoration: InputDecoration(
+              hintText: 'DELETE',
+              filled: true,
+              fillColor: _kSurface,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _kBorder)),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _kBorder)),
+              focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: _kRed, width: 1.5)),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context, false),
+                style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    side: const BorderSide(color: _kBorder)),
+                child: const Text('Cancel',
+                    style: TextStyle(
+                        color: _kTextMid, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: _valid ? () => Navigator.pop(context, true) : null,
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _kRed,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: _kRed.withOpacity(0.3),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10))),
+                child: const Text('Delete All',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // LOADING / EMPTY / ERROR
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2775,7 +2891,8 @@ class _PreBookingsTabState extends State<_PreBookingsTab> {
   String _statusFilter = 'all';
   final _searchCtrl = TextEditingController();
   String _searchQuery = '';
-
+  bool _selectMode = false;
+  final Set<String> _selected = {};
   @override
   void initState() {
     super.initState();
@@ -2799,6 +2916,102 @@ class _PreBookingsTabState extends State<_PreBookingsTab> {
     await _db.collection('pre_bookings').doc(docId).update(update);
   }
 
+  Future<void> _bulkUpdateStatus(String status, {String? reason}) async {
+    if (_selected.isEmpty) return;
+    final update = <String, dynamic>{
+      'status': status,
+      'updated_at': FieldValue.serverTimestamp()
+    };
+    if (reason != null) update['lost_reason'] = reason;
+    final batch = _db.batch();
+    for (final id in _selected) {
+      batch.update(_db.collection('pre_bookings').doc(id), update);
+    }
+    await batch.commit();
+    setState(() {
+      _selected.clear();
+      _selectMode = false;
+    });
+  }
+
+  Future<void> _bulkDelete(BuildContext context) async {
+    if (_selected.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => _TypedDeleteDialog(
+        title: 'Delete ${_selected.length} Pre-Booking(s)',
+        message:
+            'This will permanently delete the selected pre-bookings. This cannot be undone.',
+      ),
+    );
+    if (confirm != true) return;
+    final batch = _db.batch();
+    for (final id in _selected) {
+      batch.delete(_db.collection('pre_bookings').doc(id));
+    }
+    await batch.commit();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Deleted ${_selected.length} pre-booking(s)'),
+          backgroundColor: _kGreen));
+    }
+    setState(() {
+      _selected.clear();
+      _selectMode = false;
+    });
+  }
+
+  Future<void> _clearAllPreBookings(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => const _TypedDeleteDialog(
+        title: 'Clear All Pre-Bookings',
+        message: 'This will permanently delete ALL pre-bookings in the system, '
+            'for every student and every landlord. This cannot be undone.',
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      final snap = await _db.collection('pre_bookings').get();
+      if (snap.docs.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('No pre-bookings to clear'),
+            backgroundColor: _kOrange,
+          ));
+        }
+        return;
+      }
+
+      const chunkSize = 450;
+      var deleted = 0;
+      for (var i = 0; i < snap.docs.length; i += chunkSize) {
+        final batch = _db.batch();
+        final chunk = snap.docs.skip(i).take(chunkSize);
+        for (final doc in chunk) {
+          batch.delete(doc.reference);
+          deleted++;
+        }
+        await batch.commit();
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Cleared $deleted pre-booking(s)'),
+          backgroundColor: _kGreen,
+        ));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'),
+          backgroundColor: _kRed,
+        ));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(children: [
@@ -2806,57 +3019,89 @@ class _PreBookingsTabState extends State<_PreBookingsTab> {
       Container(
         color: _kCard,
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-        child: Wrap(
-          spacing: 10,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(
-              width: 260,
-              height: 40,
-              child: TextField(
-                controller: _searchCtrl,
-                style: const TextStyle(fontSize: 13),
-                decoration: InputDecoration(
-                  hintText: 'Search hostel, room, student…',
-                  hintStyle: const TextStyle(fontSize: 13, color: _kTextLight),
-                  prefixIcon: const Icon(Icons.search_rounded,
-                      size: 18, color: _kTextLight),
-                  suffixIcon: _searchQuery.isNotEmpty
-                      ? GestureDetector(
-                          onTap: () => _searchCtrl.clear(),
-                          child: const Icon(Icons.close_rounded,
-                              size: 16, color: _kTextLight))
-                      : null,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
-                  filled: true,
-                  fillColor: _kSurface,
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: _kBorder)),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: _kBorder)),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide:
-                          const BorderSide(color: _kPrimary, width: 1.5)),
-                ),
+            Expanded(
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 260,
+                    height: 40,
+                    child: TextField(
+                      controller: _searchCtrl,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Search hostel, room, student…',
+                        hintStyle:
+                            const TextStyle(fontSize: 13, color: _kTextLight),
+                        prefixIcon: const Icon(Icons.search_rounded,
+                            size: 18, color: _kTextLight),
+                        suffixIcon: _searchQuery.isNotEmpty
+                            ? GestureDetector(
+                                onTap: () => _searchCtrl.clear(),
+                                child: const Icon(Icons.close_rounded,
+                                    size: 16, color: _kTextLight))
+                            : null,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                        filled: true,
+                        fillColor: _kSurface,
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: _kBorder)),
+                        enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: _kBorder)),
+                        focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide:
+                                const BorderSide(color: _kPrimary, width: 1.5)),
+                      ),
+                    ),
+                  ),
+                  for (final entry in {
+                    'all': 'All',
+                    'active': 'Active',
+                    'converted': 'Converted',
+                    'expired': 'Expired',
+                    'lost': 'Lost',
+                  }.entries)
+                    _FilterChip(
+                      label: entry.value,
+                      selected: _statusFilter == entry.key,
+                      color: _statusChipColor(entry.key),
+                      onTap: () => setState(() => _statusFilter = entry.key),
+                    ),
+                ],
               ),
             ),
-            for (final entry in {
-              'all': 'All',
-              'active': 'Active',
-              'converted': 'Converted',
-              'expired': 'Expired',
-              'lost': 'Lost',
-            }.entries)
-              _FilterChip(
-                label: entry.value,
-                selected: _statusFilter == entry.key,
-                color: _statusChipColor(entry.key),
-                onTap: () => setState(() => _statusFilter = entry.key),
+            const SizedBox(width: 10),
+            IconButton(
+              onPressed: () => setState(() {
+                _selectMode = !_selectMode;
+                if (!_selectMode) _selected.clear();
+              }),
+              icon: Icon(
+                  _selectMode ? Icons.close_rounded : Icons.checklist_rounded,
+                  color: _selectMode ? _kRed : _kPrimary),
+              tooltip: _selectMode ? 'Cancel selection' : 'Select',
+            ),
+            ElevatedButton.icon(
+              onPressed: () => _clearAllPreBookings(context),
+              icon: const Icon(Icons.delete_sweep_rounded, size: 16),
+              label: const Text('Clear All'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kRed,
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
+            ),
           ],
         ),
       ),
@@ -2963,7 +3208,43 @@ class _PreBookingsTabState extends State<_PreBookingsTab> {
                   ]),
                 ),
                 const SizedBox(height: 16),
-
+                if (_selectMode && _selected.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: _kPrimary.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: _kPrimary.withOpacity(0.2)),
+                    ),
+                    child: Row(children: [
+                      Text('${_selected.length} selected',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: _kPrimary)),
+                      const Spacer(),
+                      _SmallActionBtn(
+                          label: 'Converted',
+                          icon: Icons.check_circle_rounded,
+                          color: _kGreen,
+                          onTap: () => _bulkUpdateStatus('converted')),
+                      const SizedBox(width: 8),
+                      _SmallActionBtn(
+                          label: 'Expired',
+                          icon: Icons.timer_off_rounded,
+                          color: _kOrange,
+                          onTap: () => _bulkUpdateStatus('expired')),
+                      const SizedBox(width: 8),
+                      _SmallActionBtn(
+                          label: 'Delete',
+                          icon: Icons.delete_rounded,
+                          color: _kRed,
+                          onTap: () => _bulkDelete(context)),
+                    ]),
+                  ),
+                ],
                 // Cards
                 ...docs.map((doc) {
                   final d = doc.data() as Map<String, dynamic>;
@@ -3005,6 +3286,21 @@ class _PreBookingsTabState extends State<_PreBookingsTab> {
                               top: Radius.circular(14)),
                         ),
                         child: Row(children: [
+                          if (_selectMode)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Checkbox(
+                                value: _selected.contains(doc.id),
+                                activeColor: _kPrimary,
+                                onChanged: (v) => setState(() {
+                                  if (v == true) {
+                                    _selected.add(doc.id);
+                                  } else {
+                                    _selected.remove(doc.id);
+                                  }
+                                }),
+                              ),
+                            ),
                           Icon(
                             status == 'converted'
                                 ? Icons.check_circle_rounded

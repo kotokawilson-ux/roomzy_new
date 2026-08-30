@@ -110,6 +110,7 @@ class UserModel {
 }
 
 // ─── Landlord ─────────────────────────────────────────────────
+// ─── Landlord ─────────────────────────────────────────────────
 class Landlord {
   final String id;
   final String fullName;
@@ -117,6 +118,8 @@ class Landlord {
   final String phone;
   final String? address;
   final String landlordCode;
+  final String profileImage;
+  final bool verified;
 
   /// Optional: Firebase Auth UID linked to this landlord record.
   final String? authUid;
@@ -128,6 +131,8 @@ class Landlord {
     required this.phone,
     this.address,
     required this.landlordCode,
+    this.profileImage = '',
+    this.verified = false,
     this.authUid,
   });
 
@@ -139,6 +144,8 @@ class Landlord {
         phone: json['phone']?.toString() ?? '',
         address: json['address']?.toString(),
         landlordCode: json['landlord_code']?.toString() ?? '',
+        profileImage: json['profile_image']?.toString() ?? '',
+        verified: _parseBool(json['verified']),
         authUid: json['auth_uid']?.toString(),
       );
 
@@ -148,6 +155,8 @@ class Landlord {
         'phone': phone,
         'address': address,
         'landlord_code': landlordCode,
+        'profile_image': profileImage,
+        'verified': verified,
         if (authUid != null) 'auth_uid': authUid,
       };
 
@@ -158,6 +167,8 @@ class Landlord {
     String? phone,
     String? address,
     String? landlordCode,
+    String? profileImage,
+    bool? verified,
     String? authUid,
   }) =>
       Landlord(
@@ -167,6 +178,8 @@ class Landlord {
         phone: phone ?? this.phone,
         address: address ?? this.address,
         landlordCode: landlordCode ?? this.landlordCode,
+        profileImage: profileImage ?? this.profileImage,
+        verified: verified ?? this.verified,
         authUid: authUid ?? this.authUid,
       );
 }

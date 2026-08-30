@@ -141,6 +141,28 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
         'auto_revoked': true,
       });
       await BalanceReminderService.instance.cancelReminders(widget.bookingId);
+
+      // Fire-and-forget — booking is already auto-cancelled by this point.
+      final userId = data['user_id'] as String?;
+      if (userId != null && userId.isNotEmpty) {
+        http
+            .post(
+          Uri.parse('$_kBackendUrl/notify'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'type': 'booking_cancelled',
+            'bookingId': widget.bookingId,
+            'userId': userId,
+            'hostelName': data['hostel_name'],
+            'roomNumber': data['room_number'],
+            'reason': 'Balance payment deadline passed',
+          }),
+        )
+            .catchError((e) {
+          debugPrint('booking_cancelled notify failed (non-fatal): $e');
+          return http.Response('', 200);
+        });
+      }
     }
   }
 
@@ -156,13 +178,14 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     final playerId = OneSignal.User.pushSubscription.id;
     if (playerId == null || playerId.isEmpty) return;
 
-    await BalanceReminderService.instance.scheduleReminders(
+       await BalanceReminderService.instance.scheduleReminders(
       bookingId: widget.bookingId,
       balance: balance,
       dueDate: dueDate,
       settings: settings,
       oneSignalPlayerId: playerId,
       hostelName: booking['hostel_name'] ?? 'your room',
+      studentEmail: booking['email'] as String?,
     );
   }
 

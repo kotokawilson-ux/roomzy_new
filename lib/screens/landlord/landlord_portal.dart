@@ -182,6 +182,7 @@ class _LandlordPortalState extends State<LandlordPortal> {
           landlordId: lid,
           service: _service,
           authService: _auth!,
+          onProfileChanged: _loadLandlord,
         ),
     };
   }
@@ -853,14 +854,30 @@ class _TopBar extends StatelessWidget {
                   color: _C.greenLight,
                   border: Border.all(color: _C.green, width: 1.5),
                 ),
-                child: Center(
-                  child: Text(
-                    initials.isEmpty ? '?' : initials,
-                    style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _C.green),
-                  ),
+                child: ClipOval(
+                  child: (landlord?.profileImage.trim().isNotEmpty ?? false)
+                      ? Image.network(
+                          landlord!.profileImage.trim(),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Center(
+                            child: Text(
+                              initials.isEmpty ? '?' : initials,
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: _C.green),
+                            ),
+                          ),
+                        )
+                      : Center(
+                          child: Text(
+                            initials.isEmpty ? '?' : initials,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: _C.green),
+                          ),
+                        ),
                 ),
               ),
             ],

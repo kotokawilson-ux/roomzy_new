@@ -2510,6 +2510,28 @@ class _BookingSheetState extends State<_BookingSheet>
       });
 
       _bookingId = docRef.id;
+
+      // Fire-and-forget — booking is already saved successfully by this
+      // point; a notify failure shouldn't block moving to payment.
+      http
+          .post(
+        Uri.parse('$_kBackendUrl/notify'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'type': 'booking_created',
+          'bookingId': docRef.id,
+          'userId': FirebaseAuth.instance.currentUser?.uid ?? '',
+          'hostelName': widget.hostel.hostelName,
+          'roomNumber': widget.room.roomNumber,
+          'amount': _totalAmount,
+          'depositAmount': _depositAmount,
+        }),
+      )
+          .catchError((e) {
+        debugPrint('booking_created notify failed (non-fatal): $e');
+        return http.Response('', 200); // swallow, don't rethrow into the UI
+      });
+
       _goToStep(1);
     } catch (e) {
       _showSnack('Error saving booking: $e', isError: true);

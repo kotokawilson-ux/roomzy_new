@@ -39,7 +39,7 @@ class _AuthGateState extends State<AuthGate> {
 
     if (!isLoggedIn) {
       context.go('/login');
-    } else if (role == 'admin') {
+    } else if (role == 'admin' || role == 'super_admin') {
       context.go('/admin');
     } else if (role == 'landlord') {
       context.go('/landlord');

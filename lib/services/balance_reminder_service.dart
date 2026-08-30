@@ -163,6 +163,7 @@ class BalanceReminderService {
     required ReminderSettings settings,
     required String oneSignalPlayerId,
     String hostelName = 'your room',
+    String? studentEmail,
   }) async {
     // Always cancel previous batch first
     await cancelReminders(bookingId);
@@ -227,7 +228,50 @@ class BalanceReminderService {
           ? 'GHS ${balance.toStringAsFixed(2)} must be paid TODAY or your booking will be cancelled.'
           : 'GHS ${balance.toStringAsFixed(2)} still owed. Due ${_fmtDate(dueDate)}. Tap to pay.';
 
-      final id = await _sendScheduledNotification(
+  /// Schedules a single email via OneSignal REST API. Same send_after
+  /// mechanism as push, just a different target_channel + payload shape.
+  Future<String?> _sendScheduledEmail({
+    required String email,
+    required String subject,
+    required String body,
+    required DateTime sendAt,
+  }) async {
+    try {
+      final utc = sendAt.toUtc();
+      final sendAtStr = '${utc.year}-${_p(utc.month)}-${_p(utc.day)} '
+          '${_p(utc.hour)}:${_p(utc.minute)}:00 UTC';
+
+      final payload = {
+        'app_id': _kOneSignalAppId,
+        'target_channel': 'email',
+        'include_email_tokens': [email],
+        'email_subject': subject,
+        'email_body': body,
+        'send_after': sendAtStr,
+      };
+
+      final res = await http.post(
+        Uri.parse('$_kOneSignalBase/notifications'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Basic $_kOneSignalRestKey',
+        },
+        body: jsonEncode(payload),
+      );
+
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        return body['id'] as String?;
+      } else {
+        debugPrint('[Reminder] OneSignal email schedule failed: ${res.body}');
+        return null;
+      }
+    } catch (e) {
+      debugPrint('[Reminder] _sendScheduledEmail error: $e');
+      return null;
+    }
+  }
+            final id = await _sendScheduledNotification(
         playerId: oneSignalPlayerId,
         title: title,
         body: body,
@@ -240,6 +284,16 @@ class BalanceReminderService {
       );
 
       if (id != null) scheduledIds.add(id);
+
+      if (studentEmail != null && studentEmail.isNotEmpty) {
+        final emailId = await _sendScheduledEmail(
+          email: studentEmail,
+          subject: title,
+          body: body,
+          sendAt: fireTime,
+        );
+        if (emailId != null) scheduledIds.add(emailId);
+      }
     }
 
     await _saveNotifIds(bookingId, scheduledIds);

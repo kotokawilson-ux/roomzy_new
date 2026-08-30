@@ -1077,11 +1077,13 @@ class LandlordProfileScreen extends StatefulWidget {
     required this.landlordId,
     required this.service,
     required this.authService,
+    this.onProfileChanged,
   });
 
   final String landlordId;
   final LandlordService service;
   final AuthService authService;
+  final VoidCallback? onProfileChanged;
 
   @override
   State<LandlordProfileScreen> createState() => _LandlordProfileScreenState();
@@ -1091,7 +1093,10 @@ class _LandlordProfileScreenState extends State<LandlordProfileScreen> {
   bool _signingOut = false;
   Key _futureKey = UniqueKey();
 
-  void _refreshProfile() => setState(() => _futureKey = UniqueKey());
+  void _refreshProfile() {
+    setState(() => _futureKey = UniqueKey());
+    widget.onProfileChanged?.call();
+  }
 
   Future<void> _signOut() async {
     final confirmed = await showDialog<bool>(
@@ -1328,6 +1333,8 @@ class _AvatarCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = landlord?.fullName ?? 'Landlord';
+    final profileUrl = landlord?.profileImage ?? '';
+    final verified = landlord?.verified ?? false;
     final initials = name
         .trim()
         .split(' ')
@@ -1353,10 +1360,27 @@ class _AvatarCard extends StatelessWidget {
             shape: BoxShape.circle,
             border: Border.all(color: _C.greenLight, width: 2),
           ),
-          alignment: Alignment.center,
-          child: Text(initials,
-              style: const TextStyle(
-                  fontSize: 26, fontWeight: FontWeight.w700, color: _C.green)),
+          child: ClipOval(
+            child: profileUrl.trim().isNotEmpty
+                ? Image.network(
+                    profileUrl.trim(),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Center(
+                      child: Text(initials,
+                          style: const TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w700,
+                              color: _C.green)),
+                    ),
+                  )
+                : Center(
+                    child: Text(initials,
+                        style: const TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w700,
+                            color: _C.green)),
+                  ),
+          ),
         ),
         const SizedBox(height: 12),
         Text(name,
@@ -1368,26 +1392,49 @@ class _AvatarCard extends StatelessWidget {
               style: const TextStyle(fontSize: 13, color: _C.textLight)),
         ],
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: _C.greenFaint,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _C.greenLight),
+        if (verified)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _C.greenFaint,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _C.greenLight),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.verified_rounded, size: 14, color: _C.green),
+                SizedBox(width: 6),
+                Text('Verified Landlord',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: _C.green)),
+              ],
+            ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7ED),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFFFED7AA)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.hourglass_top_rounded,
+                    size: 14, color: Color(0xFFEA580C)),
+                SizedBox(width: 6),
+                Text('Not Verified Yet',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFEA580C))),
+              ],
+            ),
           ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.verified_rounded, size: 14, color: _C.green),
-              SizedBox(width: 6),
-              Text('Verified Landlord',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: _C.green)),
-            ],
-          ),
-        ),
       ]),
     );
   }

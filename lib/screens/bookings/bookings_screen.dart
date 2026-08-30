@@ -1,5 +1,6 @@
 // lib/screens/bookings/bookings_screen.dart
-
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -151,6 +152,33 @@ class _BookingsScreenState extends State<BookingsScreen>
         'status': 'cancelled',
         'cancelled_at': FieldValue.serverTimestamp(),
       });
+
+      // Fire-and-forget — booking is already cancelled by this point.
+      final booking = _bookings.firstWhere(
+        (b) => b['id'] == bookingId,
+        orElse: () => <String, dynamic>{},
+      );
+      final userId = booking['user_id'] as String?;
+      if (userId != null && userId.isNotEmpty) {
+        http
+            .post(
+          Uri.parse('https://roomzy-backend-eight.vercel.app/api/notify'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'type': 'booking_cancelled',
+            'bookingId': bookingId,
+            'userId': userId,
+            'hostelName': booking['hostel_name'],
+            'roomNumber': booking['room_number'],
+            'reason': 'Cancelled by student',
+          }),
+        )
+            .catchError((e) {
+          debugPrint('booking_cancelled notify failed (non-fatal): $e');
+          return http.Response('', 200);
+        });
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Booking cancelled'), backgroundColor: _kOrange));
@@ -812,6 +840,113 @@ class _PreBookingsTab extends StatefulWidget {
 class _PreBookingsTabState extends State<_PreBookingsTab> {
   String _filter = 'all';
 
+  Future<void> _deletePreBooking(
+      BuildContext context, String docId, String hostelName) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Remove Pre-Booking',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: Text(
+            'Remove your pre-booking for $hostelName? This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: _kRed, foregroundColor: Colors.white),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('pre_bookings')
+          .doc(docId)
+          .delete();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Pre-booking removed'),
+          backgroundColor: _kOrange,
+        ));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: _kRed));
+      }
+    }
+  }
+
+  Future<void> _clearAllMyPreBookings(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Clear All Pre-Bookings',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        content: const Text(
+            'This will remove all of your pre-bookings. This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: _kRed, foregroundColor: Colors.white),
+            child: const Text('Clear All'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('pre_bookings')
+          .where('user_id', isEqualTo: user.uid)
+          .get();
+
+      if (snap.docs.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('You have no pre-bookings to clear'),
+            backgroundColor: _kOrange,
+          ));
+        }
+        return;
+      }
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (final doc in snap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Cleared ${snap.docs.length} pre-booking(s)'),
+          backgroundColor: _kGreen,
+        ));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $e'), backgroundColor: _kRed));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -825,48 +960,59 @@ class _PreBookingsTabState extends State<_PreBookingsTab> {
         child: Container(
           color: Colors.white,
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (final entry in const [
-                  ('all', 'All'),
-                  ('active', 'Active'),
-                  ('converted', 'Converted'),
-                  ('expired', 'Expired'),
-                ])
-                  GestureDetector(
-                    onTap: () => setState(() => _filter = entry.$1),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: _filter == entry.$1
-                            ? _kPrimary
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(50),
-                        border: Border.all(
-                            color: _filter == entry.$1
-                                ? _kPrimary
-                                : Colors.black12),
-                      ),
-                      child: Text(entry.$2,
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
+          child: Row(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final entry in const [
+                        ('all', 'All'),
+                        ('active', 'Active'),
+                        ('converted', 'Converted'),
+                        ('expired', 'Expired'),
+                      ])
+                        GestureDetector(
+                          onTap: () => setState(() => _filter = entry.$1),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            margin: const EdgeInsets.only(right: 8),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
                               color: _filter == entry.$1
-                                  ? Colors.white
-                                  : Colors.black45)),
-                    ),
+                                  ? _kPrimary
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(50),
+                              border: Border.all(
+                                  color: _filter == entry.$1
+                                      ? _kPrimary
+                                      : Colors.black12),
+                            ),
+                            child: Text(entry.$2,
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: _filter == entry.$1
+                                        ? Colors.white
+                                        : Colors.black45)),
+                          ),
+                        ),
+                    ],
                   ),
-              ],
-            ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                onPressed: () => _clearAllMyPreBookings(context),
+                icon: const Icon(Icons.delete_sweep_rounded, color: _kRed),
+                tooltip: 'Clear all my pre-bookings',
+              ),
+            ],
           ),
         ),
       ),
-
       // ── Live stream ───────────────────────────────────────────
       StreamBuilder<QuerySnapshot>(
         stream: _filter == 'all'
@@ -940,159 +1086,213 @@ class _PreBookingsTabState extends State<_PreBookingsTab> {
                   _ => isUrgent ? _kOrange : _kPrimary,
                 };
 
-                return Container(
-                  // your existing card code here, no changes needed
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: accentColor.withOpacity(0.2)),
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 12,
-                          offset: const Offset(0, 3)),
-                    ],
-                  ),
-                  child: Column(children: [
-                    // Header
-                    Container(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                      decoration: BoxDecoration(
-                        color: accentColor.withOpacity(0.07),
-                        borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(20)),
-                      ),
-                      child: Row(children: [
-                        Icon(
-                            status == 'converted'
-                                ? Icons.check_circle_rounded
-                                : status == 'expired'
-                                    ? Icons.timer_off_rounded
-                                    : Icons.bookmark_rounded,
-                            color: accentColor,
-                            size: 18),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(d['hostel_name'] ?? '—',
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w800,
-                                        color: _kDark)),
-                                Text('Room ${d['room_number'] ?? '—'}',
-                                    style: const TextStyle(
-                                        fontSize: 12, color: Colors.black45)),
-                              ]),
+                return Dismissible(
+                  key: ValueKey(docs[i].id),
+                  direction: status == 'active'
+                      ? DismissDirection.endToStart
+                      : DismissDirection.none,
+                  confirmDismiss: (_) => showDialog<bool>(
+                    context: ctx,
+                    builder: (dCtx) => AlertDialog(
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
+                      title: const Text('Remove Pre-Booking',
+                          style: TextStyle(fontWeight: FontWeight.w700)),
+                      content: Text(
+                          'Remove your pre-booking for ${d['hostel_name'] ?? 'this hostel'}? This cannot be undone.'),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(dCtx, false),
+                            child: const Text('Cancel')),
+                        ElevatedButton(
+                          onPressed: () => Navigator.pop(dCtx, true),
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: _kRed,
+                              foregroundColor: Colors.white),
+                          child: const Text('Remove'),
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: accentColor.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(50),
-                            border:
-                                Border.all(color: accentColor.withOpacity(0.3)),
-                          ),
-                          child: Text(
-                            status == 'active'
-                                ? (daysLeft != null
-                                    ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
-                                    : 'Active')
-                                : status.toUpperCase(),
-                            style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                                color: accentColor),
-                          ),
-                        ),
-                      ]),
+                      ],
                     ),
-
-                    // Body
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(children: [
-                        Row(children: [
-                          _InfoTile(
-                              icon: Icons.timer_outlined,
-                              label: 'Visit Window',
-                              value: '${d['visit_window_days'] ?? '—'} days'),
+                  ),
+                  onDismissed: (_) => FirebaseFirestore.instance
+                      .collection('pre_bookings')
+                      .doc(docs[i].id)
+                      .delete(),
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 24),
+                    decoration: BoxDecoration(
+                        color: _kRed, borderRadius: BorderRadius.circular(20)),
+                    child:
+                        const Icon(Icons.delete_rounded, color: Colors.white),
+                  ),
+                  child: Container(
+                    // your existing card code here, no changes needed
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: accentColor.withOpacity(0.2)),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 12,
+                            offset: const Offset(0, 3)),
+                      ],
+                    ),
+                    child: Column(children: [
+                      // Header
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                        decoration: BoxDecoration(
+                          color: accentColor.withOpacity(0.07),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(20)),
+                        ),
+                        child: Row(children: [
+                          Icon(
+                              status == 'converted'
+                                  ? Icons.check_circle_rounded
+                                  : status == 'expired'
+                                      ? Icons.timer_off_rounded
+                                      : Icons.bookmark_rounded,
+                              color: accentColor,
+                              size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(d['hostel_name'] ?? '—',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w800,
+                                          color: _kDark)),
+                                  Text('Room ${d['room_number'] ?? '—'}',
+                                      style: const TextStyle(
+                                          fontSize: 12, color: Colors.black45)),
+                                ]),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: accentColor.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(50),
+                              border: Border.all(
+                                  color: accentColor.withOpacity(0.3)),
+                            ),
+                            child: Text(
+                              status == 'active'
+                                  ? (daysLeft != null
+                                      ? '$daysLeft day${daysLeft == 1 ? '' : 's'} left'
+                                      : 'Active')
+                                  : status.toUpperCase(),
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  color: accentColor),
+                            ),
+                          ),
                         ]),
-                        if (status == 'converted' &&
-                            d['converted_booking_id'] != null) ...[
-                          const SizedBox(height: 8),
+                      ),
+
+                      // Body
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(children: [
                           Row(children: [
                             _InfoTile(
-                                icon: Icons.receipt_long_rounded,
-                                label: 'Booking Ref',
-                                value: (d['converted_booking_id'] as String)
-                                    .substring(0, 8)
-                                    .toUpperCase()),
+                                icon: Icons.timer_outlined,
+                                label: 'Visit Window',
+                                value: '${d['visit_window_days'] ?? '—'} days'),
                           ]),
-                        ],
-                      ]),
-                    ),
-
-                    // Actions
-                    if (status == 'active' || status == 'converted')
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                        child: Row(children: [
-                          if (status == 'active')
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: () {
-                                  final hostelId =
-                                      d['hostel_id'] as String? ?? '';
-                                  if (hostelId.isNotEmpty) {
-                                    context.go('/hostels/$hostelId');
-                                  }
-                                },
-                                icon: const Icon(Icons.arrow_forward_rounded,
-                                    size: 16),
-                                label: const Text('Proceed to Book'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _kPrimary,
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(50)),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 10),
-                                ),
-                              ),
-                            ),
-                          if (status == 'converted')
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: () {
-                                  final bookingId =
-                                      d['converted_booking_id'] as String? ??
-                                          '';
-                                  if (bookingId.isNotEmpty) {
-                                    context.push('/bookings/$bookingId');
-                                  }
-                                },
-                                icon: const Icon(Icons.receipt_long_rounded,
-                                    size: 16),
-                                label: const Text('View Receipt'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _kGreen,
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(50)),
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 10),
-                                ),
-                              ),
-                            ),
+                          if (status == 'converted' &&
+                              d['converted_booking_id'] != null) ...[
+                            const SizedBox(height: 8),
+                            Row(children: [
+                              _InfoTile(
+                                  icon: Icons.receipt_long_rounded,
+                                  label: 'Booking Ref',
+                                  value: (d['converted_booking_id'] as String)
+                                      .substring(0, 8)
+                                      .toUpperCase()),
+                            ]),
+                          ],
                         ]),
                       ),
-                  ]), // Column children (card body)
-                ); // Container (card)
-              }, // itemBuilder
+
+                      // Actions
+                      if (status == 'active' || status == 'converted')
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                          child: Row(children: [
+                            if (status == 'active') ...[
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    final hostelId =
+                                        d['hostel_id'] as String? ?? '';
+                                    if (hostelId.isNotEmpty) {
+                                      context.go('/hostels/$hostelId');
+                                    }
+                                  },
+                                  icon: const Icon(Icons.arrow_forward_rounded,
+                                      size: 16),
+                                  label: const Text('Proceed to Book'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _kPrimary,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(50)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                onPressed: () => _deletePreBooking(
+                                    context,
+                                    docs[i].id,
+                                    d['hostel_name'] ?? 'this hostel'),
+                                icon: const Icon(Icons.delete_outline_rounded,
+                                    color: _kRed),
+                                tooltip: 'Remove',
+                              ),
+                            ],
+                            if (status == 'converted')
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    final bookingId =
+                                        d['converted_booking_id'] as String? ??
+                                            '';
+                                    if (bookingId.isNotEmpty) {
+                                      context.push('/bookings/$bookingId');
+                                    }
+                                  },
+                                  icon: const Icon(Icons.receipt_long_rounded,
+                                      size: 16),
+                                  label: const Text('View Receipt'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _kGreen,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(50)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
+                                  ),
+                                ),
+                              ),
+                          ]),
+                        ),
+                    ]), // Column children (card body)
+                  ), // Container (card)
+                ); // Dismissible
+              }, // itemBuilderitemBuilder
             ), // SliverList.separated
           ); // SliverPadding
         }, // StreamBuilder builder

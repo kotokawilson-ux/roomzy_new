@@ -14,6 +14,22 @@
 //   • settings/system         → maintenance_mode, maintenance_message
 //   • settings/notifications  → push_enabled, notify_admin_new_booking,
 //                                notify_admin_on_refund
+//   • settings/site_stats     → stats (array of 4 {number,label} maps) —
+//                                read live by AboutSection._buildStats on
+//                                the public site via a Firestore stream.
+//   • settings/site_images    → hero_images (list of URLs, home carousel),
+//                                hostels_hero_image (single URL) — read
+//                                live by HeroSection and HostelsHero on the
+//                                public site via Firestore streams.
+//
+// NOTE — Firestore rules: settings/site_stats and settings/site_images are
+// rendered on public pages (About, Home hero, Hostels search) that logged-
+// out visitors can see. The blanket `settings/{id} → allow read: if
+// isSignedIn()` rule blocks that. firestore.rules needs explicit public-read
+// carve-outs for exactly those two docs — see the accompanying rules file.
+// Every other settings/* doc (Paystack keys, payouts, platform switches,
+// etc.) stays signed-in-only, which is correct since those are never read
+// by public/unauthenticated pages.
 //
 // REMOVED from the earlier drafts, on purpose:
 //   • Paystack/Hubtel provider switcher — Hubtel isn't implemented anywhere
@@ -44,13 +60,22 @@
 //                                              Function to act on it
 //   settings/payouts.*                      → read server-side inside
 //                                              initiateLandlordPayout.js
-// This pane stores the values correctly; it does not by itself enforce them.
+//   settings/site_stats.stats               → already read live by
+//                                              AboutSection._buildStats
+//   settings/site_images.*                  → already read live by
+//                                              HeroSection & HostelsHero
+// This pane stores the values correctly; it does not by itself enforce them
+// (site_stats and site_images are the exceptions — those are already wired
+// end-to-end, provided the Firestore rules allow public read on them).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // THEME TOKENS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +120,8 @@ class _SettingsPaneState extends State<SettingsPane> {
   Map<String, dynamic> _payouts = {};
   Map<String, dynamic> _system = {};
   Map<String, dynamic> _notifications = {};
+  Map<String, dynamic> _siteStats = {};
+  Map<String, dynamic> _siteImages = {};
 
   @override
   void initState() {
@@ -114,6 +141,8 @@ class _SettingsPaneState extends State<SettingsPane> {
         _db.collection('settings').doc('payouts').get(),
         _db.collection('settings').doc('system').get(),
         _db.collection('settings').doc('notifications').get(),
+        _db.collection('settings').doc('site_stats').get(),
+        _db.collection('settings').doc('site_images').get(),
       ]);
       if (!mounted) return;
       setState(() {
@@ -122,6 +151,8 @@ class _SettingsPaneState extends State<SettingsPane> {
         _payouts = results[2].data() ?? {};
         _system = results[3].data() ?? {};
         _notifications = results[4].data() ?? {};
+        _siteStats = results[5].data() ?? {};
+        _siteImages = results[6].data() ?? {};
         _loading = false;
       });
     } catch (e) {
@@ -185,12 +216,14 @@ class _SettingsPaneState extends State<SettingsPane> {
                   twoCol: twoCol,
                   sections: [
                     _PaystackConfigSection(),
-                    _PaymentProviderSection(initial: _platform), // ← new
+                    _PaymentProviderSection(initial: _platform),
                     _PlatformFeaturesSection(initial: _platform),
                     _BookingPolicySection(initial: _bookingPolicy),
                     _PayoutSafetySection(initial: _payouts),
                     _MaintenanceSection(initial: _system),
                     _NotificationsSection(initial: _notifications),
+                    _SiteStatsSection(initial: _siteStats),
+                    _SiteImagesSection(initial: _siteImages), // ← restored
                   ],
                   fullWidthTrailing: const _SystemInfoCard(),
                 ),
@@ -1565,7 +1598,556 @@ class _NotificationsSectionState extends State<_NotificationsSection> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. SYSTEM INFO — honest, read-only reference (no fake status claims)
+// 7. SITE STATS — the four numbers shown in the public "About" section
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Writes settings/site_stats.stats — an array of exactly 4 {number, label}
+// maps, matching the 4 fixed slots AboutSection._buildStats already lays
+// out (2x2 on mobile, 1x4 on desktop). Kept to 4 fixed fields rather than
+// an add/remove list so the public page's grid never has to change shape.
+// AboutSection reads this doc live via a Firestore stream, so edits show
+// up on the public site immediately — no redeploy needed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SiteStatsSection extends StatefulWidget {
+  final Map<String, dynamic> initial;
+  const _SiteStatsSection({required this.initial});
+
+  @override
+  State<_SiteStatsSection> createState() => _SiteStatsSectionState();
+}
+
+class _SiteStatsSectionState extends State<_SiteStatsSection> {
+  static const _defaults = [
+    {'number': '120', 'label': 'Rooms Available'},
+    {'number': '75', 'label': 'Happy Residents'},
+    {'number': '5', 'label': 'Years of Service'},
+    {'number': '20', 'label': 'Staff Members'},
+  ];
+
+  late final List<TextEditingController> _numberCtrls;
+  late final List<TextEditingController> _labelCtrls;
+  bool _saving = false;
+  bool _saved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final raw = widget.initial['stats'];
+    final stats = (raw is List && raw.length == 4)
+        ? raw.cast<Map<String, dynamic>>()
+        : _defaults;
+    _numberCtrls = [
+      for (final s in stats)
+        TextEditingController(text: s['number']?.toString() ?? '')
+    ];
+    _labelCtrls = [
+      for (final s in stats)
+        TextEditingController(text: s['label']?.toString() ?? '')
+    ];
+  }
+
+  @override
+  void dispose() {
+    for (final c in _numberCtrls) c.dispose();
+    for (final c in _labelCtrls) c.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    for (var i = 0; i < 4; i++) {
+      if (_numberCtrls[i].text.trim().isEmpty ||
+          _labelCtrls[i].text.trim().isEmpty) {
+        _showSnack(context, 'Fill in every number and label', isError: true);
+        return;
+      }
+    }
+    setState(() => _saving = true);
+    try {
+      await _db.collection('settings').doc('site_stats').set({
+        'stats': [
+          for (var i = 0; i < 4; i++)
+            {
+              'number': _numberCtrls[i].text.trim(),
+              'label': _labelCtrls[i].text.trim(),
+            },
+        ],
+        'updated_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      setState(() {
+        _saved = true;
+        _saving = false;
+      });
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) setState(() => _saved = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        _showSnack(context, 'Save failed: $e', isError: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsCard(
+      icon: Icons.bar_chart_rounded,
+      color: _kGreenAccent,
+      title: 'Site Stats',
+      description:
+          'The four numbers shown in the "About" section of the public '
+          'site (Rooms Available, Happy Residents, etc.). Edits here '
+          'appear on the site immediately — no redeploy needed.',
+      children: [
+        for (var i = 0; i < 4; i++)
+          Padding(
+            padding: EdgeInsets.only(bottom: i == 3 ? 0 : 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 76,
+                  child: _NumberFieldText(
+                    label: 'Number',
+                    ctrl: _numberCtrls[i],
+                    hint: 'e.g. 120',
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _NumberFieldText(
+                    label: 'Label',
+                    ctrl: _labelCtrls[i],
+                    hint: 'e.g. Rooms Available',
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      footer: _SaveButton(
+          saving: _saving, saved: _saved, onTap: _save, color: _kGreenAccent),
+    );
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// CLOUDINARY UPLOAD HELPER — same pattern as rooms_pane.dart's _pickAndUpload,
+// duplicated here (private to this file) so Settings doesn't need to import
+// across pane files. Same cloud name / upload preset as the rest of the app.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _kSiteImgCloudName = 'dfv9yibba';
+const _kSiteImgUploadPreset = 'ml_default';
+
+Future<String?> _siteImgPickAndUpload({String folder = 'site_images'}) async {
+  final picker = ImagePicker();
+  final picked = await picker.pickImage(
+    source: ImageSource.gallery,
+    imageQuality: 85,
+  );
+  if (picked == null) return null;
+
+  final Uint8List bytes = await picked.readAsBytes();
+  final filename = picked.name.isNotEmpty
+      ? picked.name
+      : 'upload_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+  final uri = Uri.parse(
+    'https://api.cloudinary.com/v1_1/$_kSiteImgCloudName/image/upload',
+  );
+  final req = http.MultipartRequest('POST', uri)
+    ..fields['upload_preset'] = _kSiteImgUploadPreset
+    ..fields['folder'] = folder
+    ..files
+        .add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+
+  try {
+    final res = await req.send();
+    final body = await res.stream.bytesToString();
+    final json = jsonDecode(body) as Map<String, dynamic>;
+    if (res.statusCode == 200) return json['secure_url'] as String?;
+    debugPrint('Cloudinary error [${res.statusCode}]: $body');
+    return null;
+  } catch (e) {
+    debugPrint('_siteImgPickAndUpload exception: $e');
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SINGLE IMAGE PICKER FIELD — pick from gallery, upload, preview inline.
+// Used here for the hostels-search background (one image, one field).
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SingleSiteImagePicker extends StatefulWidget {
+  const _SingleSiteImagePicker({
+    required this.label,
+    required this.controller,
+    this.folder = 'site_images',
+  });
+  final String label;
+  final TextEditingController controller;
+  final String folder;
+
+  @override
+  State<_SingleSiteImagePicker> createState() => _SingleSiteImagePickerState();
+}
+
+class _SingleSiteImagePickerState extends State<_SingleSiteImagePicker> {
+  bool _uploading = false;
+
+  Future<void> _pick() async {
+    setState(() => _uploading = true);
+    try {
+      final url = await _siteImgPickAndUpload(folder: widget.folder);
+      if (url != null && mounted) {
+        widget.controller.text = url;
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) _showSnack(context, 'Upload failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final url = widget.controller.text.trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(widget.label,
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w600, color: _kTextMid)),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              decoration: BoxDecoration(
+                color: _kSurfaceAlt,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _kBorder),
+              ),
+              child: Text(
+                url.isEmpty ? 'No image selected' : url,
+                style: TextStyle(
+                    fontSize: 11.5,
+                    color: url.isEmpty ? _kTextMuted : _kTextMid),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: _uploading ? null : _pick,
+            icon: _uploading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.upload_rounded,
+                    size: 16, color: Colors.white),
+            label: Text(_uploading ? '...' : 'Upload',
+                style: const TextStyle(color: Colors.white, fontSize: 12)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kPurple,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ]),
+        if (url.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.network(
+              url,
+              height: 130,
+              width: double.infinity,
+              fit: BoxFit.cover,
+              loadingBuilder: (_, child, progress) => progress == null
+                  ? child
+                  : Container(
+                      height: 130,
+                      color: _kSurfaceAlt,
+                      child: const Center(
+                          child: CircularProgressIndicator(strokeWidth: 2)),
+                    ),
+              errorBuilder: (_, __, ___) => Container(
+                height: 60,
+                decoration: BoxDecoration(
+                  color: _kRed.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _kRed.withOpacity(0.25)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.broken_image_outlined, color: _kRed, size: 16),
+                    const SizedBox(width: 6),
+                    Text('Could not load image',
+                        style: TextStyle(color: _kRed, fontSize: 11.5)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTI IMAGE PICKER — thumbnail strip, "Add Image" uploads + appends,
+// tap the × to remove. Used for the home hero carousel.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MultiSiteImagePicker extends StatefulWidget {
+  const _MultiSiteImagePicker({
+    required this.label,
+    required this.urls,
+    required this.onChanged,
+    this.folder = 'site_images/hero',
+  });
+  final String label;
+  final List<String> urls;
+  final ValueChanged<List<String>> onChanged;
+  final String folder;
+
+  @override
+  State<_MultiSiteImagePicker> createState() => _MultiSiteImagePickerState();
+}
+
+class _MultiSiteImagePickerState extends State<_MultiSiteImagePicker> {
+  bool _uploading = false;
+
+  Future<void> _pickMore() async {
+    setState(() => _uploading = true);
+    try {
+      final url = await _siteImgPickAndUpload(folder: widget.folder);
+      if (url != null) {
+        widget.onChanged([...widget.urls, url]);
+      }
+    } catch (e) {
+      if (mounted) _showSnack(context, 'Upload failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _remove(int i) {
+    final next = [...widget.urls]..removeAt(i);
+    widget.onChanged(next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const thumb = 100.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Expanded(
+            child: Text(widget.label,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _kTextMid)),
+          ),
+          ElevatedButton.icon(
+            onPressed: _uploading ? null : _pickMore,
+            icon: _uploading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.add_photo_alternate_outlined,
+                    size: 16, color: Colors.white),
+            label: Text(_uploading ? '...' : 'Add Image',
+                style: const TextStyle(color: Colors.white, fontSize: 12)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kPurple,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        if (widget.urls.isEmpty)
+          Container(
+            height: thumb,
+            decoration: BoxDecoration(
+              color: _kSurfaceAlt,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _kBorder),
+            ),
+            child: const Center(
+              child: Text('No images yet',
+                  style: TextStyle(fontSize: 12, color: _kTextMuted)),
+            ),
+          )
+        else
+          SizedBox(
+            height: thumb,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: widget.urls.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) => Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.network(
+                      widget.urls[i],
+                      width: thumb,
+                      height: thumb,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: thumb,
+                        height: thumb,
+                        decoration: BoxDecoration(
+                          color: _kRed.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.broken_image_outlined, color: _kRed),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: GestureDetector(
+                      onTap: () => _remove(i),
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.6),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.close,
+                            color: Colors.white, size: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7B. SITE IMAGES — home hero carousel + hostels-search background
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Same Cloudinary pick-and-upload flow as the Rooms pane's image fields —
+// admin taps Upload/Add Image, picks from their device, it uploads and the
+// URL fills in automatically. No manual URL pasting required (still works
+// if you want to type/paste one directly into the preview box's spot, but
+// the primary flow is upload).
+//
+// Writes settings/site_images:
+//   • hero_images        → List<String>, read live by HeroSection.
+//   • hostels_hero_image  → single String, read live by HostelsHero.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SiteImagesSection extends StatefulWidget {
+  final Map<String, dynamic> initial;
+  const _SiteImagesSection({required this.initial});
+
+  @override
+  State<_SiteImagesSection> createState() => _SiteImagesSectionState();
+}
+
+class _SiteImagesSectionState extends State<_SiteImagesSection> {
+  late List<String> _heroUrls;
+  late final TextEditingController _hostelsHeroCtrl;
+  bool _saving = false;
+  bool _saved = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final raw = widget.initial['hero_images'];
+    _heroUrls = (raw is List) ? raw.map((e) => e.toString()).toList() : [];
+    _hostelsHeroCtrl = TextEditingController(
+        text: widget.initial['hostels_hero_image']?.toString() ?? '');
+  }
+
+  @override
+  void dispose() {
+    _hostelsHeroCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_heroUrls.isEmpty) {
+      _showSnack(context, 'Add at least one home hero image', isError: true);
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await _db.collection('settings').doc('site_images').set({
+        'hero_images': _heroUrls,
+        'hostels_hero_image': _hostelsHeroCtrl.text.trim(),
+        'updated_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      setState(() {
+        _saved = true;
+        _saving = false;
+      });
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) setState(() => _saved = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        _showSnack(context, 'Save failed: $e', isError: true);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsCard(
+      icon: Icons.image_outlined,
+      color: _kPurple,
+      title: 'Site Images',
+      description:
+          'Home page hero carousel and the hostels-search page background. '
+          'Pick an image from your device — it uploads to Cloudinary and '
+          'the link fills in automatically, same as the Rooms pane. Edits '
+          'appear on the public site immediately after saving.',
+      children: [
+        _MultiSiteImagePicker(
+          label: 'Home hero carousel',
+          urls: _heroUrls,
+          onChanged: (next) => setState(() => _heroUrls = next),
+          folder: 'site_images/hero',
+        ),
+        const SizedBox(height: 8),
+        const Divider(color: _kBorder, height: 24),
+        _SingleSiteImagePicker(
+          label: 'Hostels-search background (optional)',
+          controller: _hostelsHeroCtrl,
+          folder: 'site_images/hostels_hero',
+        ),
+      ],
+      footer: _SaveButton(
+          saving: _saving, saved: _saved, onTap: _save, color: _kPurple),
+    );
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. SYSTEM INFO — honest, read-only reference (no fake status claims)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SystemInfoCard extends StatelessWidget {
@@ -1584,7 +2166,6 @@ class _SystemInfoCard extends StatelessWidget {
             'Firestore — they live in Vercel environment variables.',
         children: [
           _InfoRow(label: 'Backend', value: _kBackendUrl, canCopy: true),
-          // Replace with:
           const _InfoRow(
             label: 'Payments provider',
             value: 'Set via Payment Gateway card above',

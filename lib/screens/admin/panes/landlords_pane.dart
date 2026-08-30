@@ -612,6 +612,33 @@ class _LandlordCard extends StatelessWidget {
                                 ),
                               ),
                             ),
+                          if (verified)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                    color: Colors.green.withOpacity(0.35)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.verified_rounded,
+                                      size: 9, color: Colors.green),
+                                  SizedBox(width: 3),
+                                  Text(
+                                    'VERIFIED',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.green,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           if (!verified)
                             Container(
                               padding: const EdgeInsets.symmetric(

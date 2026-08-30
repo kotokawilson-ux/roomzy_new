@@ -83,7 +83,7 @@ class _LoginScreenState extends State<LoginScreen>
         details: 'Email: $email, Role: ${authService.userRole}',
       );
       final role = authService.userRole;
-      if (role == 'admin') {
+      if (role == 'admin' || role == 'super_admin') {
         await _registerAdminPushId(authService.currentUser?.id);
         context.go('/admin');
       } else if (role == 'landlord') {

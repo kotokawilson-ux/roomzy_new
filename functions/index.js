@@ -1,32 +1,45 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
-
-const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
+const { setGlobalOptions } = require("firebase-functions");
+const { onRequest } = require("firebase-functions/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const logger = require("firebase-functions/logger");
+const admin = require("firebase-admin");
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
+if (!admin.apps.length) admin.initializeApp();
+const db = admin.firestore();
+
 setGlobalOptions({ maxInstances: 10 });
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+// ── Auto-expire stale pre-bookings ──────────────────────────────────────────
+exports.expirePreBookings = onSchedule("every 24 hours", async (event) => {
+    const now = admin.firestore.Timestamp.now();
+    const snap = await db.collection("pre_bookings")
+        .where("status", "==", "active")
+        .where("expires_at", "<=", now)
+        .get();
 
-// exports.helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+    if (snap.empty) {
+        logger.info("No pre-bookings to expire");
+        return;
+    }
+
+    let batch = db.batch();
+    let count = 0;
+    const commits = [];
+
+    for (const doc of snap.docs) {
+        batch.update(doc.ref, {
+            status: "expired",
+            updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        count++;
+        if (count === 450) {
+            commits.push(batch.commit());
+            batch = db.batch();
+            count = 0;
+        }
+    }
+    if (count > 0) commits.push(batch.commit());
+
+    await Promise.all(commits);
+    logger.info(`Expired ${snap.docs.length} pre-booking(s)`);
+});

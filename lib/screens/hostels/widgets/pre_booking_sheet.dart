@@ -1,7 +1,8 @@
 // lib/screens/hostel/widgets/pre_booking_sheet.dart
 //
 // Pre-booking sheet — teal theme matching RoomzyFind design tokens
-
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../../../models/models.dart';
@@ -119,7 +120,7 @@ class _PreBookingSheetState extends State<_PreBookingSheet>
         'hostel_id': widget.hostel.id,
         'hostel_name': widget.hostel.hostelName,
         'hostel_code': widget.hostel.hostelCode,
-        'hostel_phone': widget.hostel.phone, // ← add this
+        'hostel_phone': widget.hostel.phone,
         'landlord_id': widget.hostel.landlordId,
         'room_id': widget.room.id,
         'room_number': widget.room.roomNumber,
@@ -135,6 +136,27 @@ class _PreBookingSheetState extends State<_PreBookingSheet>
       setState(() {
         _submitting = false;
         _submitted = true;
+      });
+
+      // Fire-and-forget — pre-booking is already saved successfully by this point.
+      http
+          .post(
+        Uri.parse('https://roomzy-backend-eight.vercel.app/api/notify'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'type': 'pre_booking_created',
+          'userId': widget.user.id,
+          'email': email,
+          'studentName': name,
+          'hostelName': widget.hostel.hostelName,
+          'roomNumber': widget.room.roomNumber,
+          'landlordId': widget.hostel.landlordId,
+          'visitWindowDays': windowDays,
+        }),
+      )
+          .catchError((e) {
+        debugPrint('pre_booking_created notify failed (non-fatal): $e');
+        return http.Response('', 200);
       });
     } catch (e) {
       setState(() {

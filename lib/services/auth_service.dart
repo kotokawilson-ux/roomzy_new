@@ -1,5 +1,6 @@
 // lib/services/auth_service.dart
-
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -43,7 +44,8 @@ class AuthService extends ChangeNotifier {
 
   // ─── Login ────────────────────────────────────────────────────
 
-  static const _validRoles = {'admin', 'landlord', 'student'};
+  // NEW — 'super_admin' added so the promoted role passes login validation.
+  static const _validRoles = {'admin', 'super_admin', 'landlord', 'student'};
 
   Future<bool> _signIn(String email, String password) async {
     _setLoading(true);
@@ -167,6 +169,9 @@ class AuthService extends ChangeNotifier {
       );
       _sessionLoaded = true;
       notifyListeners();
+
+      _notifyStudentRegistered(email: email.trim(), username: username.trim());
+
       return true;
     } on FirebaseAuthException catch (e) {
       _setError(_authError(e.code));
@@ -179,6 +184,51 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+  static const _notifyEndpoint =
+      'https://roomzy-backend-eight.vercel.app/api/notify';
+
+  // Fire-and-forget — never blocks or fails registration if the
+  // notification call itself has a problem.
+  Future<void> _notifyLandlordSignup({
+    required String landlordId,
+    required String businessName,
+    required String email,
+  }) async {
+    try {
+      await http.post(
+        Uri.parse(_notifyEndpoint),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'type': 'landlord_signup',
+          'landlordId': landlordId,
+          'businessName': businessName,
+          'email': email,
+        }),
+      );
+    } catch (e) {
+      debugPrint('AuthService: landlord signup notify failed (non-fatal): $e');
+    }
+  }
+
+  Future<void> _notifyStudentRegistered({
+    required String email,
+    required String username,
+  }) async {
+    try {
+      await http.post(
+        Uri.parse(_notifyEndpoint),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'type': 'student_registered',
+          'email': email,
+          'username': username,
+        }),
+      );
+    } catch (e) {
+      debugPrint(
+          'AuthService: student registered notify failed (non-fatal): $e');
+    }
+  }
   // ─── Register (Landlord — self-service) ───────────────────────
   //
   // Lets a landlord sign themselves up from the app, no admin
@@ -253,6 +303,14 @@ class AuthService extends ChangeNotifier {
       );
       _sessionLoaded = true;
       notifyListeners();
+
+      // Fire-and-forget — landlord is already registered successfully
+      // by this point; a notify failure shouldn't undo that.
+      _notifyLandlordSignup(
+        landlordId: landlordRef.id,
+        businessName: businessName.trim(),
+        email: email.trim(),
+      );
       return true;
     } on FirebaseAuthException catch (e) {
       _setError(_authError(e.code));
@@ -361,6 +419,70 @@ class AuthService extends ChangeNotifier {
     }
   }
 
+     
+
+  // ─── Create Admin Account (Super Admin only) ──────────────────
+  //
+  // Mirrors createLandlordAccount: creates the Firebase Auth account
+  // via a secondary FirebaseApp so the currently signed-in super
+  // admin's own session is untouched, then writes the Firestore
+  // `users` doc using the REAL Auth uid as the doc ID (not .add()
+  // with a random ID — that's what was broken before: a Firestore
+  // doc existed with a role and a password field, but no actual
+  // Auth account backing it, so login always failed).
+
+  Future<({bool success, String? error})> createAdminAccount({
+    required String username,
+    required String email,
+    required String password,
+    required String role, // 'admin' or 'super_admin'
+  }) async {
+    _setLoading(true);
+    _clearError();
+    try {
+      final secondaryApp = await Firebase.initializeApp(
+        name: 'admin_creation_${DateTime.now().millisecondsSinceEpoch}',
+        options: Firebase.app().options,
+      );
+
+      String newUid;
+      try {
+        final secondaryAuth = FirebaseAuth.instanceFor(app: secondaryApp);
+        final cred = await secondaryAuth.createUserWithEmailAndPassword(
+          email: email.trim(),
+          password: password.trim(),
+        );
+        newUid = cred.user!.uid;
+        await secondaryAuth.signOut();
+      } finally {
+        await secondaryApp.delete();
+      }
+
+      await _db.collection('users').doc(newUid).set({
+        'uid': newUid,
+        'username': username.trim(),
+        'email': email.trim(),
+        'role': role,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint(
+          'AuthService: admin account created — uid=$newUid role=$role');
+      return (success: true, error: null);
+    } on FirebaseAuthException catch (e) {
+      final msg = _authError(e.code);
+      _setError(msg);
+      return (success: false, error: msg);
+    } catch (e) {
+      final msg = 'Failed to create admin account: $e';
+      _setError(msg);
+      return (success: false, error: msg);
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  
   // ─── Update Profile ───────────────────────────────────────────
   //
   // Landlords (and students) can update their username and phone.

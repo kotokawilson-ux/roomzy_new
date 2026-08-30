@@ -1,5 +1,9 @@
 // lib/widgets/hostels_hero.dart
 
+import 'dart:async';
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -27,6 +31,28 @@ class _HostelsHeroState extends State<HostelsHero> {
     'per academic year'
   ];
 
+  // Set from the admin "Site Images" card's hostels_hero_image field. Null
+  // (the default, and whenever that field is blank/missing) means "use the
+  // bundled assets/images/hostel.jpg" — same as before this was editable.
+  String? _bgImageUrl;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _imgSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _imgSub = FirebaseFirestore.instance
+        .collection('settings')
+        .doc('site_images')
+        .snapshots()
+        .listen((snap) {
+      final url = snap.data()?['hostels_hero_image']?.toString();
+      if (mounted) {
+        setState(
+            () => _bgImageUrl = (url != null && url.isNotEmpty) ? url : null);
+      }
+    });
+  }
+
   void _triggerSearch() {
     final raw = _budgetController.text.replaceAll(',', '').trim();
     final budget = double.tryParse(raw);
@@ -39,6 +65,7 @@ class _HostelsHeroState extends State<HostelsHero> {
 
   @override
   void dispose() {
+    _imgSub?.cancel();
     _searchController.dispose();
     _budgetController.dispose();
     super.dispose();
@@ -51,9 +78,11 @@ class _HostelsHeroState extends State<HostelsHero> {
     final isMedium = width > 500;
 
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         image: DecorationImage(
-          image: AssetImage('assets/images/hostel.jpg'),
+          image: _bgImageUrl != null
+              ? CachedNetworkImageProvider(_bgImageUrl!) as ImageProvider
+              : const AssetImage('assets/images/hostel.jpg'),
           fit: BoxFit.cover,
         ),
       ),
