@@ -2,34 +2,27 @@
 //
 // Reminder + auto-revoke system for RoomzyFind.
 //
-// Push delivery: OneSignal scheduled notifications (already in pubspec).
+// Push delivery: routed through the Vercel /api/notify backend, which
+// holds the OneSignal REST key server-side (never in the client).
 // Local persistence: shared_preferences (already in pubspec).
-// No new dependencies required.
 //
 // ── How it works ──────────────────────────────────────────────────────────────
 //
 //  1. When a booking has balance > 0 and a due-date is set, call
-//     scheduleReminders(). This sends one or more future-dated push
-//     notifications via the OneSignal REST API (server-side scheduling).
+//     scheduleReminders(). This computes fire times client-side, then
+//     asks the backend to schedule each one as a future-dated OneSignal
+//     push (type: 'schedule_reminder').
 //
-//  2. When the user pays in full, call cancelReminders() which deletes
-//     the pending OneSignal notifications via the REST cancel endpoint.
+//  2. When the user pays in full, call cancelReminders() which asks the
+//     backend to cancel the pending OneSignal notifications
+//     (type: 'cancel_reminder').
 //
 //  3. On every app launch / resume, call checkAndRevokeOverdue() to
 //     find bookings whose due-date has passed with an unpaid balance
 //     and flip them to 'cancelled' in Firestore.
 //
-// ── OneSignal REST API used ───────────────────────────────────────────────────
-//   POST https://onesignal.com/api/v1/notifications          — create / schedule
-//   DELETE https://onesignal.com/api/v1/notifications/{id}   — cancel
-//
-// ── Setup ─────────────────────────────────────────────────────────────────────
-//  • Set _kOneSignalAppId and _kOneSignalRestKey below (from your OneSignal
-//    dashboard → Settings → Keys & IDs).
-//  • These values should ideally come from a remote-config / env file; for
-//    now hard-coding them here keeps the service self-contained.
-//  • In main.dart you already call NotificationService.instance.init() which
-//    initialises the OneSignal SDK. Nothing extra needed there.
+// Push-only: no email path, no OneSignal REST key on-device. All actual
+// OneSignal API calls live in notify.js.
 
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -37,13 +30,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ─── ⚙️  Replace these two values from your OneSignal dashboard ──────────────
-const _kOneSignalAppId = 'aad5f0fb-e695-4c28-9537-d34411df4f41';
-const _kOneSignalRestKey =
-    'os_v2_app_vlk7b67gsvgcrfjx2ncbdx2pifsqifs4smaez3m5ecyfq6hh3ed77uuayl7hmtifbzubyodky5wb4xrfu4scvdty3ri2tsh5zuymqcy';
-// ─────────────────────────────────────────────────────────────────────────────
-
-const _kOneSignalBase = 'https://onesignal.com/api/v1';
+const _notifyEndpoint = 'https://roomzy-backend-eight.vercel.app/api/notify';
 const _kPrefsKey = 'rzf_reminder_notif_ids'; // stores scheduled notif IDs
 
 // ─── Reminder frequency ───────────────────────────────────────────────────────
@@ -145,7 +132,7 @@ class BalanceReminderService {
     await prefs.setString('${_kPrefsKey}_ids_$bookingId', jsonEncode(ids));
   }
 
-  // ── Schedule reminders via OneSignal REST API ───────────────────────────────
+  // ── Schedule reminders via the backend ──────────────────────────────────────
   //
   // Call this when:
   //   • A due date is set or changed
@@ -163,7 +150,6 @@ class BalanceReminderService {
     required ReminderSettings settings,
     required String oneSignalPlayerId,
     String hostelName = 'your room',
-    String? studentEmail,
   }) async {
     // Always cancel previous batch first
     await cancelReminders(bookingId);
@@ -228,50 +214,7 @@ class BalanceReminderService {
           ? 'GHS ${balance.toStringAsFixed(2)} must be paid TODAY or your booking will be cancelled.'
           : 'GHS ${balance.toStringAsFixed(2)} still owed. Due ${_fmtDate(dueDate)}. Tap to pay.';
 
-  /// Schedules a single email via OneSignal REST API. Same send_after
-  /// mechanism as push, just a different target_channel + payload shape.
-  Future<String?> _sendScheduledEmail({
-    required String email,
-    required String subject,
-    required String body,
-    required DateTime sendAt,
-  }) async {
-    try {
-      final utc = sendAt.toUtc();
-      final sendAtStr = '${utc.year}-${_p(utc.month)}-${_p(utc.day)} '
-          '${_p(utc.hour)}:${_p(utc.minute)}:00 UTC';
-
-      final payload = {
-        'app_id': _kOneSignalAppId,
-        'target_channel': 'email',
-        'include_email_tokens': [email],
-        'email_subject': subject,
-        'email_body': body,
-        'send_after': sendAtStr,
-      };
-
-      final res = await http.post(
-        Uri.parse('$_kOneSignalBase/notifications'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Basic $_kOneSignalRestKey',
-        },
-        body: jsonEncode(payload),
-      );
-
-      if (res.statusCode == 200) {
-        final body = jsonDecode(res.body) as Map<String, dynamic>;
-        return body['id'] as String?;
-      } else {
-        debugPrint('[Reminder] OneSignal email schedule failed: ${res.body}');
-        return null;
-      }
-    } catch (e) {
-      debugPrint('[Reminder] _sendScheduledEmail error: $e');
-      return null;
-    }
-  }
-            final id = await _sendScheduledNotification(
+      final id = await _sendScheduledNotification(
         playerId: oneSignalPlayerId,
         title: title,
         body: body,
@@ -284,16 +227,6 @@ class BalanceReminderService {
       );
 
       if (id != null) scheduledIds.add(id);
-
-      if (studentEmail != null && studentEmail.isNotEmpty) {
-        final emailId = await _sendScheduledEmail(
-          email: studentEmail,
-          subject: title,
-          body: body,
-          sendAt: fireTime,
-        );
-        if (emailId != null) scheduledIds.add(emailId);
-      }
     }
 
     await _saveNotifIds(bookingId, scheduledIds);
@@ -305,16 +238,15 @@ class BalanceReminderService {
 
   Future<void> cancelReminders(String bookingId) async {
     final ids = await _loadNotifIds(bookingId);
-    for (final id in ids) {
-      await _cancelOneSignalNotification(id);
-    }
+    await _cancelOneSignalNotifications(ids);
     await _saveNotifIds(bookingId, []);
     if (ids.isNotEmpty) {
       debugPrint(
           '[Reminder] Cancelled ${ids.length} notifications for $bookingId');
     }
   }
-// ── Move-in nudge reminders ─────────────────────────────────────────────────
+
+  // ── Move-in nudge reminders ─────────────────────────────────────────────────
   //
   // Schedules a single reminder asking the student to confirm their move-in
   // date. Call this when a booking reaches status 'confirmed' but
@@ -352,11 +284,10 @@ class BalanceReminderService {
 
   Future<void> cancelMoveInReminders(String bookingId) async {
     final ids = await _loadNotifIds('${bookingId}_movein');
-    for (final id in ids) {
-      await _cancelOneSignalNotification(id);
-    }
+    await _cancelOneSignalNotifications(ids);
     await _saveNotifIds('${bookingId}_movein', []);
   }
+
   // ── Auto-revoke overdue bookings ────────────────────────────────────────────
   //
   // Call this in AppLifecycleState.resumed and on app start.
@@ -400,7 +331,8 @@ class BalanceReminderService {
 
     return revoked;
   }
-// ── Check for bookings awaiting move-in confirmation ────────────────────────
+
+  // ── Check for bookings awaiting move-in confirmation ────────────────────────
   //
   // Call this alongside checkAndRevokeOverdue() in AppLifecycleState.resumed.
   // Re-schedules a move-in nudge once per day for bookings stuck in
@@ -443,9 +375,10 @@ class BalanceReminderService {
       debugPrint('[Reminder] checkAndNudgeMoveIn error: $e');
     }
   }
-  // ── OneSignal REST helpers ──────────────────────────────────────────────────
 
-  /// Schedules a single push notification via OneSignal REST API.
+  // ── Backend relay helpers (no OneSignal REST key on-device) ────────────────
+
+  /// Asks the backend to schedule a single push via OneSignal.
   /// Returns the OneSignal notification ID on success, null on failure.
   Future<String?> _sendScheduledNotification({
     required String playerId,
@@ -455,39 +388,24 @@ class BalanceReminderService {
     Map<String, String> data = const {},
   }) async {
     try {
-      // OneSignal expects UTC ISO-8601: "2024-01-15 09:00:00 UTC"
-      final utc = sendAt.toUtc();
-      final sendAtStr = '${utc.year}-${_p(utc.month)}-${_p(utc.day)} '
-          '${_p(utc.hour)}:${_p(utc.minute)}:00 UTC';
-
-      final payload = {
-        'app_id': _kOneSignalAppId,
-        'include_subscription_ids': [playerId], // target this device only
-        'headings': {'en': title},
-        'contents': {'en': body},
-        'send_after': sendAtStr,
-        'data': data,
-        // Android channel — create 'balance_reminders' in OneSignal dashboard
-        // or it will fall back to the default channel.
-        'android_channel_id': 'balance_reminders',
-        'priority': 10,
-        'ttl': 86400, // expire after 24 h if not delivered
-      };
-
       final res = await http.post(
-        Uri.parse('$_kOneSignalBase/notifications'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Basic $_kOneSignalRestKey',
-        },
-        body: jsonEncode(payload),
+        Uri.parse(_notifyEndpoint),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'type': 'schedule_reminder',
+          'playerId': playerId,
+          'title': title,
+          'body': body,
+          'sendAt': sendAt.toUtc().toIso8601String(),
+          'data': data,
+        }),
       );
 
       if (res.statusCode == 200) {
-        final body = jsonDecode(res.body) as Map<String, dynamic>;
-        return body['id'] as String?;
+        final decoded = jsonDecode(res.body) as Map<String, dynamic>;
+        return decoded['id'] as String?;
       } else {
-        debugPrint('[Reminder] OneSignal schedule failed: ${res.body}');
+        debugPrint('[Reminder] schedule_reminder failed: ${res.body}');
         return null;
       }
     } catch (e) {
@@ -496,18 +414,20 @@ class BalanceReminderService {
     }
   }
 
-  /// Cancels a previously scheduled OneSignal notification.
-  Future<void> _cancelOneSignalNotification(String notificationId) async {
+  /// Asks the backend to cancel one or more previously scheduled pushes.
+  Future<void> _cancelOneSignalNotifications(List<String> ids) async {
+    if (ids.isEmpty) return;
     try {
-      await http.delete(
-        Uri.parse(
-            '$_kOneSignalBase/notifications/$notificationId?app_id=$_kOneSignalAppId'),
-        headers: {
-          'Authorization': 'Basic $_kOneSignalRestKey',
-        },
+      await http.post(
+        Uri.parse(_notifyEndpoint),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'type': 'cancel_reminder',
+          'notificationIds': ids,
+        }),
       );
     } catch (e) {
-      debugPrint('[Reminder] _cancelOneSignalNotification error: $e');
+      debugPrint('[Reminder] _cancelOneSignalNotifications error: $e');
     }
   }
 

@@ -21,6 +21,7 @@ import '../../services/move_in_service.dart';
 import 'widgets/pre_booking_sheet.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' as latlong;
+import '../../services/payment_notify_service.dart';
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -1321,6 +1322,8 @@ class _RoomCardState extends State<_RoomCard>
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.6),
+      isDismissible: false, // tapping outside no longer closes it
+      enableDrag: false, // swiping down no longer closes it
       builder: (sheetCtx) => _BookingSheet(
         // ← sheetCtx, not _
         room: room,
@@ -2608,8 +2611,17 @@ class _BookingSheetState extends State<_BookingSheet>
         'momo_type': _momoProvider == 'mtn' ? 'MTN MoMo' : 'Vodafone Cash',
       });
     }
-
     _payRef = _generateReference();
+
+// Persist BEFORE charging — this is what makes recovery possible if the
+// poll window times out and the app is closed before payment resolves.
+    if (_bookingId != null) {
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(_bookingId)
+          .update({'pending_payment_reference': _payRef});
+    }
+
     _goToStep(2);
     _startBookingListener();
 
@@ -3011,7 +3023,14 @@ class _BookingSheetState extends State<_BookingSheet>
       });
 
       await batch.commit();
-
+      PaymentNotifyService.notifyPaymentSuccess(
+        bookingId: _bookingId!,
+        hostelName: widget.hostel.hostelName,
+        roomNumber: widget.room.roomNumber,
+        amountPaid: _amountToPay,
+        balance: newBalance,
+        isFullyPaid: isFinalPayment,
+      );
       // ── Step 7: Log activity ──────────────────────────────────────────────
       await _logActivity(
         action: isFirstPayment && isFinalPayment
@@ -3183,7 +3202,14 @@ class _BookingSheetState extends State<_BookingSheet>
       });
 
       await batch.commit();
-
+      PaymentNotifyService.notifyPaymentSuccess(
+        bookingId: _bookingId!,
+        hostelName: widget.hostel.hostelName,
+        roomNumber: widget.room.roomNumber,
+        amountPaid: _amountToPay,
+        balance: newBalance,
+        isFullyPaid: isFinalPayment,
+      );
       await _logActivity(
         action: isFirstPayment && isFinalPayment
             ? 'Booking Fully Paid (Manual)'

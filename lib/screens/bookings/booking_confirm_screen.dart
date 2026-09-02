@@ -11,6 +11,8 @@ import 'package:http/http.dart' as http;
 import 'package:onesignal_flutter/onesignal_flutter.dart';
 import '../../services/balance_reminder_service.dart';
 import '../../services/move_in_service.dart';
+import '../../services/receipt_pdf_service.dart';
+import '../../services/payment_notify_service.dart';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -62,6 +64,56 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
   void dispose() {
     _anim.dispose();
     super.dispose();
+  }
+
+  Future<void> _downloadReceipt() async {
+    final b = _booking;
+    if (b == null) return;
+    try {
+      final paymentsSnap = await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .collection('payments')
+          .get();
+      var payments = paymentsSnap.docs.map((d) => d.data()).toList();
+
+// Sort client-side instead of using Firestore's orderBy, since that
+// requires a field index that isn't guaranteed to exist for this field.
+// Docs missing paid_at (e.g. still-pending server timestamp) sort last.
+      payments.sort((a, b) {
+        final aTs = a['paid_at'];
+        final bTs = b['paid_at'];
+        if (aTs is! Timestamp && bTs is! Timestamp) return 0;
+        if (aTs is! Timestamp) return 1;
+        if (bTs is! Timestamp) return -1;
+        return aTs.compareTo(bTs);
+      });
+      // Legacy bookings with no payments subcollection — fall back to
+      // a single line built from the booking doc itself.
+      if (payments.isEmpty) {
+        payments = [
+          {
+            'payment_number': 1,
+            'amount': b['amount_paid'] ?? 0,
+            'reference': b['payment_reference'] ?? '—',
+            'status': 'paid',
+            'paid_at': b['booked_at'],
+          }
+        ];
+      }
+
+      await ReceiptPdfService.printBookingReceipt(
+        booking: b,
+        bookingId: widget.bookingId,
+        payments: payments,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Could not generate receipt: $e'),
+        backgroundColor: _kRed,
+      ));
+    }
   }
 
   Future<void> _load() async {
@@ -178,14 +230,13 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     final playerId = OneSignal.User.pushSubscription.id;
     if (playerId == null || playerId.isEmpty) return;
 
-       await BalanceReminderService.instance.scheduleReminders(
+    await BalanceReminderService.instance.scheduleReminders(
       bookingId: widget.bookingId,
       balance: balance,
       dueDate: dueDate,
       settings: settings,
       oneSignalPlayerId: playerId,
       hostelName: booking['hostel_name'] ?? 'your room',
-      studentEmail: booking['email'] as String?,
     );
   }
 
@@ -356,7 +407,8 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     final daysUntilDue = dueDate != null && !isOverdue
         ? dueDate.difference(DateTime.now()).inDays
         : null;
-
+    final pendingRef = b['pending_payment_reference'] as String?;
+    final showRecovery = paymentStatus == 'pending';
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(children: [
@@ -552,6 +604,23 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
             )),
           ]),
           const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _downloadReceipt,
+              icon: const Icon(Icons.download_rounded),
+              label: const Text('Download Receipt',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kPrimary,
+                side: const BorderSide(color: _kPrimary, width: 1.5),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           _DetailRow(label: 'Payment Method', value: momoType),
           _DetailRow(label: 'MoMo Number', value: momoNumber),
           _DetailRow(
@@ -570,6 +639,53 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
           if (payRef != '—') _DetailRow(label: 'Paystack Ref', value: payRef),
         ])),
 
+        // ── Payment timeline (only when there's more than one payment) ──────
+        if ((b['payment_count'] ?? 0) > 1) ...[
+          const SizedBox(height: 16),
+          _PaymentTimelineCard(
+              bookingId: widget.bookingId, totalAmount: amount),
+        ],
+
+        // ── Payment recovery card (shows only when a charge was started
+        // but never confirmed — e.g. the verify poll timed out) ────────────
+        // ── Payment recovery notice (shows only when a charge was started
+// but never confirmed — e.g. the verify poll timed out). Points the
+// student to support instead of self-verifying, since self-verify
+// requires elevated Firestore access this account doesn't have. ────
+        if (showRecovery) ...[
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _kOrange.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _kOrange.withOpacity(0.25)),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.info_outline_rounded, color: _kOrange, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Payment still showing as pending?',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: _kDark,
+                              fontSize: 14)),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'If your MoMo went through but this still shows pending, contact support with your booking reference and they\'ll confirm it for you.',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.black54, height: 1.4),
+                      ),
+                    ]),
+              ),
+            ]),
+          ),
+        ],
+
+        // ── Balance payment card ─────────────────────────────────────────────
         // ── Balance payment card ─────────────────────────────────────────────
         if (balance > 0 && status != 'cancelled' && status != 'declined') ...[
           const SizedBox(height: 16),
@@ -710,7 +826,345 @@ class _BookingConfirmScreenState extends State<BookingConfirmScreen>
     );
   }
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYMENT TIMELINE (student-facing — no commission/landlord breakdown)
+// ─────────────────────────────────────────────────────────────────────────────
 
+class _PaymentTimelineCard extends StatelessWidget {
+  final String bookingId;
+  final double totalAmount;
+  const _PaymentTimelineCard(
+      {required this.bookingId, required this.totalAmount});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(bookingId)
+          .collection('payments')
+          .snapshots(), // no orderBy — sort client-side so docs missing paid_at aren't dropped
+      builder: (ctx, snap) {
+        final docs = List<QueryDocumentSnapshot>.from(snap.data?.docs ?? []);
+        if (docs.isEmpty) return const SizedBox.shrink();
+
+        // Sort oldest → newest; docs without paid_at sort first
+        docs.sort((a, b) {
+          final ta = (a.data() as Map)['paid_at'];
+          final tb = (b.data() as Map)['paid_at'];
+          final da = ta is Timestamp
+              ? ta.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          final db = tb is Timestamp
+              ? tb.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          return da.compareTo(db);
+        });
+
+        double cumulative = 0;
+
+        return _Card(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _CardHeader(icon: Icons.history_rounded, title: 'Payment History'),
+            const SizedBox(height: 4),
+            Text(
+              '${docs.length} payment${docs.length != 1 ? 's' : ''} made towards this booking',
+              style: const TextStyle(fontSize: 12, color: Colors.black45),
+            ),
+            const SizedBox(height: 16),
+            ...docs.asMap().entries.map((entry) {
+              final i = entry.key;
+              final p = entry.value.data() as Map<String, dynamic>;
+              final isLast = i == docs.length - 1;
+              cumulative += (p['amount'] as num? ?? 0).toDouble();
+              final runningBalance =
+                  (totalAmount - cumulative).clamp(0.0, totalAmount);
+              return _PaymentTimelineEntry(
+                data: p,
+                index: i,
+                isLast: isLast,
+                runningBalance: runningBalance,
+                totalAmount: totalAmount,
+              );
+            }),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+class _PaymentTimelineEntry extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final int index;
+  final bool isLast;
+  final double runningBalance;
+  final double totalAmount;
+  const _PaymentTimelineEntry({
+    required this.data,
+    required this.index,
+    required this.isLast,
+    required this.runningBalance,
+    required this.totalAmount,
+  });
+
+  String _fmtShort(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
+  @override
+  Widget build(BuildContext context) {
+    final p = data;
+    final ts = p['paid_at'];
+    final date = ts is Timestamp ? _fmtShort(ts.toDate()) : '—';
+    final amt = (p['amount'] ?? 0).toDouble();
+    final method = (p['method'] ?? '').toString().toUpperCase();
+    final status = (p['status'] ?? '').toString();
+    final payNum = (p['payment_number'] as num?)?.toInt() ?? (index + 1);
+    final isFirst = p['is_first_payment'] == true;
+    final isFinal = p['is_final_payment'] == true;
+    final reference = (p['reference'] ?? '').toString();
+    final isPaid = status == 'paid';
+
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // ── Dot + line ──────────────────────────────────────────────────
+        SizedBox(
+          width: 32,
+          child: Column(children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: isPaid
+                    ? _kGreen.withOpacity(0.15)
+                    : _kOrange.withOpacity(0.15),
+                shape: BoxShape.circle,
+                border:
+                    Border.all(color: isPaid ? _kGreen : _kOrange, width: 2),
+              ),
+              child: Center(
+                child: Text('$payNum',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: isPaid ? _kGreen : _kOrange)),
+              ),
+            ),
+            if (!isLast)
+              Expanded(
+                child: Container(
+                  width: 2,
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  color: Colors.black12,
+                ),
+              ),
+          ]),
+        ),
+        const SizedBox(width: 12),
+
+        // ── Card ────────────────────────────────────────────────────────
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Expanded(
+                        child: Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text('Payment #$payNum',
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: _kDark)),
+                            if (isFirst) _TimelineBadge('1st', _kPrimary),
+                            if (isFinal) _TimelineBadge('Final', _kGreen),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('GHS ${amt.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              color: _kGreen)),
+                    ]),
+                    const SizedBox(height: 3),
+                    Text(method.isNotEmpty ? '$method · $date' : date,
+                        style: const TextStyle(
+                            fontSize: 11, color: Colors.black45)),
+                    if (reference.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        const Icon(Icons.tag_rounded,
+                            size: 11, color: Colors.black38),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            reference,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 10,
+                                color: Colors.black45,
+                                fontFamily: 'monospace'),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: reference));
+                            ScaffoldMessenger.of(context)
+                                .showSnackBar(const SnackBar(
+                              content: Text('Reference copied'),
+                              duration: Duration(seconds: 1),
+                              behavior: SnackBarBehavior.floating,
+                            ));
+                          },
+                          child: const Icon(Icons.copy_rounded,
+                              size: 12, color: Colors.black38),
+                        ),
+                      ]),
+                    ],
+                    if (totalAmount > 0) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: runningBalance <= 0
+                              ? _kGreen.withOpacity(0.1)
+                              : _kOrange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(
+                            runningBalance <= 0
+                                ? Icons.check_circle_rounded
+                                : Icons.hourglass_bottom_rounded,
+                            size: 12,
+                            color: runningBalance <= 0 ? _kGreen : _kOrange,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            runningBalance <= 0
+                                ? 'Fully paid as of this payment'
+                                : 'Balance after: GHS ${runningBalance.toStringAsFixed(2)}',
+                            style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    runningBalance <= 0 ? _kGreen : _kOrange),
+                          ),
+                        ]),
+                      ),
+                    ],
+                  ]),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _TimelineBadge extends StatelessWidget {
+  final String text;
+  final Color color;
+  const _TimelineBadge(this.text, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(50),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 9, fontWeight: FontWeight.w800, color: color)),
+    );
+  }
+}
+
+class _ManualReferenceDialog extends StatefulWidget {
+  @override
+  State<_ManualReferenceDialog> createState() => _ManualReferenceDialogState();
+}
+
+class _ManualReferenceDialogState extends State<_ManualReferenceDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('Enter your payment reference',
+              style: TextStyle(
+                  fontSize: 16, fontWeight: FontWeight.w800, color: _kDark)),
+          const SizedBox(height: 8),
+          const Text(
+            'Check the SMS or email confirmation from your payment for the reference code.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: 'e.g. RZF-1234567890',
+              filled: true,
+              fillColor: const Color(0xFFF8FAFC),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _kPrimary, foregroundColor: Colors.white),
+                child: const Text('Verify'),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // DUE DATE CARD
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1475,7 +1929,53 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
 
   double get _amountToPay {
     if (_payMode == 0) return widget.balance;
-    return _customAmount.clamp(100.0, widget.balance);
+    final minAmount = widget.balance >= 100.0
+        ? 100.0
+        : (widget.balance <= 1.0 ? widget.balance : 1.0);
+    return _customAmount.clamp(minAmount, widget.balance);
+  }
+
+  Future<String?> _promptForOtp() async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Enter Confirmation Code'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Check the SMS sent to your phone by your mobile money provider and enter the code below.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'OTP / Confirmation Code',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final v = ctrl.text.trim();
+              if (v.isNotEmpty) Navigator.pop(ctx, v);
+            },
+            child: const Text('Submit'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pay() async {
@@ -1490,6 +1990,11 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
     setState(() => _busy = true);
     try {
       final ref = 'RZF-BAL-${DateTime.now().millisecondsSinceEpoch}';
+      await FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId)
+          .update({'pending_payment_reference': ref});
+
       final isTest = const {
         '0551234987',
         '0571234987',
@@ -1517,6 +2022,9 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
       final newBalance =
           (widget.totalAmount - newTotalPaid).clamp(0.0, widget.totalAmount);
 
+      String gatewayReference = ref;
+      String paymentGateway = 'paystack';
+
       if (isTest) {
         await Future.delayed(const Duration(seconds: 2));
       } else {
@@ -1537,27 +2045,67 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         final chargeData = jsonDecode(chargeRes.body);
         if (chargeData['error'] != null) throw Exception(chargeData['error']);
 
-        bool confirmed = false;
-        for (int i = 0; i < 12; i++) {
-          await Future.delayed(const Duration(seconds: 5));
-          if (!mounted) return;
-          final verifyRes = await http.post(
-            Uri.parse('$_kBackendUrl/verify-payment'),
+        // Use the gateway's own reference from here on — never the locally
+        // generated `ref` — same as the initial-payment flow already does.
+        gatewayReference = chargeData['reference'] as String? ?? ref;
+        paymentGateway = chargeData['gateway'] ?? 'paystack';
+
+// keep booking doc's pending reference in sync with what the gateway actually assigned
+        if (gatewayReference != ref) {
+          await FirebaseFirestore.instance
+              .collection('bookings')
+              .doc(widget.bookingId)
+              .update({'pending_payment_reference': gatewayReference});
+        }
+        final status = chargeData['status'];
+
+        if (status == 'send_otp') {
+          // Gateway needs the SMS code before it'll even attempt the charge.
+          // This is what was silently ignored before, causing the flow to
+          // poll a payment that was never actually started.
+          setState(() => _busy = false);
+          final otp = await _promptForOtp();
+          if (otp == null) return; // user cancelled — nothing was charged
+          setState(() => _busy = true);
+
+          final otpRes = await http.post(
+            Uri.parse('$_kBackendUrl/submit-otp'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'reference': ref}),
+            body: jsonEncode({'otp': otp, 'reference': gatewayReference}),
           );
-          final vData = jsonDecode(verifyRes.body);
-          if (vData['status'] == 'success') {
-            if (_paymentHandled) return; // ← guard
-            confirmed = true;
-            break;
+          final otpData = jsonDecode(otpRes.body);
+
+          if (!(otpRes.statusCode == 200 &&
+              (otpData['status'] == 'awaiting_approval' ||
+                  otpData['status'] == 'success'))) {
+            throw Exception(otpData['error'] ??
+                'OTP verification failed. Please try again.');
           }
-          if (vData['status'] == 'failed') break;
         }
 
-        if (!confirmed) {
-          throw Exception(
-              'Payment not confirmed. Check your MoMo and try again.');
+        if (status != 'success') {
+          bool confirmed = false;
+          for (int i = 0; i < 24; i++) {
+            await Future.delayed(const Duration(seconds: 5));
+            if (!mounted) return;
+            final verifyRes = await http.post(
+              Uri.parse('$_kBackendUrl/verify-payment'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'reference': gatewayReference}),
+            );
+            final vData = jsonDecode(verifyRes.body);
+            if (vData['status'] == 'success') {
+              if (_paymentHandled) return;
+              confirmed = true;
+              break;
+            }
+            if (vData['status'] == 'failed') break;
+          }
+
+          if (!confirmed) {
+            throw Exception(
+                'Payment not confirmed. Check your MoMo and try again.');
+          }
         }
       }
 
@@ -1565,17 +2113,16 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
           .collection('bookings')
           .doc(widget.bookingId);
 
-      // ── Idempotency: skip if this reference already recorded ──
-      _paymentHandled = true; // ← claim before checking
+      _paymentHandled = true;
       final existingPayment = await bookingRef2
           .collection('payments')
-          .where('reference', isEqualTo: ref)
+          .where('reference', isEqualTo: gatewayReference)
           .limit(1)
           .get();
 
       if (existingPayment.docs.isNotEmpty) {
         debugPrint(
-            '⚠️ Balance payment $ref already recorded, skipping duplicate');
+            '⚠️ Balance payment $gatewayReference already recorded, skipping duplicate');
         widget.onPaymentComplete();
         return;
       }
@@ -1599,11 +2146,12 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         'commission_taken': commissionThisPayment,
         'landlord_received': landlordGets,
         'payment_number': paymentCount + 1,
-        'is_first': false,
-        'is_final': isFinalPayment,
+        'is_first_payment': false,
+        'is_final_payment': isFinalPayment,
         'method': 'momo',
         'provider': _provider,
-        'reference': ref,
+        'gateway': paymentGateway,
+        'reference': gatewayReference,
         'status': 'paid',
         'note': isFinalPayment
             ? 'Final payment — balance cleared'
@@ -1611,8 +2159,14 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
         'is_test': isTest,
         'paid_at': FieldValue.serverTimestamp(),
       });
-
-      // Cancel reminders if fully paid
+      PaymentNotifyService.notifyPaymentSuccess(
+        bookingId: widget.bookingId,
+        hostelName: bData['hostel_name'] ?? '',
+        roomNumber: bData['room_number'] ?? '',
+        amountPaid: _amountToPay,
+        balance: newBalance,
+        isFullyPaid: isFinalPayment,
+      );
       if (isFinalPayment) {
         await BalanceReminderService.instance.cancelReminders(widget.bookingId);
       }
@@ -1628,7 +2182,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
       ));
       widget.onPaymentComplete();
     } catch (e) {
-      _paymentHandled = false; // reset on each new attempt
+      _paymentHandled = false;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Payment failed: $e'),
@@ -1814,7 +2368,7 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
                   decoration: InputDecoration(
                     labelText: 'Amount (GHS)',
                     hintText:
-                        'Min GHS 100 · Max GHS ${widget.balance.toStringAsFixed(2)}',
+                        'Min GHS ${(widget.balance >= 100.0 ? 100.0 : (widget.balance <= 1.0 ? widget.balance : 1.0)).toStringAsFixed(2)} · Max GHS ${widget.balance.toStringAsFixed(2)}',
                     prefixIcon: const Icon(Icons.edit_rounded,
                         color: _kPrimary, size: 18),
                     filled: true,
@@ -2003,6 +2557,250 @@ class _BalancePaymentCardState extends State<_BalancePaymentCard> {
   }
 }
 
+class _VerifyPaymentCard extends StatefulWidget {
+  final String bookingId;
+  final String? reference;
+  final VoidCallback onVerified;
+  const _VerifyPaymentCard({
+    required this.bookingId,
+    required this.reference,
+    required this.onVerified,
+  });
+  @override
+  State<_VerifyPaymentCard> createState() => _VerifyPaymentCardState();
+}
+
+class _VerifyPaymentCardState extends State<_VerifyPaymentCard> {
+  bool _busy = false;
+
+  Future<void> _verify() async {
+    var reference = widget.reference;
+    if (reference == null || reference.isEmpty) {
+      reference = await showDialog<String>(
+        context: context,
+        builder: (_) => _ManualReferenceDialog(),
+      );
+      if (reference == null || reference.isEmpty) return; // cancelled
+    }
+
+    setState(() => _busy = true);
+    try {
+      final resp = await http.post(
+        Uri.parse('$_kBackendUrl/verify-payment'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'reference': reference}),
+      );
+      final result = jsonDecode(resp.body);
+
+      if (result['status'] != 'success') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(result['status'] == 'pending'
+                ? 'Still pending on the gateway — try again shortly.'
+                : 'No successful payment found for this reference.'),
+            backgroundColor: _kOrange,
+          ));
+        }
+        return;
+      }
+
+      if (result['gateway'] != 'paystack') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+              'This payment was made via a provider we can\'t auto-verify yet. '
+              'Please contact support with your reference to resolve manually.',
+            ),
+            backgroundColor: _kOrange,
+          ));
+        }
+        return;
+      }
+
+      final bookingRef = FirebaseFirestore.instance
+          .collection('bookings')
+          .doc(widget.bookingId);
+
+      final existing = await bookingRef
+          .collection('payments')
+          .where('reference', isEqualTo: reference)
+          .limit(1)
+          .get();
+      if (existing.docs.isNotEmpty) {
+        widget.onVerified();
+        return;
+      }
+      final globalMatch = await FirebaseFirestore.instance
+          .collectionGroup('payments')
+          .where('reference', isEqualTo: reference)
+          .limit(1)
+          .get();
+      if (globalMatch.docs.isNotEmpty) {
+        final ownerBookingId =
+            globalMatch.docs.first.reference.parent.parent?.id;
+        if (ownerBookingId != widget.bookingId) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: const Text(
+                  'This reference is already linked to a different booking.'),
+              backgroundColor: _kRed,
+            ));
+          }
+          return;
+        }
+      }
+      final bookingSnap = await bookingRef.get();
+      if (!bookingSnap.exists) return;
+      final bData = bookingSnap.data()!;
+
+      final gatewayAmount = (result['amount'] as num?)?.toDouble();
+      final totalAmount = (bData['amount'] as num?)?.toDouble() ?? 0.0;
+      final depositAmount =
+          (bData['deposit_amount'] as num?)?.toDouble() ?? 0.0;
+      final paymentCount = (bData['payment_count'] as num?)?.toInt() ?? 0;
+      final amountAlreadyPaid =
+          (bData['amount_paid'] as num?)?.toDouble() ?? 0.0;
+      final isBalancePayment = reference.startsWith('RZF-BAL-');
+      final isFirstPayment = paymentCount == 0 && !isBalancePayment;
+
+      final amountPaid = gatewayAmount ??
+          (isBalancePayment
+              ? (totalAmount - amountAlreadyPaid)
+              : (depositAmount > 0 ? depositAmount : totalAmount));
+
+      final newTotalPaid = amountAlreadyPaid + amountPaid;
+      final isFinalPayment = newTotalPaid >= totalAmount;
+
+      final rawRate = (bData['commission_rate'] as num?)?.toDouble() ?? 0.0;
+      final commissionOwed =
+          (bData['commission_owed'] as num?)?.toDouble() ?? 0.0;
+      final commissionCollected =
+          (bData['commission_collected'] as num?)?.toDouble() ?? 0.0;
+      final commissionRemaining = commissionOwed - commissionCollected;
+
+      double commissionThisPayment;
+      if (isFirstPayment && isFinalPayment) {
+        commissionThisPayment = commissionOwed;
+      } else if (isFirstPayment) {
+        commissionThisPayment = commissionOwed / 2;
+      } else if (isFinalPayment) {
+        commissionThisPayment = commissionRemaining;
+      } else {
+        commissionThisPayment = 0.0;
+      }
+
+      final landlordReceived = amountPaid - commissionThisPayment;
+      final newBalance = (totalAmount - newTotalPaid).clamp(0.0, totalAmount);
+      final newPaymentStatus = isFinalPayment ? 'fully_paid' : 'deposit_paid';
+      final newBookingStatus =
+          (depositAmount > 0 && newTotalPaid >= depositAmount) || isFinalPayment
+              ? 'confirmed'
+              : 'pending';
+
+      if (isFirstPayment) {
+        final roomId = bData['room_id'] as String?;
+        final slots = (bData['slots_booked'] as num?)?.toInt() ?? 1;
+        if (roomId != null && roomId.isNotEmpty) {
+          final roomRef =
+              FirebaseFirestore.instance.collection('rooms').doc(roomId);
+          await FirebaseFirestore.instance.runTransaction((txn) async {
+            final roomSnap = await txn.get(roomRef);
+            if (!roomSnap.exists) return;
+            final capacity = (roomSnap.data()?['capacity'] ?? 1) as int;
+            final currentBooked = (roomSnap.data()?['booked'] ?? 0) as int;
+            if (capacity - currentBooked < slots) {
+              throw Exception('Not enough slots left');
+            }
+            txn.update(roomRef, {'booked': currentBooked + slots});
+          });
+        }
+      }
+
+      final batch = FirebaseFirestore.instance.batch();
+      final paymentRef = bookingRef.collection('payments').doc();
+
+      batch.update(bookingRef, {
+        'amount_paid': newTotalPaid,
+        'balance': newBalance,
+        'payment_status': newPaymentStatus,
+        'status': newBookingStatus,
+        'reference': reference,
+        'commission_collected': commissionCollected + commissionThisPayment,
+        'commission_remaining': commissionRemaining - commissionThisPayment,
+        'payment_count': FieldValue.increment(1),
+        'paid_at': FieldValue.serverTimestamp(),
+        if (isFinalPayment) 'fully_paid_at': FieldValue.serverTimestamp(),
+      });
+
+      batch.set(paymentRef, {
+        'amount': amountPaid,
+        'balance_after': newBalance,
+        'commission_taken': commissionThisPayment,
+        'email': bData['email'],
+        'hostel_name': bData['hostel_name'],
+        'is_final_payment': isFinalPayment,
+        'is_first_payment': isFirstPayment,
+        'landlord_id': bData['landlord_id'],
+        'landlord_received': landlordReceived,
+        'method': 'momo',
+        'name': bData['name'],
+        'paid_at': FieldValue.serverTimestamp(),
+        'payment_number': paymentCount + 1,
+        'provider': bData['momo_provider'],
+        'reference': reference,
+        'room_number': bData['room_number'],
+        'status': 'paid',
+        'source': 'manual_verify',
+        'total_paid_after': newTotalPaid,
+      });
+
+      await batch.commit();
+      PaymentNotifyService.notifyPaymentSuccess(
+        bookingId: widget.bookingId,
+        hostelName: bData['hostel_name'] ?? '',
+        roomNumber: bData['room_number'] ?? '',
+        amountPaid: amountPaid,
+        balance: newBalance,
+        isFullyPaid: isFinalPayment,
+      );
+      widget.onVerified();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Verification failed: $e'),
+          backgroundColor: _kRed,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _Card(
+      child: Row(children: [
+        const Expanded(
+          child: Text('Payment still showing as pending?',
+              style: TextStyle(fontWeight: FontWeight.w700, color: _kDark)),
+        ),
+        ElevatedButton.icon(
+          onPressed: _busy ? null : _verify,
+          icon: _busy
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.refresh_rounded, size: 16),
+          label: Text(_busy ? 'Checking…' : 'Verify Payment'),
+          style: ElevatedButton.styleFrom(
+              backgroundColor: _kPrimary, foregroundColor: Colors.white),
+        ),
+      ]),
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // REUSABLE WIDGETS
 // ─────────────────────────────────────────────────────────────────────────────

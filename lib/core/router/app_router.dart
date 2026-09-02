@@ -18,10 +18,9 @@ import '../../screens/about/about_screen.dart';
 import '../../screens/contact/contact_screen.dart';
 import '../../screens/landlord/landlord_portal.dart';
 import '../../screens/admin/admin_dashboard_screen.dart';
-import '../../screens/chat/chat_screen.dart'; // ← NEW
+import '../../screens/chat/chat_screen.dart';
 import 'auth_gate.dart';
 import 'app_shell.dart';
-// Add this import at the top
 import '../../screens/admin/chat/admin_live_chat_screen.dart';
 import '../../screens/landlord/dashboard/landlord_dashboard.dart';
 import '../../services/landlord_service.dart';
@@ -100,36 +99,80 @@ class AppRouter {
   static Widget _wrapHome(Widget screen) =>
       BackHandlerWrapper(child: screen, isHome: true);
 
+  // Only these are reachable without an active session. Everything
+  // else in the app — including /about, /contact, /home, /hostels,
+  // /settings — requires login first, even via a direct/deep link.
+  static const _publicRoutes = {
+    '/', // AuthGate decides where to send people itself
+    '/login',
+    '/register',
+    '/landlord-register',
+  };
+
   static GoRouter router([AuthService? authService]) {
     return GoRouter(
       navigatorKey: _rootNavigatorKey,
       initialLocation: '/',
 
-      // ── Redirect — unchanged + /chat protected ──────────────────────────
+      // Re-run redirect whenever auth state changes (login, logout,
+      // session expiry) — not just when the user navigates. Without
+      // this, someone whose session dies while sitting on a protected
+      // page would stay there until they happened to tap a link.
+      refreshListenable: authService,
+
+      // ── Redirect — strict: login required for everything except
+      // the auth entry points themselves ─────────────────────────────
       redirect: (context, state) {
         if (authService == null) return null;
 
-        final isLoggedIn = authService.isLoggedIn;
         final path = state.uri.path;
 
-        // NOTE: '/landlord-register' must stay public (unauthenticated users
-        // need to reach it), so we can't just use startsWith('/landlord') —
-        // that string-matches '/landlord-register' too and was bouncing
-        // people straight back to /login before they ever saw the form.
-        final isPublicLandlordRoute = path == '/landlord-register';
+        // Resolve auth state before deciding anything — for every path,
+        // not just '/'. This is what makes deep links / web refreshes work.
+        if (!authService.isInitialized) {
+          authService.loadSession(); // no-ops if already in flight/done
+          if (path != '/') {
+            return '/?from=${Uri.encodeComponent(state.uri.toString())}';
+          }
+          return null; // show AuthGate's splash
+        }
 
-        if (!isLoggedIn &&
-            !isPublicLandlordRoute &&
-            (path.startsWith('/bookings') ||
-                path.startsWith('/profile') ||
-                path.startsWith('/chat') || // ← NEW: protect chat route
-                path.startsWith('/admin') ||
-                path.startsWith('/landlord'))) {
+        // Once initialized, resume a bounced destination.
+        if (path == '/') {
+          final from = state.uri.queryParameters['from'];
+          if (from != null && from.isNotEmpty) return from;
+        }
+
+        final isLoggedIn = authService.isLoggedIn;
+        final role = authService.userRole;
+        final isPublic = _publicRoutes.contains(path);
+
+        // Not logged in, trying to reach anything else → bounce to login.
+        if (!isLoggedIn && !isPublic) {
           return '/login';
         }
+
+        // Logged in but sitting on /login or /register → send them
+        // straight to their dashboard instead of showing the form again.
+        if (isLoggedIn && (path == '/login' || path == '/register')) {
+          if (role == 'admin' || role == 'super_admin') return '/admin';
+          if (role == 'landlord') return '/landlord';
+          return '/home';
+        }
+
+        // Role gating — logged in, but wrong section for their role.
+        if (isLoggedIn) {
+          final isAdmin = role == 'admin' || role == 'super_admin';
+          if (path.startsWith('/admin') && !isAdmin) return '/home';
+          if (path.startsWith('/landlord') &&
+              path != '/landlord-register' &&
+              role != 'landlord') {
+            return '/home';
+          }
+        }
+
         return null;
       },
-
       routes: [
         // ── Auth & entry routes (NO shell, NO bottom nav) ─────────────────
         GoRoute(
@@ -218,7 +261,7 @@ class AppRouter {
               ],
             ),
 
-            // Chat tab ← NEW
+            // Chat tab
             GoRoute(
               path: '/chat',
               pageBuilder: (context, state) => NoTransitionPage(

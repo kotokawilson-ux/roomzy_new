@@ -1004,7 +1004,7 @@ class _RoomCard extends StatelessWidget {
                 _InfoRow(label: 'Hostel', value: hostelName),
                 _InfoRow(label: 'Type', value: type),
                 _InfoRow(label: 'Capacity', value: capacity),
-                _SlotBar(d: d), // ← add this
+                _SlotBar(d: d),
                 _InfoRow(label: 'Price', value: price),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4),
@@ -1222,10 +1222,61 @@ class _HostelDialogState extends State<_HostelDialog> {
     _balanceDueAmount.addListener(() => setState(() {}));
   }
 
+  // ── CODE GENERATION ────────────────────────────────────────────────────
+  // Previously this early-returned in edit mode, which meant the code field
+  // silently kept whatever value the hostel was created with, even after
+  // the name changed. It now always mirrors the current name (add + edit),
+  // and the actual write-time value is recomputed again in `_save()` so
+  // the field and the saved value can never drift apart.
+  String _generateCode(String name) {
+    final n = name.trim().replaceAll(RegExp(r'\s+'), '').toUpperCase();
+    return n.length > 6 ? n.substring(0, 6) : n;
+  }
+
   void _genCode() {
-    if (_isEdit) return;
-    final n = _name.text.trim().replaceAll(' ', '').toUpperCase();
-    if (n.isNotEmpty) _code.text = n.length > 6 ? n.substring(0, 6) : n;
+    final n = _name.text.trim();
+    if (n.isEmpty) return;
+    setState(() => _code.text = _generateCode(n));
+  }
+
+  /// Returns true if another hostel (not this one) already uses [code].
+  Future<bool> _codeCollides(String code, {String? excludingDocId}) async {
+    if (code.isEmpty) return false;
+    final snap = await db
+        .collection('hostels')
+        .where('hostel_code', isEqualTo: code)
+        .get();
+    return snap.docs.any((d) => d.id != excludingDocId);
+  }
+
+  /// Propagates a hostel's current name/code to every room that belongs to
+  /// it, so the cached `hostel_name` / `hostel_code` on room documents never
+  /// go stale after a hostel is renamed. Batched to stay well under
+  /// Firestore's 500-writes-per-batch limit even for hostels with many rooms.
+  Future<void> _syncRoomsForHostel({
+    required String hostelId,
+    required String hostelName,
+    required String hostelCode,
+  }) async {
+    final roomsQuery = await db
+        .collection('rooms')
+        .where('hostel_id', isEqualTo: hostelId)
+        .get();
+
+    if (roomsQuery.docs.isEmpty) return;
+
+    const chunkSize = 400;
+    for (var i = 0; i < roomsQuery.docs.length; i += chunkSize) {
+      final batch = db.batch();
+      final chunk = roomsQuery.docs.skip(i).take(chunkSize);
+      for (final roomDoc in chunk) {
+        batch.update(roomDoc.reference, {
+          'hostel_name': hostelName,
+          'hostel_code': hostelCode,
+        });
+      }
+      await batch.commit();
+    }
   }
 
   Future<void> _save() async {
@@ -1241,6 +1292,24 @@ class _HostelDialogState extends State<_HostelDialog> {
       return;
     }
 
+    // Recompute the code fresh from the name at save time — this is the
+    // value that actually gets written, regardless of what the (read-only)
+    // field currently displays.
+    final newCode = _generateCode(_name.text);
+
+    final collides = await _codeCollides(
+      newCode,
+      excludingDocId: _isEdit ? widget.doc!.id : null,
+    );
+    if (collides) {
+      setState(() {
+        _validationError =
+            'Hostel code "$newCode" is already used by another hostel. '
+            'Try a slightly different name.';
+      });
+      return;
+    }
+
     setState(() {
       _saving = true;
       _validationError = null;
@@ -1248,7 +1317,7 @@ class _HostelDialogState extends State<_HostelDialog> {
 
     final data = <String, dynamic>{
       'hostel_name': _name.text.trim(),
-      'hostel_code': _code.text.trim(),
+      'hostel_code': newCode,
       'address': _address.text.trim(),
       'town': _town.text.trim(),
       'phone': _phone.text.trim(),
@@ -1270,7 +1339,6 @@ class _HostelDialogState extends State<_HostelDialog> {
       'school_name': _schoolName,
       'short_name': _schoolShortName,
       'updated_at': FieldValue.serverTimestamp(),
-      // ← ADD THESE:
       'deposit_type': _depositType,
       'deposit_value': double.tryParse(_depositValue.text.trim()) ?? 0.0,
       'balance_due_amount': int.tryParse(_balanceDueAmount.text.trim()) ?? 0,
@@ -1279,8 +1347,21 @@ class _HostelDialogState extends State<_HostelDialog> {
 
     try {
       if (_isEdit) {
+        final oldData = widget.doc!.data() as Map<String, dynamic>;
+        final nameChanged = oldData['hostel_name'] != data['hostel_name'];
+        final codeChanged = oldData['hostel_code'] != data['hostel_code'];
+
         await db.collection('hostels').doc(widget.doc!.id).update(data);
-        // Inside _save() — WRONG
+
+        // Keep every room's cached hostel_name/hostel_code in sync so they
+        // never show the old name/code after a rename.
+        if (nameChanged || codeChanged) {
+          await _syncRoomsForHostel(
+            hostelId: widget.doc!.id,
+            hostelName: data['hostel_name'] as String,
+            hostelCode: data['hostel_code'] as String,
+          );
+        }
 
         // ✅ LOG HOSTEL UPDATE
         await ActivityLogger.log(
@@ -1341,7 +1422,7 @@ class _HostelDialogState extends State<_HostelDialog> {
                     AdminFormField(label: 'Hostel Name *', controller: _name),
                     const SizedBox(height: 12),
                     AdminFormField(
-                        label: 'Hostel Code',
+                        label: 'Hostel Code (auto-generated from name)',
                         controller: _code,
                         readOnly: true),
                     const SizedBox(height: 12),
@@ -1726,7 +1807,21 @@ class _RoomDialogState extends State<_RoomDialog> {
       _validationError = null;
     });
 
-    final hostelData = widget.hostelDoc.data() as Map<String, dynamic>;
+    // Re-read the hostel doc fresh from Firestore at save time so a room
+    // saved right after the hostel was renamed always picks up the current
+    // name/code rather than whatever `widget.hostelDoc` was snapshotted with
+    // when this dialog was opened.
+    Map<String, dynamic> hostelData =
+        widget.hostelDoc.data() as Map<String, dynamic>;
+    try {
+      final freshHostelSnap =
+          await db.collection('hostels').doc(widget.hostelDoc.id).get();
+      if (freshHostelSnap.exists) {
+        hostelData = freshHostelSnap.data() as Map<String, dynamic>;
+      }
+    } catch (_) {
+      // Fall back to the snapshot passed into the dialog if the re-read fails.
+    }
     final hostelName = hostelData['hostel_name'] ?? '';
 
     final data = <String, dynamic>{

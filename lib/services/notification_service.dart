@@ -22,6 +22,11 @@ import 'package:http/http.dart' as http;
 import 'package:onesignal_flutter/onesignal_flutter.dart'
     if (dart.library.html) 'notification_service_web_stub.dart';
 
+// Web Push subscription ID bridge — reads the browser's OneSignal
+// subscription ID via the JS SDK loaded in web/index.html. No-ops on
+// mobile (see onesignal_web_stub.dart).
+import 'onesignal_web.dart';
+
 class NotificationService {
   NotificationService._();
   static final NotificationService instance = NotificationService._();
@@ -47,6 +52,18 @@ class NotificationService {
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
+  // ── Cross-platform player ID lookup: web reads from the JS bridge,
+  //    mobile reads from the native OneSignal plugin, desktop gets null.
+  Future<String?> _currentPlayerIdAsync() async {
+    if (kIsWeb) return getOneSignalWebPlayerId();
+    if (!_isMobileOnly) return null; // desktop — unsupported
+    try {
+      return OneSignal.User.pushSubscription.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> init({
     required GlobalKey<NavigatorState> navKey,
     required GoRouter router,
@@ -55,7 +72,8 @@ class NotificationService {
     _router = router;
 
     if (!_isMobileOnly) {
-      debugPrint('[OneSignal] Skipped — only supported on Android/iOS');
+      debugPrint(
+          '[OneSignal] Native init skipped — web SDK initializes itself via web/index.html');
       return;
     }
 
@@ -94,6 +112,10 @@ class NotificationService {
     }
   }
 
+  // NOTE: likely unused now — push-ID registration for regular users
+  // (student/landlord) is centralized in AuthService._registerPushId
+  // instead. Left in place in case something still calls it, but not
+  // part of the live registration path.
   Future<void> saveTokenForUser(String uid) async {
     if (uid.isEmpty || !_isMobileOnly) return;
     _lastSavedUid = uid;
@@ -115,13 +137,16 @@ class NotificationService {
     }
   }
 
+  // ── Now works on web too, via _currentPlayerIdAsync(). Called from
+  //    admin_live_chat_screen.dart's initState() — this is what actually
+  //    populates admin_push_tokens.
   Future<void> saveTokenForAdmin(String adminUid) async {
-    if (adminUid.isEmpty || !_isMobileOnly) return;
+    if (adminUid.isEmpty) return;
+
+    final playerId = await _currentPlayerIdAsync();
+    if (playerId == null || playerId.isEmpty) return;
 
     try {
-      final playerId = OneSignal.User.pushSubscription.id;
-      if (playerId == null || playerId.isEmpty) return;
-
       // Private admin doc (sensitive fields, admin-only read)
       await FirebaseFirestore.instance
           .collection('admins')
@@ -141,9 +166,9 @@ class NotificationService {
     }
   }
 
-  // ── NOTE: no _isMobileOnly guard here — this is pure Firestore read +
+  // ── NOTE: no platform guard here — this is pure Firestore read +
   //    HTTP POST to our own backend, no native OneSignal SDK involved,
-  //    so it works on web too.
+  //    so it already works on web too.
   Future<void> notifyStudent({
     required String studentUid,
     required String title,
@@ -203,7 +228,7 @@ class NotificationService {
     }
   }
 
-  // ── Push send — now proxied through our own backend (Vercel), which
+  // ── Push send — proxied through our own backend (Vercel), which
   //    holds the OneSignal REST API key server-side. This avoids CORS
   //    failures on web and keeps the key out of the client bundle.
   Future<void> _sendPush({

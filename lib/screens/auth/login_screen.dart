@@ -4,8 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../../../../utils/activity_logger.dart';
 import '../../services/auth_service.dart';
-import 'package:onesignal_flutter/onesignal_flutter.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN:
 //  • Deep forest green (#0D3D2B) hero panel + warm cream (#F8F6F1) form panel
@@ -14,6 +12,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 //  • Staggered fade+slide entrance animations via AnimationController
 //  • Press-scale micro-interaction on the login button
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// NOTE: OneSignal push-ID registration for the logged-in user (any role —
+// student, landlord, admin) now happens centrally in AuthService._signIn,
+// right after the role/profile check passes. That replaced the old
+// admin-only _registerAdminPushId() that used to live in this file — it
+// was writing to 'onesignal_player_id' while notify.js reads
+// 'oneSignalPlayerId', so admin push was silently never working. No need
+// to call anything push-related from here anymore.
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -82,9 +88,9 @@ class _LoginScreenState extends State<LoginScreen>
         action: 'User Login',
         details: 'Email: $email, Role: ${authService.userRole}',
       );
+      if (!mounted) return; // ← add this
       final role = authService.userRole;
       if (role == 'admin' || role == 'super_admin') {
-        await _registerAdminPushId(authService.currentUser?.id);
         context.go('/admin');
       } else if (role == 'landlord') {
         context.go('/landlord');
@@ -878,17 +884,3 @@ TextStyle _body({
       height: height ?? 1.5,
       letterSpacing: 0.1,
     );
-Future<void> _registerAdminPushId(String? uid) async {
-  if (uid == null) return;
-  try {
-    final playerId = OneSignal.User.pushSubscription.id;
-    if (playerId == null) return; // not subscribed yet / permission not granted
-
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .update({'onesignal_player_id': playerId});
-  } catch (e) {
-    debugPrint('Failed to register admin push id: $e');
-  }
-}

@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../../models/models.dart'; // ← add this
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 // ─── Theme tokens ─────────────────────────────────────────────────────────────
 const _kPrimary = Color(0xFF0F766E);
@@ -29,7 +31,7 @@ const _kBlueBg = Color(0xFFEFF6FF);
 const _kTextDark = Color(0xFF1E293B);
 const _kTextMid = Color(0xFF475569);
 const _kTextLight = Color(0xFF94A3B8);
-
+const _kBackendUrl = 'https://roomzy-backend-eight.vercel.app/api';
 FirebaseFirestore get _db => FirebaseFirestore.instance;
 
 String _fmtDate(DateTime d) => DateFormat('dd MMM yyyy, hh:mm a').format(d);
@@ -71,6 +73,224 @@ bool _slotIsHeld(Map<String, dynamic> data) {
       ps == 'fully_paid' ||
       st == 'active' ||
       st == 'confirmed';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ONE-CLICK PAYMENT VERIFICATION (admin/landlord use)
+// ══════════════════════════════════════════════════════════════════════════════
+Future<void> _verifyAndReconcilePayment(BuildContext ctx, String docId) async {
+  final bookingRef = _db.collection('bookings').doc(docId);
+  final bookingSnap = await bookingRef.get();
+  if (!bookingSnap.exists) {
+    if (ctx.mounted) _showVerifySnack(ctx, 'Booking not found', _kRed);
+    return;
+  }
+  final bData = bookingSnap.data()!;
+  var reference = bData['pending_payment_reference'] as String?;
+
+  // Older bookings never had this field written — let the admin type
+  // the Paystack reference in manually instead of giving up.
+  if (reference == null || reference.isEmpty) {
+    if (!ctx.mounted) return;
+    reference = await showDialog<String>(
+      context: ctx,
+      builder: (_) => _ManualReferenceDialog(),
+    );
+    if (reference == null || reference.isEmpty) return; // cancelled
+  }
+
+  // Loading indicator while the network call runs
+  showDialog(
+    context: ctx,
+    barrierDismissible: false,
+    builder: (_) => const Center(
+      child: CircularProgressIndicator(color: _kPrimary),
+    ),
+  );
+
+  try {
+    final resp = await http.post(
+      Uri.parse('$_kBackendUrl/verify-payment'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'reference': reference}),
+    );
+    final result = jsonDecode(resp.body);
+
+    if (ctx.mounted)
+      Navigator.of(ctx, rootNavigator: true).pop(); // close spinner
+
+    if (result['status'] != 'success') {
+      if (ctx.mounted) {
+        _showVerifySnack(
+          ctx,
+          result['status'] == 'pending'
+              ? 'Still pending on the gateway'
+              : 'No successful payment found for this reference',
+          _kOrange,
+        );
+      }
+      return;
+    }
+
+    if (result['gateway'] != 'paystack') {
+      if (ctx.mounted) {
+        _showVerifySnack(
+          ctx,
+          'Made via a provider that can\'t be auto-verified yet — resolve manually',
+          _kOrange,
+        );
+      }
+      return;
+    }
+
+    final existing = await bookingRef
+        .collection('payments')
+        .where('reference', isEqualTo: reference)
+        .limit(1)
+        .get();
+    if (existing.docs.isNotEmpty) {
+      if (ctx.mounted) {
+        _showVerifySnack(
+            ctx, 'Already recorded — booking is up to date', _kGreen);
+      }
+      return;
+    }
+
+// ── NEW: make sure this reference isn't already attached to a
+// DIFFERENT booking — a reference belongs to exactly one charge. ──
+    final globalMatch = await _db
+        .collectionGroup('payments')
+        .where('reference', isEqualTo: reference)
+        .limit(1)
+        .get();
+    if (globalMatch.docs.isNotEmpty) {
+      final ownerBookingId = globalMatch.docs.first.reference.parent.parent?.id;
+      if (ownerBookingId != docId) {
+        if (ctx.mounted) {
+          Navigator.of(ctx, rootNavigator: true).maybePop(); // close spinner
+          _showVerifySnack(
+            ctx,
+            'This reference is already linked to a different booking — cannot apply it here.',
+            _kRed,
+          );
+        }
+        return;
+      }
+    }
+    final gatewayAmount = (result['amount'] as num?)?.toDouble();
+    final totalAmount = (bData['amount'] as num?)?.toDouble() ?? 0.0;
+    final depositAmount = (bData['deposit_amount'] as num?)?.toDouble() ?? 0.0;
+    final paymentCount = (bData['payment_count'] as num?)?.toInt() ?? 0;
+    final amountAlreadyPaid = (bData['amount_paid'] as num?)?.toDouble() ?? 0.0;
+
+    final isBalancePayment = reference.startsWith('RZF-BAL-');
+    final isFirstPayment = paymentCount == 0 && !isBalancePayment;
+
+    final amountPaid = gatewayAmount ??
+        (isBalancePayment
+            ? (totalAmount - amountAlreadyPaid)
+            : (depositAmount > 0 ? depositAmount : totalAmount));
+
+    final newTotalPaid = amountAlreadyPaid + amountPaid;
+    final isFinalPayment = newTotalPaid >= totalAmount;
+
+    final commissionOwed =
+        (bData['commission_owed'] as num?)?.toDouble() ?? 0.0;
+    final commissionCollected =
+        (bData['commission_collected'] as num?)?.toDouble() ?? 0.0;
+    final commissionRemaining = commissionOwed - commissionCollected;
+
+    double commissionThisPayment;
+    if (isFirstPayment && isFinalPayment) {
+      commissionThisPayment = commissionOwed;
+    } else if (isFirstPayment) {
+      commissionThisPayment = commissionOwed / 2;
+    } else if (isFinalPayment) {
+      commissionThisPayment = commissionRemaining;
+    } else {
+      commissionThisPayment = 0.0;
+    }
+
+    final landlordReceived = amountPaid - commissionThisPayment;
+    final newBalance = (totalAmount - newTotalPaid).clamp(0.0, totalAmount);
+    final newPaymentStatus = isFinalPayment ? 'fully_paid' : 'deposit_paid';
+    final newBookingStatus =
+        (depositAmount > 0 && newTotalPaid >= depositAmount) || isFinalPayment
+            ? 'confirmed'
+            : 'pending';
+
+    if (isFirstPayment) {
+      final roomId = bData['room_id'] as String?;
+      final slots = (bData['slots_booked'] as num?)?.toInt() ?? 1;
+      if (roomId != null && roomId.isNotEmpty) {
+        await _incrementRoomSlots(roomId, slots);
+      }
+    }
+
+    final batch = _db.batch();
+    final paymentRef = bookingRef.collection('payments').doc();
+
+    batch.update(bookingRef, {
+      'amount_paid': newTotalPaid,
+      'balance': newBalance,
+      'payment_status': newPaymentStatus,
+      'status': newBookingStatus,
+      'payment_reference': reference,
+      'commission_collected': commissionCollected + commissionThisPayment,
+      'commission_remaining': commissionRemaining - commissionThisPayment,
+      'payment_count': FieldValue.increment(1),
+      'paid_at': FieldValue.serverTimestamp(),
+      if (isFinalPayment) 'fully_paid_at': FieldValue.serverTimestamp(),
+    });
+
+    batch.set(paymentRef, {
+      'amount': amountPaid,
+      'balance_after': newBalance,
+      'commission_taken': commissionThisPayment,
+      'email': bData['email'],
+      'hostel_name': bData['hostel_name'],
+      'is_final_payment': isFinalPayment,
+      'is_first_payment': isFirstPayment,
+      'landlord_id': bData['landlord_id'],
+      'landlord_received': landlordReceived,
+      'method': 'momo',
+      'name': bData['name'],
+      'paid_at': FieldValue.serverTimestamp(),
+      'payment_number': paymentCount + 1,
+      'provider': bData['momo_provider'],
+      'reference': reference,
+      'room_number': bData['room_number'],
+      'status': 'paid',
+      'source': 'manual_verify',
+      'total_paid_after': newTotalPaid,
+    });
+
+    await batch.commit();
+
+    if (ctx.mounted) {
+      _showVerifySnack(
+        ctx,
+        '✅ Verified — GHS ${amountPaid.toStringAsFixed(2)} recorded',
+        _kGreen,
+      );
+    }
+  } catch (e) {
+    if (ctx.mounted) {
+      Navigator.of(ctx, rootNavigator: true)
+          .maybePop(); // close spinner if still open
+      _showVerifySnack(ctx, 'Verification failed: $e', _kRed);
+    }
+  }
+}
+
+void _showVerifySnack(BuildContext ctx, String msg, Color color) {
+  ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+    content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+    backgroundColor: color,
+    behavior: SnackBarBehavior.floating,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    margin: const EdgeInsets.all(16),
+  ));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -641,8 +861,25 @@ class _TableRowState extends State<_TableRow>
                               'Bal: GHS ${NumberFormat('#,##0.00').format((d['balance'] ?? 0).toDouble())}',
                               style: const TextStyle(
                                   fontSize: 10, color: _kOrange)),
+                        if ((d['payment_count'] ?? 0) > 1) ...[
+                          const SizedBox(height: 3),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: _kBlueBg,
+                              borderRadius: BorderRadius.circular(50),
+                            ),
+                            child: Text('${d['payment_count']}× installments',
+                                style: const TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    color: _kBlue)),
+                          ),
+                        ],
                       ],
                     ])),
+
             // AFTER
             Expanded(
                 flex: 2,
@@ -799,6 +1036,12 @@ class _BookingCardState extends State<_BookingCard>
                     icon: Icons.calendar_today_rounded,
                     label: 'Booked',
                     value: date),
+                if ((d['payment_count'] ?? 0) > 1)
+                  _CardRow(
+                      icon: Icons.repeat_rounded,
+                      label: 'Installments',
+                      value: '${d['payment_count']} payments made',
+                      valueColor: _kBlue),
               ]),
             ),
             Container(
@@ -1025,10 +1268,16 @@ class _ActionBtn extends StatelessWidget {
           _deleteBooking(context);
           return;
         }
+        if (v == 'verify') {
+          _verifyAndReconcilePayment(context, docId);
+          return;
+        }
         _setStatus(context, v);
       },
       itemBuilder: (_) => [
         _menuItem('view', Icons.visibility_rounded, 'View Details', _kBlue),
+        if (data['payment_status'] == 'pending')
+          _menuItem('verify', Icons.refresh_rounded, 'Verify Payment', _kGreen),
         const PopupMenuDivider(),
         if (status != 'confirmed')
           _menuItem('confirmed', Icons.check_circle_rounded, 'Confirm Booking',
@@ -1059,6 +1308,76 @@ class _ActionBtn extends StatelessWidget {
                 color: value == 'delete' ? _kRed : _kTextDark,
                 fontWeight: FontWeight.w600)),
       ]),
+    );
+  }
+}
+
+class _ManualReferenceDialog extends StatefulWidget {
+  @override
+  State<_ManualReferenceDialog> createState() => _ManualReferenceDialogState();
+}
+
+class _ManualReferenceDialogState extends State<_ManualReferenceDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('No payment reference on file',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: _kTextDark)),
+          const SizedBox(height: 8),
+          const Text(
+            'This booking predates automatic reference tracking. Paste the Paystack reference to verify manually.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: _kTextMid, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: 'e.g. RZF-1234567890',
+              filled: true,
+              fillColor: _kSurface,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: _kPrimary, foregroundColor: Colors.white),
+                child: const Text('Verify'),
+              ),
+            ),
+          ]),
+        ]),
+      ),
     );
   }
 }
@@ -1592,9 +1911,9 @@ class _DetailSheetState extends State<_DetailSheet> {
                               copyable: true, small: true),
                         ]),
                         const SizedBox(height: 16),
-
                         // ── Payment timeline ────────────────────────────────────
-                        _PaymentTimeline(docId: widget.docId),
+                        _PaymentTimeline(
+                            docId: widget.docId, totalAmount: amount),
                         const SizedBox(height: 24),
                         Row(children: [
                           Expanded(
@@ -1621,8 +1940,24 @@ class _DetailSheetState extends State<_DetailSheet> {
                           ]),
                         if (status == 'confirmed' || status == 'booked')
                           const SizedBox(height: 10),
+                        // ── Payment verify (one-click reconciliation) ───────────
+                        if (d['payment_status'] == 'pending') ...[
+                          Row(children: [
+                            Expanded(
+                              child: _BigActionBtn(
+                                label: 'Verify Payment',
+                                icon: Icons.refresh_rounded,
+                                color: _kGreen,
+                                onTap: () => _verifyAndReconcilePayment(
+                                    context, widget.docId),
+                              ),
+                            ),
+                          ]),
+                          const SizedBox(height: 10),
+                        ],
 
                         // ── Quick-action buttons ────────────────────────────────
+
                         Row(children: [
                           if (status != 'confirmed')
                             Expanded(
@@ -1761,7 +2096,8 @@ class _PaymentProgressBar extends StatelessWidget {
 // ══════════════════════════════════════════════════════════════════════════════
 class _PaymentTimeline extends StatelessWidget {
   final String docId;
-  const _PaymentTimeline({required this.docId});
+  final double totalAmount;
+  const _PaymentTimeline({required this.docId, required this.totalAmount});
 
   @override
   Widget build(BuildContext context) {
@@ -1770,11 +2106,25 @@ class _PaymentTimeline extends StatelessWidget {
           .collection('bookings')
           .doc(docId)
           .collection('payments')
-          .orderBy('paid_at') // ascending: oldest first = chronological
-          .snapshots(),
+          .snapshots(), // no orderBy — sort client-side so docs missing paid_at aren't dropped
       builder: (ctx, snap) {
-        final docs = snap.data?.docs ?? [];
+        final docs = List<QueryDocumentSnapshot>.from(snap.data?.docs ?? []);
         if (docs.isEmpty) return const SizedBox.shrink();
+
+        // Sort oldest → newest; docs without paid_at sort first (epoch 0)
+        docs.sort((a, b) {
+          final ta = (a.data() as Map)['paid_at'];
+          final tb = (b.data() as Map)['paid_at'];
+          final da = ta is Timestamp
+              ? ta.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          final db = tb is Timestamp
+              ? tb.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          return da.compareTo(db);
+        });
+
+        double cumulative = 0; // running total as we walk the timeline
 
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Section header
@@ -1800,7 +2150,16 @@ class _PaymentTimeline extends StatelessWidget {
             final doc = entry.value;
             final p = doc.data() as Map<String, dynamic>;
             final isLast = i == docs.length - 1;
-            return _TimelineEntry(data: p, index: i, isLast: isLast);
+            cumulative += (p['amount'] as num? ?? 0).toDouble();
+            final runningBalance =
+                (totalAmount - cumulative).clamp(0.0, totalAmount);
+            return _TimelineEntry(
+              data: p,
+              index: i,
+              isLast: isLast,
+              runningBalance: runningBalance,
+              totalAmount: totalAmount,
+            );
           }),
         ]);
       },
@@ -1812,10 +2171,14 @@ class _TimelineEntry extends StatelessWidget {
   final Map<String, dynamic> data;
   final int index;
   final bool isLast;
+  final double runningBalance;
+  final double totalAmount;
   const _TimelineEntry({
     required this.data,
     required this.index,
     required this.isLast,
+    required this.runningBalance,
+    required this.totalAmount,
   });
 
   @override
@@ -1926,6 +2289,79 @@ class _TimelineEntry extends StatelessWidget {
                                   style: const TextStyle(
                                       fontSize: 11, color: _kTextLight),
                                 ),
+                                if ((p['reference'] ?? '')
+                                    .toString()
+                                    .isNotEmpty) ...[
+                                  const SizedBox(height: 3),
+                                  Row(children: [
+                                    const Icon(Icons.tag_rounded,
+                                        size: 11, color: _kTextLight),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        p['reference'],
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                            fontSize: 10,
+                                            color: _kTextLight,
+                                            fontFamily: 'monospace'),
+                                      ),
+                                    ),
+                                    GestureDetector(
+                                      onTap: () {
+                                        Clipboard.setData(ClipboardData(
+                                            text: p['reference'].toString()));
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(const SnackBar(
+                                          content: Text('Reference copied'),
+                                          duration: Duration(seconds: 1),
+                                          behavior: SnackBarBehavior.floating,
+                                        ));
+                                      },
+                                      child: const Icon(Icons.copy_rounded,
+                                          size: 12, color: _kTextLight),
+                                    ),
+                                  ]),
+                                ],
+                                if (totalAmount > 0) ...[
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: runningBalance <= 0
+                                          ? _kGreenBg
+                                          : _kOrangeBg,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            runningBalance <= 0
+                                                ? Icons.check_circle_rounded
+                                                : Icons
+                                                    .hourglass_bottom_rounded,
+                                            size: 12,
+                                            color: runningBalance <= 0
+                                                ? _kGreen
+                                                : _kOrange,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            runningBalance <= 0
+                                                ? 'Fully paid as of this payment'
+                                                : 'Balance after: GHS ${NumberFormat('#,##0.00').format(runningBalance)}',
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w700,
+                                                color: runningBalance <= 0
+                                                    ? _kGreen
+                                                    : _kOrange),
+                                          ),
+                                        ]),
+                                  ),
+                                ],
                                 if (status.isNotEmpty) ...[
                                   const SizedBox(height: 4),
                                   Container(

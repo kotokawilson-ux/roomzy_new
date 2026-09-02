@@ -10,6 +10,7 @@ import 'package:intl/intl.dart';
 
 import '../../../models/models.dart';
 import '../../../services/landlord_service.dart';
+import '../../../services/move_in_service.dart';
 
 class _C {
   static const pageBg = Color(0xFFF5F5F0);
@@ -1015,10 +1016,33 @@ class _TableRowState extends State<_TableRow>
                         'Bal: GHS ${NumberFormat('#,##0.00').format(b.balance)}',
                         style: const TextStyle(fontSize: 10, color: _C.amber),
                       ),
+                    if (b.paymentCount > 1) ...[
+                      // ← new
+                      const SizedBox(height: 3), // ← new
+                      Container(
+                        // ← new
+                        padding: const EdgeInsets.symmetric(
+                            // ← new
+                            horizontal: 6,
+                            vertical: 1), // ← new
+                        decoration: BoxDecoration(
+                          // ← new
+                          color: _C.blueLight, // ← new
+                          borderRadius: BorderRadius.circular(50), // ← new
+                        ), // ← new
+                        child: Text('${b.paymentCount}× installments', // ← new
+                            style: const TextStyle(
+                                // ← new
+                                fontSize: 9, // ← new
+                                fontWeight: FontWeight.w700, // ← new
+                                color: _C.blue)), // ← new
+                      ), // ← new
+                    ], // ← new
                   ],
                 ],
               ),
             ),
+
             // AFTER
             Expanded(
                 flex: 2,
@@ -1191,6 +1215,14 @@ class _BookingCardState extends State<_BookingCard>
                     icon: Icons.calendar_today_rounded,
                     label: 'Booked',
                     value: _fmtShort(b.bookedAt)),
+
+                if (b.paymentCount > 1) // ← new
+                  _CardRow(
+                      // ← new
+                      icon: Icons.repeat_rounded, // ← new
+                      label: 'Installments', // ← new
+                      value: '${b.paymentCount} payments made', // ← new
+                      valueColor: _C.blue), // ← new
               ]),
             ),
             Container(
@@ -1556,72 +1588,11 @@ class _DetailSheetState extends State<_DetailSheet> {
     if (picked == null) return;
 
     try {
-      final snap = await _db.collection('bookings').doc(b.id).get();
-      final data = snap.data()!;
+      // Delegates to MoveInService.landlordSetMoveIn, which fetches the
+      // hostel and computes the due date via Hostel.autoDueDate — the same
+      // single source of truth the admin panel and student flow both use.
+      await MoveInService.instance.landlordSetMoveIn(b.id, picked);
 
-      // Guard: never activate a declined or cancelled booking
-      final currentStatus = (data['status'] ?? '') as String;
-      if (currentStatus == 'declined' || currentStatus == 'cancelled') {
-        if (ctx.mounted) {
-          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-            content: const Text(
-                'Cannot set move-in date on a declined or cancelled booking'),
-            backgroundColor: _C.red,
-            behavior: SnackBarBehavior.floating,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            margin: const EdgeInsets.all(16),
-          ));
-        }
-        return;
-      }
-
-      final durationType = data['duration_type']?.toString() ?? 'year';
-      final totalAmount = (data['amount'] as num).toDouble();
-
-      // 'amount' already represents the full price for whichever period
-      // the hostel charges in — every duration type is a single lump
-      // payment due at move-in (same logic as admin's _buildSchedule).
-      final label = switch (durationType) {
-        'year' => 'Full Year Payment',
-        'academic_year' => 'Academic Year Payment',
-        'semester' => 'Semester Payment',
-        'month' => 'Monthly Payment',
-        _ => 'Full Payment',
-      };
-      final schedule = [
-        {
-          'due_date': Timestamp.fromDate(picked),
-          'amount': totalAmount,
-          'label': label,
-          'paid': false,
-        }
-      ];
-
-      // Pull the hostel's balance-due config and auto-calculate the
-      // due date, same as the admin panel.
-      DateTime? autoDue;
-      Hostel? hostel; // ← hoisted, nullable
-      final hostelId = data['hostel_id']?.toString();
-      if (hostelId != null && hostelId.isNotEmpty) {
-        final hostelSnap = await _db.collection('hostels').doc(hostelId).get();
-        if (hostelSnap.exists) {
-          hostel = Hostel.fromJson(
-              hostelSnap.id, hostelSnap.data()!); // ← no 'final'
-          autoDue = hostel.autoDueDate(picked);
-        }
-      }
-
-      await _db.collection('bookings').doc(b.id).update({
-        'move_in_date': Timestamp.fromDate(picked),
-        'payment_schedule': schedule,
-        'balance_due_date':
-            autoDue != null ? Timestamp.fromDate(autoDue) : null,
-        'balance_due_unit': hostel?.balanceDueUnit,
-        'balance_due_amount': hostel?.balanceDueAmount,
-        'status': 'active',
-        'move_in_set_by': 'landlord',
-      });
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
           content: const Text('Move-in date set — payment schedule activated'),
@@ -2081,11 +2052,23 @@ class _PaymentTimeline extends StatelessWidget {
           .collection('bookings')
           .doc(bookingId)
           .collection('payments')
-          .orderBy('paid_at', descending: false)
-          .snapshots(),
+          .snapshots(), // no orderBy — sort client-side so docs missing paid_at aren't dropped
       builder: (ctx, snap) {
-        final docs = snap.data?.docs ?? [];
+        final docs = List<QueryDocumentSnapshot>.from(snap.data?.docs ?? []);
         if (docs.isEmpty) return const SizedBox.shrink();
+
+        // Sort oldest → newest; docs without paid_at sort first
+        docs.sort((a, b) {
+          final ta = (a.data() as Map)['paid_at'];
+          final tb = (b.data() as Map)['paid_at'];
+          final da = ta is Timestamp
+              ? ta.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          final db = tb is Timestamp
+              ? tb.toDate()
+              : DateTime.fromMillisecondsSinceEpoch(0);
+          return da.compareTo(db);
+        });
 
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
@@ -2119,15 +2102,12 @@ class _PaymentTimeline extends StatelessWidget {
             final status = (p['status'] ?? '').toString();
             final isPaid = status == 'paid';
 
-            // commission breakdown
-            // commission breakdown — use stored values from payment doc (same as admin)
             final commission =
                 (p['commission_taken'] as num?)?.toDouble() ?? 0.0;
             final landlordReceives =
                 (p['landlord_received'] as num?)?.toDouble() ??
                     (amt - commission);
             final rate = amt > 0 ? commission / amt : 0.0;
-            // badge logic
             final isTest = note.toLowerCase().contains('test');
             final isFirst = i == 0 && !isTest;
             final isFinal = isLast && docs.length > 1;
@@ -2231,6 +2211,47 @@ class _PaymentTimeline extends StatelessWidget {
                                             _MiniTag(
                                                 'Final', _C.blue, _C.blueLight),
                                         ]),
+                                        if ((p['reference'] ?? '')
+                                            .toString()
+                                            .isNotEmpty) ...[
+                                          const SizedBox(height: 4),
+                                          Row(children: [
+                                            const Icon(Icons.tag_rounded,
+                                                size: 11, color: _C.textMuted),
+                                            const SizedBox(width: 4),
+                                            Expanded(
+                                              child: Text(
+                                                p['reference'].toString(),
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                    fontSize: 10,
+                                                    color: _C.textMuted,
+                                                    fontFamily: 'monospace'),
+                                              ),
+                                            ),
+                                            GestureDetector(
+                                              onTap: () {
+                                                Clipboard.setData(ClipboardData(
+                                                    text: p['reference']
+                                                        .toString()));
+                                                ScaffoldMessenger.of(context)
+                                                    .showSnackBar(
+                                                        const SnackBar(
+                                                  content:
+                                                      Text('Reference copied'),
+                                                  duration:
+                                                      Duration(seconds: 1),
+                                                  behavior:
+                                                      SnackBarBehavior.floating,
+                                                ));
+                                              },
+                                              child: const Icon(
+                                                  Icons.copy_rounded,
+                                                  size: 12,
+                                                  color: _C.textMuted),
+                                            ),
+                                          ]),
+                                        ],
                                       ]),
                                 ),
                                 const SizedBox(width: 8),

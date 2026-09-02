@@ -631,6 +631,30 @@ class _BookingCard extends StatelessWidget {
                   value:
                       'GHS ${(booking['balance'] ?? 0.0).toStringAsFixed(2)}'),
             ]),
+            if ((booking['payment_count'] ?? 0) > 1) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: _kPrimary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.repeat_rounded,
+                        size: 12, color: _kPrimary),
+                    const SizedBox(width: 5),
+                    Text('${booking['payment_count']} installments paid',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: _kPrimary)),
+                  ]),
+                ),
+              ),
+            ],
           ]),
         ),
 

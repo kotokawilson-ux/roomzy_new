@@ -546,6 +546,7 @@ class Booking {
   final String status;
   final DateTime bookedAt;
   final int slotsBooked;
+  final int paymentCount; // ← add
 
   // ── Move-in / Payment Schedule ──────────────────────────────
   final String durationType; // 'year' | 'academic_year' | 'semester' | 'month'
@@ -584,6 +585,7 @@ class Booking {
     required this.status,
     required this.bookedAt,
     required this.slotsBooked,
+    this.paymentCount = 0, // ← add
     this.durationType = 'year',
     this.moveInDate,
     this.paymentSchedule = const [],
@@ -640,6 +642,7 @@ class Booking {
         bookedAt: _parseDate(json['booked_at']) ??
             DateTime.fromMillisecondsSinceEpoch(0),
         slotsBooked: _parseInt(json['slots_booked'], 1),
+        paymentCount: _parseInt(json['payment_count'], 0), // ← add
         durationType: json['duration_type']?.toString() ?? 'year',
         moveInDate: _parseDate(json['move_in_date']),
         paymentSchedule: _parseSchedule(json['payment_schedule']),
@@ -673,6 +676,7 @@ class Booking {
         'status': status,
         'booked_at': _dateToString(bookedAt),
         'slots_booked': slotsBooked,
+        'payment_count': paymentCount, // ← add
         'duration_type': durationType,
         if (moveInDate != null) 'move_in_date': moveInDate!.toIso8601String(),
         'payment_schedule': paymentSchedule,
@@ -708,6 +712,7 @@ class Booking {
     String? status,
     DateTime? bookedAt,
     int? slotsBooked,
+    int? paymentCount, // ← add
     String? durationType,
     DateTime? moveInDate,
     List<Map<String, dynamic>>? paymentSchedule,
@@ -741,6 +746,7 @@ class Booking {
         status: status ?? this.status,
         bookedAt: bookedAt ?? this.bookedAt,
         slotsBooked: slotsBooked ?? this.slotsBooked,
+        paymentCount: paymentCount ?? this.paymentCount, // ← add
         durationType: durationType ?? this.durationType,
         moveInDate: moveInDate ?? this.moveInDate,
         paymentSchedule: paymentSchedule ?? this.paymentSchedule,

@@ -30,6 +30,8 @@ Future<void> showPreBookingSheet({
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withOpacity(0.6),
+    isDismissible: false, // tapping outside no longer closes it
+    enableDrag: false, // swiping down no longer closes it
     builder: (_) => _PreBookingSheet(hostel: hostel, room: room, user: user),
   );
 }
@@ -356,6 +358,21 @@ class _PreBookingSheetState extends State<_PreBookingSheet>
                             const TextStyle(fontSize: 12.5, color: _kTextMuted),
                       ),
                     ]),
+              ),
+              // ── Close button ─────────────────────────────────────────────
+              Container(
+                decoration: BoxDecoration(
+                  color: _kSurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _kBorder),
+                ),
+                child: IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded,
+                      size: 18, color: _kTextMuted),
+                  padding: const EdgeInsets.all(8),
+                  constraints: const BoxConstraints(),
+                ),
               ),
             ]),
             const SizedBox(height: 18),

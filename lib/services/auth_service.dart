@@ -1,11 +1,22 @@
 // lib/services/auth_service.dart
+// lib/services/auth_service.dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import '../models/models.dart';
 import 'package:firebase_core/firebase_core.dart';
+import '../models/models.dart';
+
+// OneSignal is a mobile-only plugin — import it conditionally so web
+// builds never reference the native channel at all. Reuses the same
+// stub notification_service.dart already defines.
+import 'package:onesignal_flutter/onesignal_flutter.dart'
+    if (dart.library.html) 'notification_service_web_stub.dart';
+
+// Web Push subscription ID bridge — reads the browser's OneSignal
+// subscription ID via the JS SDK loaded in web/index.html.
+import 'onesignal_web.dart';
 
 class AuthService extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -15,7 +26,9 @@ class AuthService extends ChangeNotifier {
   bool _isLoading = false;
   bool _sessionLoaded = false;
   String? _errorMessage;
-
+// add near the other fields
+  bool _isInitialized = false;
+  bool get isInitialized => _isInitialized;
   UserModel? get currentUser => _currentUser;
   bool get isLoggedIn => _auth.currentUser != null;
   bool get isLoading => _isLoading;
@@ -27,6 +40,30 @@ class AuthService extends ChangeNotifier {
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
+  // ─── Push notification registration ────────────────────────────
+  //
+  // Saves this device's OneSignal subscription ID onto the user's
+  // Firestore doc as `oneSignalPlayerId` — this exact field name is
+  // what every handler in notify.js reads. Called after every
+  // successful signup AND every successful login (not just once),
+  // so a returning user on a new device — or a device that only just
+  // got notification permission granted — stays correctly registered.
+  // Never blocks or fails the calling flow; push registration is
+  // best-effort.
+  Future<void> _registerPushId(String uid) async {
+    try {
+      final playerId = kIsWeb
+          ? await getOneSignalWebPlayerId()
+          : OneSignal.User.pushSubscription.id;
+      if (playerId == null || playerId.isEmpty) return;
+      await _db.collection('users').doc(uid).update({
+        'oneSignalPlayerId': playerId,
+      });
+    } catch (e) {
+      debugPrint('AuthService: failed to register push id: $e');
+    }
+  }
+
   // ─── Session ──────────────────────────────────────────────────
 
   /// Called once by AuthGate on cold launch.
@@ -37,9 +74,17 @@ class AuthService extends ChangeNotifier {
     final firebaseUser = _auth.currentUser;
     if (firebaseUser != null) {
       _setLoading(true);
-      await _fetchAndCacheProfile(firebaseUser.uid);
+      try {
+        await _fetchAndCacheProfile(firebaseUser.uid);
+      } catch (_) {
+        // Network/Firestore error resolving profile — treat as logged out
+        // for redirect purposes rather than hanging isInitialized forever.
+        _currentUser = null;
+      }
       _setLoading(false);
     }
+    _isInitialized = true;
+    notifyListeners();
   }
 
   // ─── Login ────────────────────────────────────────────────────
@@ -112,6 +157,11 @@ class AuthService extends ChangeNotifier {
         return false;
       }
 
+      // ── Register (or refresh) this device's push subscription for
+      // whichever role just logged in — student, landlord, or admin.
+      // Fire-and-forget: never blocks or fails the login itself.
+      await _registerPushId(cred.user!.uid);
+
       return true;
     } on FirebaseAuthException catch (e) {
       _setError(_authError(e.code));
@@ -168,9 +218,15 @@ class AuthService extends ChangeNotifier {
         role: 'student',
       );
       _sessionLoaded = true;
+      _isInitialized = true;
       notifyListeners();
 
-      _notifyStudentRegistered(email: email.trim(), username: username.trim());
+      // Register this device's push ID before firing the welcome
+      // notify — if OneSignal already has a subscription ID at this
+      // point (permission granted during onboarding, etc.), the
+      // welcome push can actually land instead of silently no-op'ing.
+      await _registerPushId(uid);
+      _notifyStudentRegistered(userId: uid, username: username.trim());
 
       return true;
     } on FirebaseAuthException catch (e) {
@@ -192,7 +248,6 @@ class AuthService extends ChangeNotifier {
   Future<void> _notifyLandlordSignup({
     required String landlordId,
     required String businessName,
-    required String email,
   }) async {
     try {
       await http.post(
@@ -202,7 +257,6 @@ class AuthService extends ChangeNotifier {
           'type': 'landlord_signup',
           'landlordId': landlordId,
           'businessName': businessName,
-          'email': email,
         }),
       );
     } catch (e) {
@@ -211,7 +265,7 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> _notifyStudentRegistered({
-    required String email,
+    required String userId,
     required String username,
   }) async {
     try {
@@ -220,7 +274,7 @@ class AuthService extends ChangeNotifier {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'type': 'student_registered',
-          'email': email,
+          'userId': userId,
           'username': username,
         }),
       );
@@ -302,14 +356,15 @@ class AuthService extends ChangeNotifier {
         landlordId: landlordRef.id,
       );
       _sessionLoaded = true;
+      _isInitialized = true;
       notifyListeners();
 
       // Fire-and-forget — landlord is already registered successfully
       // by this point; a notify failure shouldn't undo that.
+      await _registerPushId(uid);
       _notifyLandlordSignup(
         landlordId: landlordRef.id,
         businessName: businessName.trim(),
-        email: email.trim(),
       );
       return true;
     } on FirebaseAuthException catch (e) {
@@ -419,8 +474,6 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-     
-
   // ─── Create Admin Account (Super Admin only) ──────────────────
   //
   // Mirrors createLandlordAccount: creates the Firebase Auth account
@@ -466,8 +519,7 @@ class AuthService extends ChangeNotifier {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      debugPrint(
-          'AuthService: admin account created — uid=$newUid role=$role');
+      debugPrint('AuthService: admin account created — uid=$newUid role=$role');
       return (success: true, error: null);
     } on FirebaseAuthException catch (e) {
       final msg = _authError(e.code);
@@ -482,7 +534,6 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  
   // ─── Update Profile ───────────────────────────────────────────
   //
   // Landlords (and students) can update their username and phone.
