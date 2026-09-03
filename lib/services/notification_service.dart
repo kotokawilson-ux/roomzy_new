@@ -6,6 +6,14 @@
 //
 // ── android/app/src/main/AndroidManifest.xml ──────────────────────────────────
 //   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+//
+// ── CHANGES IN THIS VERSION ─────────────────────────────────────────────────
+//   Migrated from single-string `oneSignalPlayerId` to array field
+//   `oneSignalPlayerIds` on `admins`, `admin_push_tokens`, and `users` docs.
+//   Writes use arrayUnion (never overwrite), reads send to every ID in the
+//   array. Fixes: (1) logging in on a new device/shared device silently
+//   evicting another device's/account's registration, (2) notifyAdmin()
+//   only ever notifying one admin device via `.limit(1)`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:convert';
@@ -44,8 +52,6 @@ class NotificationService {
   // ── Your backend's /api/notify endpoint — update this if your domain changes.
   static const _notifyEndpoint =
       'https://roomzy-backend-eight.vercel.app/api/notify';
-
-  String _lastSavedUid = '';
 
   bool get _isMobileOnly =>
       !kIsWeb &&
@@ -112,34 +118,11 @@ class NotificationService {
     }
   }
 
-  // NOTE: likely unused now — push-ID registration for regular users
-  // (student/landlord) is centralized in AuthService._registerPushId
-  // instead. Left in place in case something still calls it, but not
-  // part of the live registration path.
-  Future<void> saveTokenForUser(String uid) async {
-    if (uid.isEmpty || !_isMobileOnly) return;
-    _lastSavedUid = uid;
-
-    try {
-      final playerId = OneSignal.User.pushSubscription.id;
-      if (playerId == null || playerId.isEmpty) {
-        debugPrint(
-            '[OneSignal] No player ID yet — will retry on token refresh');
-        return;
-      }
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .set({'oneSignalPlayerId': playerId}, SetOptions(merge: true));
-      debugPrint('[OneSignal] Player ID saved for user $uid');
-    } catch (e) {
-      debugPrint('[OneSignal] saveTokenForUser error: $e');
-    }
-  }
-
   // ── Now works on web too, via _currentPlayerIdAsync(). Called from
   //    admin_live_chat_screen.dart's initState() — this is what actually
-  //    populates admin_push_tokens.
+  //    populates admin_push_tokens. Uses arrayUnion so this device's ID
+  //    is added alongside any other devices already registered for this
+  //    admin, rather than replacing them.
   Future<void> saveTokenForAdmin(String adminUid) async {
     if (adminUid.isEmpty) return;
 
@@ -148,17 +131,24 @@ class NotificationService {
 
     try {
       // Private admin doc (sensitive fields, admin-only read)
-      await FirebaseFirestore.instance
-          .collection('admins')
-          .doc(adminUid)
-          .set({'oneSignalPlayerId': playerId}, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('admins').doc(adminUid).set(
+        {
+          'oneSignalPlayerIds': FieldValue.arrayUnion([playerId]),
+        },
+        SetOptions(merge: true),
+      );
 
       // Public token-only doc (safe for any signed-in user to read,
       // so students can notify admin without seeing sensitive admin data)
       await FirebaseFirestore.instance
           .collection('admin_push_tokens')
           .doc(adminUid)
-          .set({'oneSignalPlayerId': playerId}, SetOptions(merge: true));
+          .set(
+        {
+          'oneSignalPlayerIds': FieldValue.arrayUnion([playerId]),
+        },
+        SetOptions(merge: true),
+      );
 
       debugPrint('[OneSignal] Player ID saved for admin $adminUid');
     } catch (e) {
@@ -168,7 +158,8 @@ class NotificationService {
 
   // ── NOTE: no platform guard here — this is pure Firestore read +
   //    HTTP POST to our own backend, no native OneSignal SDK involved,
-  //    so it already works on web too.
+  //    so it already works on web too. Sends to every device the student
+  //    has registered (array), not just one.
   Future<void> notifyStudent({
     required String studentUid,
     required String title,
@@ -179,13 +170,15 @@ class NotificationService {
           .collection('users')
           .doc(studentUid)
           .get();
-      final playerId = doc.data()?['oneSignalPlayerId'] as String?;
-      if (playerId == null || playerId.isEmpty) {
-        debugPrint('[OneSignal] No player ID for student $studentUid');
+      final playerIds =
+          (doc.data()?['oneSignalPlayerIds'] as List?)?.cast<String>() ??
+              const <String>[];
+      if (playerIds.isEmpty) {
+        debugPrint('[OneSignal] No player IDs for student $studentUid');
         return;
       }
       await _sendPush(
-        playerIds: [playerId],
+        playerIds: playerIds,
         title: title,
         body: body,
         data: {'role': 'student', 'uid': studentUid},
@@ -198,6 +191,8 @@ class NotificationService {
   // ── NOTE: reads from admin_push_tokens (not admins) — students don't
   //    have Firestore read access to /admins since it holds sensitive
   //    data, so the push token lives in this separate, narrow collection.
+  //    Now notifies EVERY registered admin device across every admin doc
+  //    (previously `.limit(1)` meant only one admin/device ever got it).
   Future<void> notifyAdmin({
     required String title,
     required String body,
@@ -206,19 +201,18 @@ class NotificationService {
     try {
       final snap = await FirebaseFirestore.instance
           .collection('admin_push_tokens')
-          .limit(1)
           .get();
-      if (snap.docs.isEmpty) {
-        debugPrint('[OneSignal] No admin push token found');
-        return;
+      final playerIds = <String>{};
+      for (final d in snap.docs) {
+        final ids = (d.data()['oneSignalPlayerIds'] as List?)?.cast<String>();
+        if (ids != null) playerIds.addAll(ids);
       }
-      final playerId = snap.docs.first.data()['oneSignalPlayerId'] as String?;
-      if (playerId == null || playerId.isEmpty) {
-        debugPrint('[OneSignal] No player ID for admin');
+      if (playerIds.isEmpty) {
+        debugPrint('[OneSignal] No player IDs for admin');
         return;
       }
       await _sendPush(
-        playerIds: [playerId],
+        playerIds: playerIds.toList(),
         title: title,
         body: body,
         data: {'role': 'admin', 'uid': studentUid},

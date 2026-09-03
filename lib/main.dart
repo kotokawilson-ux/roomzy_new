@@ -9,7 +9,7 @@ import 'firebase_options.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'services/auth_service.dart';
-import 'services/notification_service.dart'; // ← new
+import 'services/notification_service.dart';
 import 'services/balance_reminder_service.dart';
 
 // ── Global navigator key — shared with NotificationService so it can
@@ -35,13 +35,16 @@ Future<void> main() async {
     router: router, // lets the service use go_router for navigation
   );
 
-  // Whenever auth state changes to a real user, persist the FCM token
-  authService.addListener(() {
-    final uid = authService.currentUser?.id ?? '';
-    if (uid.isNotEmpty) {
-      NotificationService.instance.saveTokenForUser(uid);
-    }
-  });
+  // NOTE: push-ID registration is now handled entirely inside
+  // AuthService (`_registerPushId`, called from `_signIn`,
+  // `registerStudent`, and `registerLandlord`), using arrayUnion so
+  // multiple devices/sessions for the same account can coexist. There
+  // used to be a second registration path here —
+  // `authService.addListener(() => NotificationService.instance
+  // .saveTokenForUser(uid))` — but `saveTokenForUser` was dead code
+  // (per its own comment) and has been removed from
+  // NotificationService entirely, so that listener has been removed
+  // too rather than left calling a method that no longer exists.
 
   runApp(
     ChangeNotifierProvider<AuthService>.value(

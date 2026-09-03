@@ -127,20 +127,10 @@ class AppRouter {
 
         final path = state.uri.path;
 
-        // Resolve auth state before deciding anything — for every path,
-        // not just '/'. This is what makes deep links / web refreshes work.
+        // Resolve auth state before deciding anything.
         if (!authService.isInitialized) {
           authService.loadSession(); // no-ops if already in flight/done
-          if (path != '/') {
-            return '/?from=${Uri.encodeComponent(state.uri.toString())}';
-          }
-          return null; // show AuthGate's splash
-        }
-
-        // Once initialized, resume a bounced destination.
-        if (path == '/') {
-          final from = state.uri.queryParameters['from'];
-          if (from != null && from.isNotEmpty) return from;
+          return null; // show AuthGate's splash while it resolves
         }
 
         final isLoggedIn = authService.isLoggedIn;

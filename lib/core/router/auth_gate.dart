@@ -29,7 +29,6 @@ class _AuthGateState extends State<AuthGate> {
   Future<void> _init() async {
     final authService = context.read<AuthService>();
 
-    // Load Firestore profile for whoever is signed in (if anyone)
     await authService.loadSession();
 
     if (!mounted) return;

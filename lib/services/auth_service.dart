@@ -1,5 +1,4 @@
 // lib/services/auth_service.dart
-// lib/services/auth_service.dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -43,11 +42,22 @@ class AuthService extends ChangeNotifier {
   // ─── Push notification registration ────────────────────────────
   //
   // Saves this device's OneSignal subscription ID onto the user's
-  // Firestore doc as `oneSignalPlayerId` — this exact field name is
-  // what every handler in notify.js reads. Called after every
-  // successful signup AND every successful login (not just once),
-  // so a returning user on a new device — or a device that only just
-  // got notification permission granted — stays correctly registered.
+  // Firestore doc as an entry in `oneSignalPlayerIds` (array) —
+  // this exact field name is what every handler in notify.js reads.
+  // Called after every successful signup AND every successful login
+  // (not just once), so a returning user on a new device — or a
+  // device that only just got notification permission granted —
+  // stays correctly registered.
+  //
+  // Uses arrayUnion instead of a plain overwrite so that logging in
+  // on a second device (or a different account on a shared
+  // device/browser) ADDS a subscription ID instead of stealing/
+  // replacing whatever was already registered. This is what fixes
+  // the "messages stopped coming" bug: previously a single
+  // `oneSignalPlayerId` string field meant the last login on any
+  // given device silently overwrote every other registration for
+  // that account.
+  //
   // Never blocks or fails the calling flow; push registration is
   // best-effort.
   Future<void> _registerPushId(String uid) async {
@@ -56,9 +66,9 @@ class AuthService extends ChangeNotifier {
           ? await getOneSignalWebPlayerId()
           : OneSignal.User.pushSubscription.id;
       if (playerId == null || playerId.isEmpty) return;
-      await _db.collection('users').doc(uid).update({
-        'oneSignalPlayerId': playerId,
-      });
+      await _db.collection('users').doc(uid).set({
+        'oneSignalPlayerIds': FieldValue.arrayUnion([playerId]),
+      }, SetOptions(merge: true));
     } catch (e) {
       debugPrint('AuthService: failed to register push id: $e');
     }
@@ -76,6 +86,7 @@ class AuthService extends ChangeNotifier {
       _setLoading(true);
       try {
         await _fetchAndCacheProfile(firebaseUser.uid);
+        await _registerPushId(firebaseUser.uid); // ← add this
       } catch (_) {
         // Network/Firestore error resolving profile — treat as logged out
         // for redirect purposes rather than hanging isInitialized forever.
@@ -716,8 +727,30 @@ class AuthService extends ChangeNotifier {
     }
   }
   // ─── Logout ───────────────────────────────────────────────────
+  //
+  // Only removes THIS device's subscription ID from the array — other
+  // devices/sessions this account is logged into elsewhere stay
+  // registered and keep receiving pushes. Previously this deleted the
+  // whole `oneSignalPlayerId` field, which meant any hiccup between
+  // logout and the next login's re-registration left the account with
+  // zero working devices until the next successful login.
 
   Future<void> logout() async {
+    final uid = _auth.currentUser?.uid;
+    if (uid != null) {
+      try {
+        final playerId = kIsWeb
+            ? await getOneSignalWebPlayerId()
+            : OneSignal.User.pushSubscription.id;
+        if (playerId != null && playerId.isNotEmpty) {
+          await _db.collection('users').doc(uid).update({
+            'oneSignalPlayerIds': FieldValue.arrayRemove([playerId]),
+          });
+        }
+      } catch (_) {
+        // Non-fatal — logout should proceed even if this cleanup fails.
+      }
+    }
     await _auth.signOut();
     _currentUser = null;
     _sessionLoaded = false;
